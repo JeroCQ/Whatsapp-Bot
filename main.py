@@ -11,17 +11,17 @@ Original file is located at
 #no need here, I moved it to requirements.txt
 
 # Instalar PostgreSQL
-!apt-get -y update
-!apt-get -y install postgresql postgresql-contrib
+#!apt-get -y update
+#!apt-get -y install postgresql postgresql-contrib
 
 # Iniciar el servicio de PostgreSQL
-!service postgresql start
+#!service postgresql start
 
 """Ahora, vamos a crear un usuario y una base de datos en PostgreSQL. Por simplicidad, usaremos un usuario llamado `colab_user` con contraseña `colab_password` y una base de datos `colab_db`."""
 
 # Configurar PostgreSQL: crear usuario y base de datos
-!sudo -u postgres psql -c "CREATE USER colab_user WITH SUPERUSER PASSWORD 'colab_password';"
-!sudo -u postgres psql -c "CREATE DATABASE colab_db OWNER colab_user;"
+#!sudo -u postgres psql -c "CREATE USER colab_user WITH SUPERUSER PASSWORD 'colab_password';"
+#!sudo -u postgres psql -c "CREATE DATABASE colab_db OWNER colab_user;"
 
 """¡Listo! PostgreSQL está ahora instalado y configurado en esta sesión. Ahora necesitas actualizar la celda donde intentas conectar (`00057061`) con las nuevas credenciales:
 
