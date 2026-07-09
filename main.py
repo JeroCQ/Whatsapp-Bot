@@ -246,7 +246,7 @@ def send_whatsapp_message(phone_number: str, text: str):
         print(f"Error sending message: {e}")
         return None
 
-pip install google-generativeai
+#pip install google-generativeai
 
 import google.generativeai as genai
 from google.colab import userdata
