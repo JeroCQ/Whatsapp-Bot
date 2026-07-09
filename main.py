@@ -7,7 +7,8 @@ Original file is located at
     https://colab.research.google.com/drive/1mtjKFMElkDXlsGDibI5CgrQPVWRj_NyI
 """
 
-!pip install psycopg2-binary
+#!pip install psycopg2-binary
+#no need here, I moved it to requirements.txt
 
 # Instalar PostgreSQL
 !apt-get -y update
