@@ -4,3 +4,4 @@ google-generativeai
 psycopg2-binary
 requests
 pydantic
+psycopg2-binary
