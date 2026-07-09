@@ -14,13 +14,12 @@ app = FastAPI()
 # Get connection string from Railway variable
 database_url = os.getenv('DATABASE_URL')
 
-# Global API configurations (Set these in your Railway Environment Variables)
+# Global API configurations
 EVOLUTION_API_URL = os.getenv("EVOLUTION_API_URL", "https://your-evolution-api-domain.com")
 INSTANCE_NAME = os.getenv("INSTANCE_NAME", "company_main_line")
 EVOLUTION_API_KEY = os.getenv("EVOLUTION_API_KEY", "your_global_api_key_here")
-MANAGER_WEBHOOK_URL = os.getenv("MANAGER_WEBHOOK_URL", "https://discord.com/api/webhooks/your-webhook-id-here")
 
-# Configure Gemini API using standard environment variables instead of google.colab
+# Configure Gemini API
 GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
 if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
@@ -53,11 +52,19 @@ CREATE TABLE IF NOT EXISTS business_config (
     key VARCHAR(50) PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- 4. Internal Manager Notifications
+CREATE TABLE IF NOT EXISTS handoff_alerts (
+    id SERIAL PRIMARY KEY,
+    phone_number VARCHAR(20) REFERENCES clients(phone_number),
+    reason TEXT,
+    status VARCHAR(20) DEFAULT 'pending',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
 """
 
 @app.on_event("startup")
 async def startup():
-    # Create tables safely on startup, preventing global scope blocking
     if database_url:
         try:
             conn = psycopg2.connect(database_url)
@@ -91,7 +98,6 @@ def get_client_state(phone: str):
             if result:
                 return {"is_vip": result[0], "bot_paused": result[1]}
             else:
-                # If client doesn't exist, create a new entry
                 cursor.execute(
                     "INSERT INTO clients (phone_number) VALUES (%s) RETURNING is_vip, bot_paused;", (phone,)
                 )
@@ -108,53 +114,29 @@ def get_active_inventory_string():
             products = cursor.fetchall()
             inventory_list = []
             for product in products:
-                # Format: Name : $Price - Description
                 inventory_list.append(f"{product[0]} : ${product[1]:.2f} - {product[2]}")
             if not inventory_list:
                 return "No active inventory available."
             return "\n".join(inventory_list)
 
 def pause_bot_and_notify_manager(phone: str, reason: str):
-    # 1. Update the database state so the FastAPI router stops processing this user
     try:
         with get_db_connection() as conn:
             with conn.cursor() as cursor:
+                # 1. Update the client state to pause the bot
                 cursor.execute(
                     "UPDATE clients SET bot_paused = TRUE, paused_at = NOW() WHERE phone_number = %s;",
                     (phone,)
                 )
+                # 2. Register the structured alert in the database
+                cursor.execute(
+                    "INSERT INTO handoff_alerts (phone_number, reason) VALUES (%s, %s);",
+                    (phone, reason)
+                )
                 conn.commit()
+        print(f"Internal alert registered for {phone}. Reason: {reason}")
     except Exception as e:
         print(f"Database error during handoff update: {e}")
-        return
-
-    # 2. Format a rich alert payload for the manager
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    # Discord Embed Format (Clean, readable card style)
-    notification_payload = {
-        "username": "Chatbot Warden",
-        "embeds": [
-            {
-                "title": "🚨 Human Handoff Required",
-                "color": 15158332,  # Crimson Red
-                "fields": [
-                    {"name": "Client Phone", "value": f"[{phone}](https://wa.me/{phone})", "inline": True},
-                    {"name": "Trigger Reason", "value": reason, "inline": True},
-                    {"name": "Time (Local)", "value": timestamp, "inline": False}
-                ],
-                "description": "The chatbot has been paused. Tap the phone number link above to open the conversation directly in WhatsApp."
-            }
-        ]
-    }
-
-    # 3. Fire the webhook notification
-    try:
-        response = requests.post(MANAGER_WEBHOOK_URL, json=notification_payload)
-        response.raise_for_status()
-        print(f"Successfully notified manager regarding client {phone}.")
-    except requests.exceptions.RequestException as e:
-        print(f"Failed to send manager notification webhook: {e}")
 
 def send_whatsapp_message(phone_number: str, text: str):
     url = f"{EVOLUTION_API_URL}/message/sendText/{INSTANCE_NAME}"
@@ -167,8 +149,8 @@ def send_whatsapp_message(phone_number: str, text: str):
     payload = {
         "number": phone_number,
         "options": {
-            "delay": 1200, # Adds a slight human-like delay before sending
-            "presence": "composing" # Shows "typing..." indicator in WhatsApp
+            "delay": 1200, 
+            "presence": "composing"
         },
         "textMessage": {
             "text": text
@@ -217,7 +199,6 @@ def generate_system_prompt(inventory_string: str) -> str:
     """
 
 def run_llm_agent(user_text: str, inventory_string: str, phone: str):
-    # Gemini expects messages in a specific format
     messages = [
         {"role": "user", "parts": [generate_system_prompt(inventory_string)]},
         {"role": "user", "parts": [user_text]}
@@ -228,26 +209,21 @@ def run_llm_agent(user_text: str, inventory_string: str, phone: str):
         tools=handoff_tool,
         tool_config={"function_calling_config": "auto"},
         generation_config={
-            "temperature": 0.2, # Keep it low to prevent hallucinations
-            "max_output_tokens": 1024 # Limit output to prevent overly long responses
+            "temperature": 0.2,
+            "max_output_tokens": 1024
         }
     )
 
-    # Check if the LLM decided to trigger the handoff tool
     if response.candidates and response.candidates[0].content.parts:
         for part in response.candidates[0].content.parts:
             if hasattr(part, 'function_call') and part.function_call:
                 function_call = part.function_call
                 if function_call.name == "transfer_to_manager":
-                    # Parse the reason the LLM gave for the handoff
                     reason = function_call.args.get("reason", "Unknown reason")
-
-                    # Execute the handoff logic we defined earlier
                     pause_bot_and_notify_manager(phone, reason)
-                    send_whatsapp_message(phone, "Dame un momento, te voy a transferir con el gerente para que te ayude con esto.")
+                    send_whatsapp_message(phone, "Dame un momento, te voy a transferir con un asesor para que te ayude con esto.")
                     return
 
-    # If no tool was called, the LLM just generated a normal text response
     if response.text:
         bot_reply = response.text
         send_whatsapp_message(phone, bot_reply)
@@ -256,7 +232,7 @@ def run_llm_agent(user_text: str, inventory_string: str, phone: str):
 async def process_chat_logic(msg: WhatsAppMessage):
     phone = msg.sender_id
 
-    # NEW: Manager command to hand control back to the AI
+    # Manager command to hand control back to the AI (Manager types this in Chatwoot)
     if msg.text_content and msg.text_content.strip().lower() == "#bot":
         with get_db_connection() as conn:
             with conn.cursor() as cursor:
@@ -270,25 +246,18 @@ async def process_chat_logic(msg: WhatsAppMessage):
 
     client_state = get_client_state(phone)
 
-    # RULE 1: Direct VIP Check
-    if client_state["is_vip"]:
-        # Completely ignore bot execution; let the manager handle it in the app
+    # RULE 1 & 2: Handoff Checks (If true, AI ignores the message)
+    if client_state["is_vip"] or client_state["bot_paused"]:
         return
 
-    # RULE 2: If bot is already paused, manager has the floor
-    if client_state["bot_paused"]:
-        return
-
-    # RULE 3: Payment Verification Intent (Image/Comprobante attachment)
+    # RULE 3: Payment Verification Intent
     if msg.message_type in ["image", "document"]:
         send_whatsapp_message(phone, "Recibido. Un asesor verificará tu comprobante de pago en un momento.")
         pause_bot_and_notify_manager(phone, "Payment receipt uploaded.")
         return
 
-    # Prepare data for the LLM if it passes the hard-coded routing rules
+    # RULE 4 & 5: Pass to LLM
     inventory = get_active_inventory_string()
-
-    # RULE 4 & 5: Pass to LLM with Function Calling for Wholesale or Ignorance
     if msg.text_content:
         run_llm_agent(msg.text_content, inventory, phone)
 
@@ -298,6 +267,5 @@ def read_root():
 
 @app.post("/webhook")
 async def whatsapp_webhook(payload: WhatsAppMessage, background_tasks: BackgroundTasks):
-    # Always return 200 OK instantly to WhatsApp to prevent timeouts/retries
     background_tasks.add_task(process_chat_logic, payload)
     return Response(status_code=200)
