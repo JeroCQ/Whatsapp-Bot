@@ -26,6 +26,7 @@ Original file is located at
 """¡Listo! PostgreSQL está ahora instalado y configurado en esta sesión. Ahora necesitas actualizar la celda donde intentas conectar (`00057061`) con las nuevas credenciales:
 
 *   `DB_HOST = 'localhost'` (esto ya está correcto)
+# Use database_url to connect
 *   `DB_NAME = 'colab_db'`
 *   `DB_USER = 'colab_user'`
 *   `DB_PASSWORD = 'colab_password'`
@@ -33,14 +34,23 @@ Original file is located at
 Una vez que hayas actualizado esos valores en la celda `00057061`, puedes ejecutarla de nuevo.
 """
 
-import psycopg2
+#import psycopg2
 
 # --- Configura tus credenciales de PostgreSQL aquí ---
 # Si usas una base de datos externa, reemplaza 'localhost' con la IP o hostname de tu servidor.
-DB_HOST = 'localhost'
-DB_NAME = 'colab_db' # Actualizado a la base de datos creada en Colab
-DB_USER = 'colab_user' # Actualizado al usuario creado en Colab
-DB_PASSWORD = 'colab_password' # Actualizado a la contraseña creada en Colab
+#DB_HOST = 'localhost'
+#DB_NAME = 'colab_db' # Actualizado a la base de datos creada en Colab
+#DB_USER = 'colab_user' # Actualizado al usuario creado en Colab
+#DB_PASSWORD = 'colab_password' # Actualizado a la contraseña creada en Colab
+
+import psycopg2
+import os
+
+# Get connection string from Railway variable
+database_url = os.getenv('DATABASE_URL')
+
+# Connect using the URL
+conn = psycopg2.connect(database_url)
 
 # El puerto por defecto de PostgreSQL es 5432
 DB_PORT = '5432'
@@ -110,7 +120,7 @@ import json
 import psycopg2
 
 # Import the external send_whatsapp_message function
-from __main__ import send_whatsapp_message
+#from __main__ import send_whatsapp_message
 
 app = FastAPI()
 
