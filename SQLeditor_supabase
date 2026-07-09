@@ -1,0 +1,26 @@
+async def process_chat_logic(msg: WhatsAppMessage):
+    phone = msg.sender_id
+    
+    # NEW: Manager command to hand control back to the AI
+    if msg.text_content and msg.text_content.strip().lower() == "#bot":
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE clients SET bot_paused = FALSE WHERE phone_number = %s;",
+                    (phone,)
+                )
+                conn.commit()
+        send_whatsapp_message(phone, "🤖 Chatbot reactivado para esta conversación.")
+        return
+
+    client_state = get_client_state(phone)
+    
+    # RULE 1: Direct VIP Check
+    if client_state["is_vip"]:
+        return
+        
+    # RULE 2: If bot is already paused, manager has the floor
+    if client_state["bot_paused"]:
+        return
+        
+    # ... rest of your Gemini LLM logic continues below
