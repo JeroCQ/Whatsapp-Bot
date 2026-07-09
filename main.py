@@ -46,14 +46,18 @@ Una vez que hayas actualizado esos valores en la celda `00057061`, puedes ejecut
 import psycopg2
 import os
 
+from fastapi import FastAPI
+app = FastAPI()
+
 # Get connection string from Railway variable
 database_url = os.getenv('DATABASE_URL')
 
 # Connect using the URL
-conn = psycopg2.connect(database_url)
+#conn = psycopg2.connect(database_url)
+
 
 # El puerto por defecto de PostgreSQL es 5432
-DB_PORT = '5432'
+#DB_PORT = '5432'
 
 # El código SQL para crear las tablas
 sql_schema = """
@@ -83,6 +87,23 @@ CREATE TABLE IF NOT EXISTS business_config (
     value TEXT NOT NULL
 );
 """
+
+# Create tables on startup (optional, but do it inside a startup event)
+@app.on_event("startup")
+async def startup():
+    conn = psycopg2.connect(database_url)
+    cursor = conn.cursor()
+    cursor.execute(sql_schema)
+    conn.commit()
+    conn.close()
+
+# Then in your routes, connect when needed:
+@app.get("/")
+def read_root():
+    conn = psycopg2.connect(database_url)
+    # ... use conn
+    conn.close()
+    return {"status": "ok"}
 
 conn = None # Inicializa conn a None para evitar NameError en caso de fallo de conexión
 try:
