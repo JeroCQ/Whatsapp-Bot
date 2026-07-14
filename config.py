@@ -1,13 +1,4 @@
-from google.colab import userdata
 import os
-
-# Inyectamos los secretos de Colab al entorno para simular Railway
-os.environ["SUPABASE_URL"] = userdata.get('SUPABASE_URL')
-os.environ["SUPABASE_KEY"] = userdata.get('SUPABASE_KEY')
-os.environ["WA_VERIFY_TOKEN"] = userdata.get('WA_VERIFY_TOKEN')
-os.environ["WA_TOKEN"] = userdata.get('WA_TOKEN')
-os.environ["WA_PHONE_NUMBER_ID"] = userdata.get('WA_PHONE_NUMBER_ID')
-
 import logging
 
 # Configuración básica de logs para ver errores en el dashboard de Railway o en Colab
