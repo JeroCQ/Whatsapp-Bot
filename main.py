@@ -5,6 +5,9 @@ from fastapi.responses import PlainTextResponse
 # Importamos la configuración validada de forma segura
 from config import config
 
+# Importa nuestra nueva lógica al inicio de main.py
+from bot import process_message_logic
+
 app = FastAPI()
 
 def send_whatsapp_message(to_number: str, text: str):
@@ -32,15 +35,18 @@ def send_whatsapp_message(to_number: str, text: str):
     except requests.exceptions.RequestException as e:
         print(f"Error sending message via Meta API: {e}")
 
-def process_whatsapp_message(sender_phone: str, message_body: str):
+def process_whatsapp_message(sender_phone: str, message_body: str, is_image: bool = False):
     """
-    Background task to process AI/State Machine logic.
-    This runs asynchronously so we can return 200 OK to Meta instantly.
+    Procesador en segundo plano que conecta la Máquina de Estados de bot.py
     """
-    print(f"Processing Message from {sender_phone}: {message_body}")
-    # En la Fase 3, aquí inyectaremos la lógica de Supabase (State Machine)
-    ai_response = f"AI Agent Response: {message_body}"
-    send_whatsapp_message(sender_phone, ai_response)
+    print(f"Procesando Mensaje de {sender_phone} | Es Imagen: {is_image}")
+    
+    # 1. Obtenemos la respuesta calculada por las reglas de negocio
+    ai_response = process_message_logic(sender_phone, message_body, is_image)
+    
+    # 2. Si hay respuesta (si el bot no está pausado), la enviamos a Meta
+    if ai_response:
+        send_whatsapp_message(sender_phone, ai_response)
 
 @app.get("/webhook")
 async def verify_webhook(
@@ -64,14 +70,17 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                     
                     if "messages" in value:
                         for message in value["messages"]:
+                            sender_phone = message.get("from")
+                            
+                            # Detectamos si es Texto
                             if message.get("type") == "text":
-                                sender_phone = message.get("from")
                                 message_body = message.get("text", {}).get("body")
+                                background_tasks.add_task(process_whatsapp_message, sender_phone, message_body, False)
+                            
+                            # Detectamos si es Imagen (Comprobante de pago)
+                            elif message.get("type") == "image":
+                                background_tasks.add_task(process_whatsapp_message, sender_phone, "", True)
                                 
-                                # Derivamos el procesamiento pesado a una tarea en segundo plano
-                                background_tasks.add_task(process_whatsapp_message, sender_phone, message_body)
-                                
-        # Retornamos 200 OK instantáneamente a Meta
         return {"status": "success"}
         
     except Exception as e:
