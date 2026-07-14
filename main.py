@@ -123,3 +123,21 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
                 send_whatsapp_message(phone, "✅ Tu solicitud ha sido resuelta. Si necesitas algo más, envíame un mensaje para ver el menú.")
 
     return {"status": "success"}
+
+
+# 1. Verifica qué te está devolviendo realmente Supabase
+print("Data de customers:", customer_data)
+print("Data de conversation_states:", state_data)
+
+try:
+    # ... tu lógica para generar la respuesta (ej. LLM) ...
+    print("Generando respuesta...")
+    
+    # ... tu lógica para enviar el mensaje de vuelta (ej. a WhatsApp) ...
+    print("Mensaje enviado exitosamente")
+    
+except Exception as e:
+    # 2. Asegúrate de que cualquier error se imprima en Railway
+    import traceback
+    print("ERROR EN EL PROCESAMIENTO:")
+    traceback.print_exc()
