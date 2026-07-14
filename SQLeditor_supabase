@@ -1,26 +1,46 @@
-async def process_chat_logic(msg: WhatsAppMessage):
-    phone = msg.sender_id
-    
-    # NEW: Manager command to hand control back to the AI
-    if msg.text_content and msg.text_content.strip().lower() == "#bot":
-        with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    "UPDATE clients SET bot_paused = FALSE WHERE phone_number = %s;",
-                    (phone,)
-                )
-                conn.commit()
-        send_whatsapp_message(phone, "🤖 Chatbot reactivado para esta conversación.")
-        return
+-- 1. Creamos un ENUM para controlar estrictamente en qué paso del flujo está el usuario
+CREATE TYPE bot_state AS ENUM (
+    'GREETING',              -- Recién saluda
+    'PRODUCT_SELECTION',     -- Eligiendo Cuajada o Crema
+    'FORMAT_SELECTION',      -- Eligiendo Libra, Kilo o Redondo
+    'QUANTITY_SELECTION',    -- Ingresando cantidad
+    'PAYMENT_PENDING',       -- Esperando que suba el comprobante
+    'PICKUP_INSTRUCTIONS',   -- Bot dio instrucciones de bodega
+    'HUMAN_HANDOFF'          -- Derivado a Chatwoot (pausado)
+);
 
-    client_state = get_client_state(phone)
-    
-    # RULE 1: Direct VIP Check
-    if client_state["is_vip"]:
-        return
-        
-    # RULE 2: If bot is already paused, manager has the floor
-    if client_state["bot_paused"]:
-        return
-        
-    # ... rest of your Gemini LLM logic continues below
+-- 2. Tabla de Clientes
+CREATE TABLE customers (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    phone_number VARCHAR(25) UNIQUE NOT NULL, -- Ej: 573001234567
+    name VARCHAR(100),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 3. Máquina de Estados (Control de la conversación)
+CREATE TABLE conversation_states (
+    phone_number VARCHAR(25) PRIMARY KEY REFERENCES customers(phone_number),
+    current_state bot_state DEFAULT 'GREETING',
+    is_paused BOOLEAN DEFAULT FALSE,  -- FLAG CRÍTICA: Si es TRUE, el bot de FastAPI ignora los mensajes
+    handoff_reason VARCHAR(255),      -- Ej: "Subió comprobante", "Intención mayorista", "Pidió asesor"
+    retry_count INT DEFAULT 0,        -- Para la regla de derivar si falla 2 veces en entender
+    last_interaction TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 4. Tabla de Pedidos (Historial y estados)
+CREATE TABLE orders (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    customer_id UUID REFERENCES customers(id),
+    product VARCHAR(50),      -- Cuajada, Crema
+    format VARCHAR(50),       -- Libra, Kilo, Redondos
+    quantity INT,
+    total_price DECIMAL(10,2),
+    payment_receipt_url TEXT, -- URL de la imagen del comprobante enviada por WA
+    status VARCHAR(50) DEFAULT 'PENDING_PAYMENT', -- PENDING_PAYMENT, VERIFYING_HUMAN, CONFIRMED, CANCELLED
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 5. Índices de rendimiento (Para que FastAPI consulte rápido en cada mensaje)
+CREATE INDEX idx_customers_phone ON customers(phone_number);
+CREATE INDEX idx_orders_customer ON orders(customer_id);
+CREATE INDEX idx_states_paused ON conversation_states(is_paused);
