@@ -31,31 +31,51 @@ def send_whatsapp_message(to_number: str, text: str):
 
 def process_whatsapp_message(sender_phone: str, message_body: str, is_image: bool = False):
     """Procesador que enruta entre el Bot y Chatwoot basado en el estado."""
-    state_record = get_or_create_customer_state(sender_phone)
-    if not state_record:
-        return
-
-    # 1. SI ESTÁ PAUSADO: Reenviar el mensaje del usuario al Asesor en Chatwoot
-    if state_record["is_paused"]:
-        conv_id = state_record.get("chatwoot_conversation_id")
-        if conv_id:
-            content = "📸 [El usuario envió un comprobante/imagen]" if is_image else message_body
-            chatwoot_api.send_message_to_chatwoot(conv_id, content)
-        return
-
-    # 2. SI NO ESTÁ PAUSADO: El bot piensa y responde
-    ai_response = process_message_logic(sender_phone, message_body, is_image)
-    if ai_response:
-        send_whatsapp_message(sender_phone, ai_response)
+    print(f"\n[DEBUG] 1. Recibido mensaje de {sender_phone}: '{message_body}' (Imagen: {is_image})")
+    
+    try:
+        state_record = get_or_create_customer_state(sender_phone)
+        print(f"[DEBUG] 2. Estado del cliente en BD: {state_record}")
         
-        # 3. SI EL BOT DECIDIÓ PAUSARSE EN ESTE TURNO: Creamos el ticket en Chatwoot
-        new_state = get_or_create_customer_state(sender_phone)
-        if new_state["is_paused"] and not new_state.get("chatwoot_conversation_id"):
-            contact_id = chatwoot_api.get_or_create_contact(sender_phone)
-            if contact_id:
-                conv_id = chatwoot_api.create_conversation(contact_id, new_state["handoff_reason"])
-                if conv_id:
-                    update_chatwoot_conversation_id(sender_phone, conv_id)
+        if not state_record:
+            print("[DEBUG] 3. ERROR: No se pudo obtener ni crear el state_record en Supabase")
+            return
+
+        # 1. SI ESTÁ PAUSADO: Reenviar el mensaje del usuario al Asesor en Chatwoot
+        if state_record["is_paused"]:
+            print("[DEBUG] 4. Bot pausado, derivando mensaje a Chatwoot")
+            conv_id = state_record.get("chatwoot_conversation_id")
+            if conv_id:
+                content = "📸 [El usuario envió un comprobante/imagen]" if is_image else message_body
+                chatwoot_api.send_message_to_chatwoot(conv_id, content)
+            return
+
+        # 2. SI NO ESTÁ PAUSADO: El bot piensa y responde
+        print("[DEBUG] 5. Procesando lógica del bot...")
+        ai_response = process_message_logic(sender_phone, message_body, is_image)
+        print(f"[DEBUG] 6. Respuesta generada por el bot: {ai_response}")
+        
+        if ai_response:
+            send_whatsapp_message(sender_phone, ai_response)
+            print("[DEBUG] 7. Mensaje enviado a WhatsApp exitosamente")
+            
+            # 3. SI EL BOT DECIDIÓ PAUSARSE EN ESTE TURNO: Creamos el ticket en Chatwoot
+            new_state = get_or_create_customer_state(sender_phone)
+            if new_state["is_paused"] and not new_state.get("chatwoot_conversation_id"):
+                print("[DEBUG] 8. Bot decidió pausarse, intentando crear ticket en Chatwoot...")
+                contact_id = chatwoot_api.get_or_create_contact(sender_phone)
+                if contact_id:
+                    conv_id = chatwoot_api.create_conversation(contact_id, new_state["handoff_reason"])
+                    if conv_id:
+                        update_chatwoot_conversation_id(sender_phone, conv_id)
+                        print(f"[DEBUG] 9. Ticket de Chatwoot creado y enlazado: {conv_id}")
+        else:
+            print("[DEBUG] 6b. El bot no generó respuesta (ai_response es None o vacío)")
+
+    except Exception as e:
+        import traceback
+        print(f"\n[ERROR CRÍTICO] Falló process_whatsapp_message:")
+        traceback.print_exc()
 
 # --- ENDPOINTS DE META ---
 
@@ -125,19 +145,3 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
     return {"status": "success"}
 
 
-# 1. Verifica qué te está devolviendo realmente Supabase
-print("Data de customers:", customer_data)
-print("Data de conversation_states:", state_data)
-
-try:
-    # ... tu lógica para generar la respuesta (ej. LLM) ...
-    print("Generando respuesta...")
-    
-    # ... tu lógica para enviar el mensaje de vuelta (ej. a WhatsApp) ...
-    print("Mensaje enviado exitosamente")
-    
-except Exception as e:
-    # 2. Asegúrate de que cualquier error se imprima en Railway
-    import traceback
-    print("ERROR EN EL PROCESAMIENTO:")
-    traceback.print_exc()
