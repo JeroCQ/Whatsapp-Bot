@@ -17,11 +17,14 @@ class Settings:
     CHATWOOT_ACCOUNT_ID = os.getenv("CHATWOOT_ACCOUNT_ID")
     CHATWOOT_INBOX_ID = os.getenv("CHATWOOT_INBOX_ID")
 
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+    
     @classmethod
     def validate(cls):
         critical_vars = [
             "SUPABASE_URL", "SUPABASE_KEY", 
-            "WA_VERIFY_TOKEN", "WA_TOKEN", "WA_PHONE_NUMBER_ID"
+            "WA_VERIFY_TOKEN", "WA_TOKEN", "WA_PHONE_NUMBER_ID",
+            "GEMINI_API_KEY"
         ]
         missing = [var for var in critical_vars if not getattr(cls, var)]
         if missing:
