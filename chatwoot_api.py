@@ -15,11 +15,10 @@ def get_or_create_contact(phone: str, name: str = "Cliente WhatsApp"):
     """Busca al cliente en Chatwoot, si no existe, lo crea."""
     url = f"{get_base_url()}/contacts"
     
-    # IMPORTANTE: Forzamos inbox_id a ser int()
     try:
         inbox_id_int = int(config.CHATWOOT_INBOX_ID)
     except ValueError:
-        print(f"[CHATWOOT DEBUG] ERROR GRAVE: CHATWOOT_INBOX_ID no es un número válido: {config.CHATWOOT_INBOX_ID}")
+        print(f"[CHATWOOT DEBUG] ERROR GRAVE: CHATWOOT_INBOX_ID no es válido.")
         return None
 
     data = {
@@ -28,20 +27,14 @@ def get_or_create_contact(phone: str, name: str = "Cliente WhatsApp"):
         "phone_number": f"+{phone}" if not phone.startswith("+") else phone
     }
     
-    print(f"\n[CHATWOOT DEBUG] Intentando CREAR contacto. URL: {url} | Datos: {data}")
     try:
         res = requests.post(url, headers=get_headers(), json=data)
-        print(f"[CHATWOOT DEBUG] Respuesta POST Contacto - Status: {res.status_code} | Body: {res.text}")
-        
         if res.status_code in [200, 201]:
             return res.json()["payload"]["contact"]["id"]
         
-        # Si falla (ej. teléfono ya existe), intentamos buscarlo
+        # Si falla, intentamos buscarlo
         search_url = f"{url}/search?q={phone}"
-        print(f"[CHATWOOT DEBUG] Intentando BUSCAR contacto. URL: {search_url}")
         search_res = requests.get(search_url, headers=get_headers())
-        print(f"[CHATWOOT DEBUG] Respuesta GET Búsqueda - Status: {search_res.status_code} | Body: {search_res.text}")
-        
         if search_res.status_code == 200 and search_res.json().get("payload"):
             return search_res.json()["payload"][0]["id"]
             
@@ -50,8 +43,8 @@ def get_or_create_contact(phone: str, name: str = "Cliente WhatsApp"):
     
     return None
 
-def create_conversation(contact_id: int, reason: str):
-    """Abre un ticket nuevo para el asesor."""
+def create_conversation(contact_id: int):
+    """Abre un ticket nuevo para el asesor (Sin enviar mensaje aún)."""
     url = f"{get_base_url()}/conversations"
     data = {
         "inbox_id": int(config.CHATWOOT_INBOX_ID),
@@ -59,31 +52,70 @@ def create_conversation(contact_id: int, reason: str):
         "status": "open"
     }
     
-    print(f"\n[CHATWOOT DEBUG] Intentando CREAR CONVERSACIÓN. URL: {url} | Datos: {data}")
     try:
         res = requests.post(url, headers=get_headers(), json=data)
-        print(f"[CHATWOOT DEBUG] Respuesta POST Conversación - Status: {res.status_code} | Body: {res.text}")
-        
         if res.status_code == 200:
-            conv_id = res.json()["id"]
-            send_message_to_chatwoot(conv_id, f"🚨 ALERTA DE BOT: Handoff requerido por: {reason}", is_private=True)
-            return conv_id
+            return res.json()["id"]
     except Exception as e:
         print(f"[CHATWOOT DEBUG] Excepción en create_conversation: {e}")
     return None
 
 def send_message_to_chatwoot(conversation_id: int, content: str, is_private: bool = False):
-    """Envía un mensaje del usuario al panel de Chatwoot."""
+    """Envía un mensaje de texto simple al panel de Chatwoot."""
     url = f"{get_base_url()}/conversations/{conversation_id}/messages"
     data = {
         "content": content,
         "message_type": "incoming", 
         "private": is_private       
     }
-    
-    print(f"\n[CHATWOOT DEBUG] Intentando ENVIAR MENSAJE. URL: {url} | Datos: {data}")
     try:
-        res = requests.post(url, headers=get_headers(), json=data)
-        print(f"[CHATWOOT DEBUG] Respuesta POST Mensaje - Status: {res.status_code} | Body: {res.text}")
+        requests.post(url, headers=get_headers(), json=data)
     except Exception as e:
          print(f"[CHATWOOT DEBUG] Excepción enviando mensaje: {e}")
+
+# --- NUEVAS FUNCIONES PARA MANEJAR IMÁGENES ---
+
+def download_meta_image(media_id: str):
+    """Obtiene la URL temporal de Meta y descarga los bytes de la imagen."""
+    url = f"https://graph.facebook.com/v20.0/{media_id}"
+    headers = {"Authorization": f"Bearer {config.WA_TOKEN}"}
+    
+    try:
+        # 1. Obtener la URL del archivo
+        res = requests.get(url, headers=headers)
+        if res.status_code == 200:
+            media_url = res.json().get("url")
+            # 2. Descargar los bytes
+            img_res = requests.get(media_url, headers=headers)
+            if img_res.status_code == 200:
+                return img_res.content
+    except Exception as e:
+        print(f"[META DEBUG] Error descargando imagen {media_id}: {e}")
+    return None
+
+def send_image_to_chatwoot(conversation_id: int, content: str, image_bytes: bytes, is_private: bool = False):
+    """Envía un mensaje con archivo adjunto a Chatwoot (Multipart Form-Data)."""
+    url = f"{get_base_url()}/conversations/{conversation_id}/messages"
+    
+    # ATENCIÓN: No usamos get_headers() porque requests debe calcular el Content-Type para multipart
+    headers = {"api_access_token": config.CHATWOOT_API_TOKEN}
+    
+    data = {
+        "content": content,
+        "message_type": "incoming",
+        # Chatwoot requiere que los booleanos en form-data se envíen como strings
+        "private": "true" if is_private else "false" 
+    }
+    
+    # El campo debe llamarse exactamente 'attachments[]' con los corchetes
+    files = {
+        "attachments[]": ("comprobante.jpg", image_bytes, "image/jpeg")
+    }
+    
+    try:
+        res = requests.post(url, headers=headers, data=data, files=files)
+        print(f"[CHATWOOT DEBUG] Respuesta POST Imagen - Status: {res.status_code}")
+        return res
+    except Exception as e:
+        print(f"[CHATWOOT DEBUG] Excepción enviando imagen: {e}")
+        return None
