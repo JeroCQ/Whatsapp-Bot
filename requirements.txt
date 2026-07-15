@@ -3,4 +3,4 @@ uvicorn
 requests
 pydantic
 supabase
-google-generativeai
+google-genai
