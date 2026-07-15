@@ -1,3 +1,4 @@
+import re
 import json
 import google.generativeai as genai
 from config import config
@@ -96,11 +97,21 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> str:
         )
         
         # Parsear la respuesta estructurada de Gemini
-        ai_data = json.loads(raw_response.text.strip())
+        # Forzar salida en formato JSON
+        raw_response = model.generate_content(
+            prompt,
+            generation_config={"response_mime_type": "application/json"}
+        )
         
-        response_text = ai_data.get("response", "")
-        trigger_handoff = ai_data.get("trigger_handoff", False)
-        reason = ai_data.get("handoff_reason", "Transferencia por IA")
+        # LIMPIEZA DE MARKDOWN ANTES DE PARSEAR
+        raw_text = raw_response.text.strip()
+        # Elimina los backticks de inicio (```json o ```)
+        raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
+        # Elimina los backticks del final (```)
+        raw_text = re.sub(r"\s*```$", "", raw_text)
+        
+        # Parsear la respuesta estructurada limpia
+        ai_data = json.loads(raw_text)
 
         # 5. Guardar la respuesta del modelo en el historial de base de datos
         if response_text:
