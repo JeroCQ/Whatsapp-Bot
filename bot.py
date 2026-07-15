@@ -109,9 +109,13 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> str:
         raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
         # Elimina los backticks del final (```)
         raw_text = re.sub(r"\s*```$", "", raw_text)
+
+        # Parsear la respuesta estructurada de Gemini
+        ai_data = json.loads(raw_response.text.strip())
         
-        # Parsear la respuesta estructurada limpia
-        ai_data = json.loads(raw_text)
+        response_text = ai_data.get("response", "")
+        trigger_handoff = ai_data.get("trigger_handoff", False)
+        reason = ai_data.get("handoff_reason", "Transferencia por IA")
 
         # 5. Guardar la respuesta del modelo en el historial de base de datos
         if response_text:
