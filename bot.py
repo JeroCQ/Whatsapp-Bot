@@ -78,7 +78,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> str:
     try:
         # 3. Llamar al modelo con la configuración de Salida Estructurada (Schema)
         response = client.models.generate_content(
-            model="gemini-1.5-flash",
+            model="gemini-flash-latest",
             contents=prompt,
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_INSTRUCTION,
