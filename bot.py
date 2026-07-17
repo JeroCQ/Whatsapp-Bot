@@ -1,3 +1,5 @@
+# EN bot.py - Reemplaza tu archivo actual por este ajustado:
+
 import json
 from pydantic import BaseModel
 from google import genai
@@ -13,7 +15,7 @@ from database import (
 # 1. Inicializar el cliente con el nuevo SDK
 client = genai.Client(api_key=config.GEMINI_API_KEY)
 
-# 2. Definir el esquema estricto que obligará a Gemini a no equivocarse con el JSON
+# 2. Definir el esquema estricto
 class BotResponse(BaseModel):
     response: str
     trigger_handoff: bool
@@ -26,7 +28,7 @@ Tu personalidad es comercial, alegre, servicial y muy caleña/colombiana, pero m
 Hablas de manera directa, usando ocasionalmente términos amigables y de confianza como "patrón", "patroncito", "sin enredos" o garantizando que los productos "derriten bonito" y "rinden".
 Tu objetivo es atender a emprendedores, queseras, panaderías y restaurantes de comidas rápidas, vendiéndoles calidad premium sin intermediarios.
 
-REGLAS DE FORMATO Y ESTILO (¡MUY IMPORTANTE!):
+REGLAS DE FORMATO Y ESTILO:
 El usuario te leerá desde WhatsApp, por lo que tus mensajes deben ser atractivos y fáciles de escanear:
 1. Usa negrilla (*texto*) para resaltar palabras clave, nombres de quesos, precios o marcas.
 2. NUNCA envíes bloques de texto largos. Separa tus ideas en párrafos cortos (máximo 2 o 3 líneas por párrafo).
@@ -56,7 +58,7 @@ Solo aceptamos pagos por transferencia bancaria. Cuando un cliente confirme su p
 
 REGLAS ESTRICTAS DE ESCALAMIENTO (HANDOFF A CHATWOOT): No intentes resolver las siguientes situaciones. Cambia el estado a escalamiento humano inmediatamente si detectas:
 1. Ventas al por mayor: Si el cliente pregunta por precios mayoristas, paquetes, o compras de gran volumen.
-2. Validación de Pago: Si el cliente envía una imagen/comprobante, o dice frases como "ya transferí", "ya pagué" "aquí está el comprobante".
+2. Envío de Imágenes/Comprobantes (¡CRÍTICO!): Si en las indicaciones del turno se te informa que el usuario envió una imagen (SÍ), debes activar el handoff OBLIGATORIAMENTE (trigger_handoff = true). No importa qué diga el texto adjunto (así parezca un pedido o una pregunta). Como tú eres un modelo de texto y no puedes ver archivos, un asesor humano debe revisar la imagen siempre. Genera una respuesta amable informando que pasas la imagen a revisión de un asesor.
 3. Solicitud de Humano: Si pide hablar con un asesor, una persona, o pide datos personales del dueño.
 4. Estancamiento/Quejas: Si el cliente se queja de un producto, hace un reclamo, o la conversación no avanza hacia un cierre de venta.
 """
@@ -69,14 +71,13 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> str:
     if not state_record:
         return "Disculpa, tuvimos un problema técnico. ¿Puedes intentarlo de nuevo?"
         
-    # Si el bot está pausado, no hacemos nada
     if state_record["is_paused"]:
         print(f"Mensaje ignorado de {phone} porque is_paused=True")
         return None 
 
-    # NUEVO: Guardar el mensaje entrante conservando el caption si existe
+    # Guardar el mensaje entrante conservando el texto real si lo acompaña
     if is_image:
-        user_input_to_log = f"[El usuario envió una imagen] Texto adjunto: '{text}'" if text else "[El usuario envió una imagen sin texto]"
+        user_input_to_log = f"[Imagen enviada] Texto adjunto: '{text}'" if text else "[Imagen enviada sin texto]"
     else:
         user_input_to_log = text
 
@@ -87,20 +88,19 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> str:
     formatted_history = [f"{'Usuario' if msg['role'] == 'user' else 'Bot'}: {msg['content']}" for msg in history]
     context_str = "\n".join(formatted_history)
 
-    # Construir el prompt
+    # CORREGIDO: Presentamos las variables de forma transparente sin ocultar el texto real
     prompt = f"""
     Historial de la conversación reciente:
     {context_str}
 
-    Indicaciones de este turno:
-    - ¿El usuario envió una imagen en este turno?: {"SÍ" if is_image else "NO"}.
-    - Mensaje actual del usuario: "{text if not is_image else '[Imagen/Archivo]'}"
+    Indicaciones estrictas de este turno actual:
+    - ¿El usuario envió una imagen en este mensaje?: {"SÍ" if is_image else "NO"}.
+    - Texto enviado por el usuario junto al mensaje: "{text}"
 
-    Analiza la situación y genera la respuesta.
+    Analiza la situación aplicando rigurosamente las REGLAS ESTRICTAS DE ESCALAMIENTO.
     """
 
     try:
-        # 3. Llamar al modelo con la configuración de Salida Estructurada (Schema)
         response = client.models.generate_content(
             model="gemini-flash-latest",
             contents=prompt,
@@ -108,11 +108,10 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> str:
                 system_instruction=SYSTEM_INSTRUCTION,
                 response_mime_type="application/json",
                 response_schema=BotResponse,
-                temperature=0.2, # Temperatura baja para que sea más determinista y estable
+                temperature=0.1, # Bajamos un poco más la temperatura para máxima adherencia a las reglas
             ),
         )
         
-        # Como usamos el schema, response.text es 100% un JSON válido
         ai_data = json.loads(response.text)
         
         response_text = ai_data.get("response", "")
@@ -134,6 +133,6 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> str:
         traceback.print_exc()
         
         if is_image:
-            pause_bot_for_handoff(phone, "Envío de comprobante (Fallback)")
-            return "¡Recibimos tu comprobante! Un asesor va a verificar el pago en nuestra cuenta bancaria en este momento. Por favor espera."
+            pause_bot_for_handoff(phone, "Envío de imagen (Fallback)")
+            return "¡Recibimos tu archivo! Un asesor lo va a revisar en este momento. Por favor espera un momento."
         return "Disculpa, en este momento estoy teniendo un retraso en procesar tu mensaje. ¿Podrías escribir nuevamente?"
