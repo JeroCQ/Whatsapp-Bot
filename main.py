@@ -11,7 +11,7 @@ import chatwoot_api
 app = FastAPI()
 
 def send_whatsapp_message(to_number: str, text: str):
-    """Envía un mensaje usando la API de Meta."""
+    """Envía un mensaje de texto usando la API de Meta."""
     url = f"https://graph.facebook.com/v20.0/{config.WA_PHONE_NUMBER_ID}/messages"
     headers = {
         "Authorization": f"Bearer {config.WA_TOKEN}",
@@ -27,11 +27,55 @@ def send_whatsapp_message(to_number: str, text: str):
     try:
         requests.post(url, headers=headers, json=payload).raise_for_status()
     except requests.exceptions.RequestException as e:
-        print(f"Error enviando WhatsApp a {to_number}: {e}")
+        print(f"Error enviando WhatsApp de texto a {to_number}: {e}")
 
-def process_whatsapp_message(sender_phone: str, message_body: str, is_image: bool = False, media_id: str = None):
-    """Procesador que enruta entre el Bot y Chatwoot basado en el estado."""
-    print(f"\n[DEBUG] 1. Recibido mensaje de {sender_phone} (Imagen: {is_image})")
+def send_whatsapp_audio(to_number: str, media_id: str):
+    """NUEVO: Envía una nota de voz estructurada usando el ID de contenido de Meta."""
+    url = f"https://graph.facebook.com/v20.0/{config.WA_PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {config.WA_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to_number,
+        "type": "audio",
+        "audio": {"id": media_id}
+    }
+    try:
+        requests.post(url, headers=headers, json=payload).raise_for_status()
+    except requests.exceptions.RequestException as e:
+        print(f"Error enviando WhatsApp de audio a {to_number}: {e}")
+
+def upload_audio_to_meta(audio_url: str) -> str:
+    """NUEVO: Descarga el audio desde Chatwoot y lo registra en los servidores de Meta."""
+    try:
+        # Descargar el archivo desde la URL de Chatwoot
+        res = requests.get(audio_url)
+        res.raise_for_status()
+        
+        # Subir a la API de Media de Meta
+        url = f"https://graph.facebook.com/v20.0/{config.WA_PHONE_NUMBER_ID}/media"
+        headers = {
+            "Authorization": f"Bearer {config.WA_TOKEN}"
+        }
+        files = {
+            'file': ('voice_note.ogg', res.content, 'audio/ogg'),
+        }
+        data = {
+            'messaging_product': 'whatsapp'
+        }
+        response = requests.post(url, headers=headers, files=files, data=data)
+        response.raise_for_status()
+        return response.json().get("id")
+    except Exception as e:
+        print(f"Error al subir audio transitorio a Meta: {e}")
+        return None
+
+def process_whatsapp_message(sender_phone: str, message_body: str, is_image: bool = False, media_id: str = None, is_audio: bool = False, audio_media_id: str = None):
+    """Procesador que enruta entre el Bot y Chatwoot basado en el estado (Soporta Audios)."""
+    print(f"\n[DEBUG] 1. Recibido mensaje de {sender_phone} (Imagen: {is_image} | Audio: {is_audio})")
     
     try:
         state_record = get_or_create_customer_state(sender_phone)
@@ -40,25 +84,37 @@ def process_whatsapp_message(sender_phone: str, message_body: str, is_image: boo
             print("[DEBUG] 3. ERROR: No se pudo obtener ni crear el state_record")
             return
 
-        # 1. SI ESTÁ PAUSADO: Reenviar el mensaje del usuario al Asesor en Chatwoot
+        # 1. SI ESTÁ PAUSADO: Reenviar todo tipo de mensajes al Asesor en Chatwoot
         if state_record["is_paused"]:
-            print("[DEBUG] 4. Bot pausado, derivando mensaje a Chatwoot")
+            print("[DEBUG] 4. Bot pausado, derivando mensaje al asesor humano en Chatwoot")
             conv_id = state_record.get("chatwoot_conversation_id")
             if conv_id:
                 if is_image and media_id:
                     img_bytes = chatwoot_api.download_meta_image(media_id)
-                    # NUEVO: Agregamos el texto del cliente al mensaje de Chatwoot
                     texto_chatwoot = f"📸 El usuario envió una imagen: {message_body}" if message_body else "📸 El usuario envió una imagen"
-                    
                     if img_bytes:
                         chatwoot_api.send_image_to_chatwoot(conv_id, texto_chatwoot, img_bytes, is_private=False)
                     else:
                         chatwoot_api.send_message_to_chatwoot(conv_id, f"📸 [Error al descargar la imagen] Texto: {message_body}", is_private=False)
+                
+                elif is_audio and audio_media_id:
+                    # Meta utiliza el mismo flujo de descarga binaria para imágenes y audios
+                    audio_bytes = chatwoot_api.download_meta_image(audio_media_id)
+                    if audio_bytes:
+                        chatwoot_api.send_audio_to_chatwoot(conv_id, audio_bytes)
+                    else:
+                        chatwoot_api.send_message_to_chatwoot(conv_id, "🎙️ [Error de descarga] El cliente envió una nota de voz que no se pudo procesar.", is_private=False)
+                
                 else:
                     chatwoot_api.send_message_to_chatwoot(conv_id, message_body, is_private=False)
             return
 
-        # 2. SI NO ESTÁ PAUSADO: El bot piensa y responde
+        # 2. SI NO ESTÁ PAUSADO Y ES AUDIO: (Salvaguarda temporal para el Paso 1)
+        if is_audio:
+            send_whatsapp_message(sender_phone, "¡Hola! Por ahora solo puedo entenderte por texto escrito. Si necesitas que un asesor escuche tu audio, por favor escribe la palabra *Asesor*. 🧀")
+            return
+
+        # 3. SI NO ESTÁ PAUSADO: El bot piensa y responde texto con normalidad
         print("[DEBUG] 5. Procesando lógica del bot...")
         ai_response = process_message_logic(sender_phone, message_body, is_image)
         print(f"[DEBUG] 6. Respuesta IA generada")
@@ -66,10 +122,9 @@ def process_whatsapp_message(sender_phone: str, message_body: str, is_image: boo
         if ai_response:
             send_whatsapp_message(sender_phone, ai_response)
             
-            # 3. SI EL BOT DECIDIÓ PAUSARSE EN ESTE TURNO: Creamos ticket y enviamos contexto
             new_state = get_or_create_customer_state(sender_phone)
             if new_state["is_paused"] and not new_state.get("chatwoot_conversation_id"):
-                print("[DEBUG] 8. Bot decidió pausarse, creando ticket y enviando contexto...")
+                print("[DEBUG] 8. Bot decidió pausarse, creando ticket...")
                 contact_id = chatwoot_api.get_or_create_contact(sender_phone)
                 
                 if contact_id:
@@ -77,7 +132,6 @@ def process_whatsapp_message(sender_phone: str, message_body: str, is_image: boo
                     if conv_id:
                         update_chatwoot_conversation_id(sender_phone, conv_id)
                         
-                        # A. Construir el resumen de la conversación
                         logs = get_message_logs(sender_phone, limit=6)
                         context_str = "\n".join([f"{'👤' if m['role']=='user' else '🤖'}: {m['content']}" for m in logs])
                         reason = new_state.get("handoff_reason", "Razón no especificada")
@@ -88,13 +142,12 @@ def process_whatsapp_message(sender_phone: str, message_body: str, is_image: boo
                             f"**Resumen de últimos mensajes:**\n{context_str}"
                         )
 
-                        # B. Enviar a Chatwoot como Nota Privada (con o sin imagen)
                         if is_image and media_id:
                             img_bytes = chatwoot_api.download_meta_image(media_id)
                             if img_bytes:
                                 chatwoot_api.send_image_to_chatwoot(conv_id, summary, img_bytes, is_private=True)
                             else:
-                                chatwoot_api.send_message_to_chatwoot(conv_id, summary + "\n\n*(Error descargando la imagen de Meta)*", is_private=True)
+                                chatwoot_api.send_message_to_chatwoot(conv_id, summary + "\n\n*(Error descargando la imagen)*", is_private=True)
                         else:
                             chatwoot_api.send_message_to_chatwoot(conv_id, summary, is_private=True)
 
@@ -126,14 +179,17 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                     if "messages" in value:
                         for message in value["messages"]:
                             sender_phone = message.get("from")
-                            # MODIFICADO: Capturar imagen y media_id
+                            
                             if message.get("type") == "text":
-                                background_tasks.add_task(process_whatsapp_message, sender_phone, message.get("text", {}).get("body"), False, None)
+                                background_tasks.add_task(process_whatsapp_message, sender_phone, message.get("text", {}).get("body"), False, None, False, None)
                             elif message.get("type") == "image":
                                 media_id = message.get("image", {}).get("id")
-                                # NUEVO: Extraemos el caption (si no hay texto, será "")
                                 caption = message.get("image", {}).get("caption", "") 
-                                background_tasks.add_task(process_whatsapp_message, sender_phone, caption, True, media_id)
+                                background_tasks.add_task(process_whatsapp_message, sender_phone, caption, True, media_id, False, None)
+                            # MODIFICADO: Capturar los eventos entrantes de tipo audio
+                            elif message.get("type") == "audio":
+                                audio_id = message.get("audio", {}).get("id")
+                                background_tasks.add_task(process_whatsapp_message, sender_phone, "[Audio Nota]", False, None, True, audio_id)
         return {"status": "success"}
     except Exception as e:
         print(f"Error Webhook Meta: {e}")
@@ -151,10 +207,26 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
         if not is_private:
             conv_id = data.get("conversation", {}).get("id")
             content = data.get("content")
-            if conv_id and content:
+            attachments = data.get("attachments") # NUEVO: Interceptar adjuntos salientes del asesor
+            
+            if conv_id:
                 phone = get_phone_by_chatwoot_id(conv_id)
                 if phone:
-                    send_whatsapp_message(phone, content)
+                    # 1. Verificar si el asesor grabó un audio o adjuntó un archivo de sonido
+                    if attachments and len(attachments) > 0:
+                        for attachment in attachments:
+                            file_type = attachment.get("file_type")
+                            data_url = attachment.get("data_url")
+                            
+                            if file_type == "audio" and data_url:
+                                print(f"[DEBUG] Asesor envió audio desde Chatwoot. Procesando...")
+                                meta_media_id = upload_audio_to_meta(data_url)
+                                if meta_media_id:
+                                    send_whatsapp_audio(phone, meta_media_id)
+                    
+                    # 2. Si el mensaje además lleva texto explicativo
+                    if content:
+                        send_whatsapp_message(phone, content)
                     
     elif event == "conversation_status_changed" and data.get("status") == "resolved":
         conv_id = data.get("id")
