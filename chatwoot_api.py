@@ -119,3 +119,22 @@ def send_image_to_chatwoot(conversation_id: int, content: str, image_bytes: byte
     except Exception as e:
         print(f"[CHATWOOT DEBUG] Excepción enviando imagen: {e}")
         return None
+def send_audio_to_chatwoot(conversation_id: int, audio_bytes: bytes):
+    """Sube un archivo de audio como mensaje entrante visible al asesor humano."""
+    url = f"{config.CHATWOOT_API_URL}/api/v1/accounts/{config.CHATWOOT_ACCOUNT_ID}/conversations/{conversation_id}/messages"
+    headers = {
+        "api_access_token": config.CHATWOOT_ACCESS_TOKEN
+    }
+    # Forzamos el nombre con extensión .ogg para que el reproductor web de Chatwoot lo reconozca como nota de voz directamente
+    files = {
+        'attachments[]': ('nota_de_voz.ogg', audio_bytes, 'audio/ogg')
+    }
+    data = {
+        'message_type': 'incoming',
+        'private': 'false'
+    }
+    try:
+        response = requests.post(url, headers=headers, files=files, data=data)
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        print(f"Error enviando archivo de audio a Chatwoot: {e}")
