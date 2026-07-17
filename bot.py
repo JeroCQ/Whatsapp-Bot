@@ -74,8 +74,12 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> str:
         print(f"Mensaje ignorado de {phone} porque is_paused=True")
         return None 
 
-    # Guardar el mensaje entrante
-    user_input_to_log = "[El usuario envió una imagen/comprobante]" if is_image else text
+    # NUEVO: Guardar el mensaje entrante conservando el caption si existe
+    if is_image:
+        user_input_to_log = f"[El usuario envió una imagen] Texto adjunto: '{text}'" if text else "[El usuario envió una imagen sin texto]"
+    else:
+        user_input_to_log = text
+
     save_message_log(phone, "user", user_input_to_log)
 
     # Recuperar el historial
