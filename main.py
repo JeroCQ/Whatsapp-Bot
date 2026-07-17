@@ -47,10 +47,13 @@ def process_whatsapp_message(sender_phone: str, message_body: str, is_image: boo
             if conv_id:
                 if is_image and media_id:
                     img_bytes = chatwoot_api.download_meta_image(media_id)
+                    # NUEVO: Agregamos el texto del cliente al mensaje de Chatwoot
+                    texto_chatwoot = f"📸 El usuario envió una imagen: {message_body}" if message_body else "📸 El usuario envió una imagen"
+                    
                     if img_bytes:
-                        chatwoot_api.send_image_to_chatwoot(conv_id, "📸 El usuario envió una imagen adicional", img_bytes, is_private=False)
+                        chatwoot_api.send_image_to_chatwoot(conv_id, texto_chatwoot, img_bytes, is_private=False)
                     else:
-                        chatwoot_api.send_message_to_chatwoot(conv_id, "📸 [Error al descargar la imagen del cliente]", is_private=False)
+                        chatwoot_api.send_message_to_chatwoot(conv_id, f"📸 [Error al descargar la imagen] Texto: {message_body}", is_private=False)
                 else:
                     chatwoot_api.send_message_to_chatwoot(conv_id, message_body, is_private=False)
             return
