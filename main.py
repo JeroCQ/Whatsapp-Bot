@@ -128,7 +128,9 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                                 background_tasks.add_task(process_whatsapp_message, sender_phone, message.get("text", {}).get("body"), False, None)
                             elif message.get("type") == "image":
                                 media_id = message.get("image", {}).get("id")
-                                background_tasks.add_task(process_whatsapp_message, sender_phone, "", True, media_id)
+                                # NUEVO: Extraemos el caption (si no hay texto, será "")
+                                caption = message.get("image", {}).get("caption", "") 
+                                background_tasks.add_task(process_whatsapp_message, sender_phone, caption, True, media_id)
         return {"status": "success"}
     except Exception as e:
         print(f"Error Webhook Meta: {e}")
