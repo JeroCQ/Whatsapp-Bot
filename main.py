@@ -42,6 +42,11 @@ def is_audio_attachment(attachment: dict) -> bool:
         or content_type.startswith("audio/")
         or data_url.endswith((".ogg", ".oga", ".opus", ".mp3", ".m4a", ".aac", ".wav", ".webm"))
     )
+@app.on_event("startup")
+async def log_deployment_version():
+    """Log the Railway commit so audio relay fixes can be verified after deploy."""
+    commit_sha = os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_COMMIT_SHA") or "unknown"
+    print(f"[STARTUP] WhatsApp bot running commit: {commit_sha}")
 
 
 def send_whatsapp_message(to_number: str, text: str):
