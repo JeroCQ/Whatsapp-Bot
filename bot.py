@@ -21,6 +21,33 @@ class BotResponse(BaseModel):
     trigger_handoff: bool
     handoff_reason: str
 
+
+def transcribe_audio_message(audio_bytes: bytes, mime_type: str = "audio/ogg") -> str:
+    """Transcribe a WhatsApp voice note so the bot can answer it as text."""
+    if not audio_bytes:
+        return None
+
+    try:
+        response = client.models.generate_content(
+            model="gemini-flash-latest",
+            contents=[
+                "Transcribe este audio de WhatsApp en español. "
+                "Devuelve únicamente el texto que dijo el cliente, sin explicaciones.",
+                types.Part.from_bytes(
+                    data=audio_bytes,
+                    mime_type=mime_type or "audio/ogg",
+                ),
+            ],
+            config=types.GenerateContentConfig(temperature=0),
+        )
+        transcript = (response.text or "").strip()
+        return transcript or None
+    except Exception:
+        import traceback
+        print("[ERROR GEMINI] Falló la transcripción de audio:")
+        traceback.print_exc()
+        return None
+
 SYSTEM_INSTRUCTION = """
 Rol y Personalidad:
 Eres el asistente virtual de ventas de "Quesos Memo's", la bodega mayorista de quesos más grande de Cali, con más de 10 años de experiencia.
