@@ -17,6 +17,13 @@ class Settings:
     CHATWOOT_ACCOUNT_ID = os.getenv("CHATWOOT_ACCOUNT_ID")
     CHATWOOT_INBOX_ID = os.getenv("CHATWOOT_INBOX_ID")
 
+    # Backwards-compatible aliases for older helper code/deployments.
+    # The canonical names used by this codebase are CHATWOOT_BASE_URL and
+    # CHATWOOT_API_TOKEN, but these aliases prevent the audio relay from
+    # crashing with AttributeError if an old call path is still imported.
+    CHATWOOT_API_URL = os.getenv("CHATWOOT_API_URL") or CHATWOOT_BASE_URL
+    CHATWOOT_ACCESS_TOKEN = os.getenv("CHATWOOT_ACCESS_TOKEN") or CHATWOOT_API_TOKEN
+
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
     
     @classmethod

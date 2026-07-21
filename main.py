@@ -1,3 +1,5 @@
+import os
+
 import requests
 from fastapi import FastAPI, Request, HTTPException, Query, BackgroundTasks
 from fastapi.responses import PlainTextResponse
@@ -9,6 +11,38 @@ from bot import process_message_logic
 import chatwoot_api
 
 app = FastAPI()
+
+DEPLOYMENT_COMMIT_SHA = os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_COMMIT_SHA") or "unknown"
+print(f"[BOOT] WhatsApp bot code loaded. Commit: {DEPLOYMENT_COMMIT_SHA}. Audio relay build: 2026-07-21.2")
+
+
+@app.get("/")
+async def health_check():
+    """Railway/root health endpoint and visible deployment-version check."""
+    return {
+        "status": "ok",
+        "commit": DEPLOYMENT_COMMIT_SHA,
+        "audio_relay_build": "2026-07-21.2",
+    }
+
+
+@app.on_event("startup")
+async def log_deployment_version():
+    """Log the Railway commit so audio relay fixes can be verified after deploy."""
+    print(f"[STARTUP] WhatsApp bot running commit: {DEPLOYMENT_COMMIT_SHA}")
+
+
+def is_audio_attachment(attachment: dict) -> bool:
+    """Return True for Chatwoot audio attachments across webhook payload variants."""
+    file_type = (attachment.get("file_type") or "").lower()
+    content_type = (attachment.get("content_type") or attachment.get("mime_type") or "").lower()
+    data_url = (attachment.get("data_url") or "").lower()
+    return (
+        file_type == "audio"
+        or content_type.startswith("audio/")
+        or data_url.endswith((".ogg", ".oga", ".opus", ".mp3", ".m4a", ".aac", ".wav", ".webm"))
+    )
+
 
 def send_whatsapp_message(to_number: str, text: str):
     """Envía un mensaje de texto usando la API de Meta."""
@@ -49,26 +83,40 @@ def send_whatsapp_audio(to_number: str, media_id: str):
         print(f"Error enviando WhatsApp de audio a {to_number}: {e}")
 
 def upload_audio_to_meta(audio_url: str) -> str:
-    """NUEVO: Descarga el audio desde Chatwoot y lo registra en los servidores de Meta."""
+    """Descarga un audio desde Chatwoot y lo registra en los servidores de Meta."""
     try:
-        # Descargar el archivo desde la URL de Chatwoot
-        res = requests.get(audio_url)
+        # Chatwoot puede enviar URLs absolutas o rutas relativas en data_url.
+        if audio_url.startswith("/"):
+            audio_url = f"{config.CHATWOOT_BASE_URL.rstrip('/')}{audio_url}"
+
+        # Descargar el archivo desde Chatwoot. En instalaciones privadas, el token es
+        # necesario para que el adjunto no descargue una página HTML de autenticación.
+        chatwoot_headers = {"api_access_token": config.CHATWOOT_API_TOKEN}
+        res = requests.get(audio_url, headers=chatwoot_headers)
         res.raise_for_status()
+        mime_type = res.headers.get("Content-Type", "audio/ogg").split(";")[0]
+        if not mime_type.startswith("audio/"):
+            mime_type = "audio/ogg"
         
-        # Subir a la API de Media de Meta
+        # Subir a la API de Media de Meta. WhatsApp requiere multipart/form-data.
         url = f"https://graph.facebook.com/v20.0/{config.WA_PHONE_NUMBER_ID}/media"
-        headers = {
-            "Authorization": f"Bearer {config.WA_TOKEN}"
-        }
+        headers = {"Authorization": f"Bearer {config.WA_TOKEN}"}
         files = {
-            'file': ('voice_note.ogg', res.content, 'audio/ogg'),
+            "file": ("voice_note.ogg", res.content, mime_type),
         }
-        data = {
-            'messaging_product': 'whatsapp'
-        }
+        data = {"messaging_product": "whatsapp"}
         response = requests.post(url, headers=headers, files=files, data=data)
+        print(f"[META DEBUG] Respuesta POST Audio Media - Status: {response.status_code}")
         response.raise_for_status()
-        return response.json().get("id")
+        media_id = response.json().get("id")
+        if not media_id:
+            print(f"[META DEBUG] Meta no devolvió media id para audio de Chatwoot: {response.text}")
+        return media_id
+    except requests.exceptions.RequestException as e:
+        response = getattr(e, "response", None)
+        detail = response.text if response is not None else str(e)
+        print(f"Error al subir audio transitorio a Meta: {detail}")
+        return None
     except Exception as e:
         print(f"Error al subir audio transitorio a Meta: {e}")
         return None
@@ -98,10 +146,9 @@ def process_whatsapp_message(sender_phone: str, message_body: str, is_image: boo
                         chatwoot_api.send_message_to_chatwoot(conv_id, f"📸 [Error al descargar la imagen] Texto: {message_body}", is_private=False)
                 
                 elif is_audio and audio_media_id:
-                    # Meta utiliza el mismo flujo de descarga binaria para imágenes y audios
-                    audio_bytes = chatwoot_api.download_meta_image(audio_media_id)
+                    audio_bytes, mime_type = chatwoot_api.download_meta_media(audio_media_id)
                     if audio_bytes:
-                        chatwoot_api.send_audio_to_chatwoot(conv_id, audio_bytes)
+                        chatwoot_api.send_audio_to_chatwoot(conv_id, audio_bytes, mime_type or "audio/ogg")
                     else:
                         chatwoot_api.send_message_to_chatwoot(conv_id, "🎙️ [Error de descarga] El cliente envió una nota de voz que no se pudo procesar.", is_private=False)
                 
@@ -215,14 +262,20 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
                     # 1. Verificar si el asesor grabó un audio o adjuntó un archivo de sonido
                     if attachments and len(attachments) > 0:
                         for attachment in attachments:
-                            file_type = attachment.get("file_type")
-                            data_url = attachment.get("data_url")
+                            data_url = attachment.get("data_url") or attachment.get("download_url")
                             
-                            if file_type == "audio" and data_url:
-                                print(f"[DEBUG] Asesor envió audio desde Chatwoot. Procesando...")
+                            if data_url and is_audio_attachment(attachment):
+                                print(
+                                    "[DEBUG] Asesor envió audio desde Chatwoot. "
+                                    f"file_type={attachment.get('file_type')} "
+                                    f"content_type={attachment.get('content_type') or attachment.get('mime_type')} "
+                                    "Procesando..."
+                                )
                                 meta_media_id = upload_audio_to_meta(data_url)
                                 if meta_media_id:
                                     send_whatsapp_audio(phone, meta_media_id)
+                                else:
+                                    print("[CHATWOOT DEBUG] No se pudo reenviar el audio del asesor a WhatsApp: Meta no devolvió media_id")
                     
                     # 2. Si el mensaje además lleva texto explicativo
                     if content:
