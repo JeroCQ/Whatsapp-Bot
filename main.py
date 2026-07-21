@@ -49,23 +49,28 @@ def send_whatsapp_audio(to_number: str, media_id: str):
         print(f"Error enviando WhatsApp de audio a {to_number}: {e}")
 
 def upload_audio_to_meta(audio_url: str) -> str:
-    """NUEVO: Descarga el audio desde Chatwoot y lo registra en los servidores de Meta."""
+    """Descarga un audio desde Chatwoot y lo registra en los servidores de Meta."""
     try:
-        # Descargar el archivo desde la URL de Chatwoot
-        res = requests.get(audio_url)
+        # Chatwoot puede enviar URLs absolutas o rutas relativas en data_url.
+        if audio_url.startswith("/"):
+            audio_url = f"{config.CHATWOOT_BASE_URL.rstrip('/')}{audio_url}"
+
+        # Descargar el archivo desde Chatwoot. En instalaciones privadas, el token es
+        # necesario para que el adjunto no descargue una página HTML de autenticación.
+        chatwoot_headers = {"api_access_token": config.CHATWOOT_API_TOKEN}
+        res = requests.get(audio_url, headers=chatwoot_headers)
         res.raise_for_status()
+        mime_type = res.headers.get("Content-Type", "audio/ogg").split(";")[0]
+        if not mime_type.startswith("audio/"):
+            mime_type = "audio/ogg"
         
-        # Subir a la API de Media de Meta
+        # Subir a la API de Media de Meta. WhatsApp requiere multipart/form-data.
         url = f"https://graph.facebook.com/v20.0/{config.WA_PHONE_NUMBER_ID}/media"
-        headers = {
-            "Authorization": f"Bearer {config.WA_TOKEN}"
-        }
+        headers = {"Authorization": f"Bearer {config.WA_TOKEN}"}
         files = {
-            'file': ('voice_note.ogg', res.content, 'audio/ogg'),
+            "file": ("voice_note.ogg", res.content, mime_type),
         }
-        data = {
-            'messaging_product': 'whatsapp'
-        }
+        data = {"messaging_product": "whatsapp"}
         response = requests.post(url, headers=headers, files=files, data=data)
         response.raise_for_status()
         return response.json().get("id")
@@ -98,10 +103,9 @@ def process_whatsapp_message(sender_phone: str, message_body: str, is_image: boo
                         chatwoot_api.send_message_to_chatwoot(conv_id, f"📸 [Error al descargar la imagen] Texto: {message_body}", is_private=False)
                 
                 elif is_audio and audio_media_id:
-                    # Meta utiliza el mismo flujo de descarga binaria para imágenes y audios
-                    audio_bytes = chatwoot_api.download_meta_image(audio_media_id)
+                    audio_bytes, mime_type = chatwoot_api.download_meta_media(audio_media_id)
                     if audio_bytes:
-                        chatwoot_api.send_audio_to_chatwoot(conv_id, audio_bytes)
+                        chatwoot_api.send_audio_to_chatwoot(conv_id, audio_bytes, mime_type or "audio/ogg")
                     else:
                         chatwoot_api.send_message_to_chatwoot(conv_id, "🎙️ [Error de descarga] El cliente envió una nota de voz que no se pudo procesar.", is_private=False)
                 
