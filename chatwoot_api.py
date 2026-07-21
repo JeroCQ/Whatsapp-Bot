@@ -15,9 +15,11 @@ def get_headers():
         "Content-Type": "application/json"
     }
 
+
 def get_multipart_headers():
     """Headers for Chatwoot multipart requests; requests sets Content-Type."""
     return {"api_access_token": config.CHATWOOT_API_TOKEN}
+
 
 def get_or_create_contact(phone: str, name: str = "Cliente WhatsApp"):
     """Busca al cliente en Chatwoot, si no existe, lo crea."""
@@ -51,6 +53,7 @@ def get_or_create_contact(phone: str, name: str = "Cliente WhatsApp"):
     
     return None
 
+
 def create_conversation(contact_id: int):
     """Abre un ticket nuevo para el asesor (Sin enviar mensaje aún)."""
     url = f"{get_base_url()}/conversations"
@@ -68,6 +71,7 @@ def create_conversation(contact_id: int):
         print(f"[CHATWOOT DEBUG] Excepción en create_conversation: {e}")
     return None
 
+
 def send_message_to_chatwoot(conversation_id: int, content: str, is_private: bool = False):
     """Envía un mensaje de texto simple al panel de Chatwoot."""
     url = f"{get_base_url()}/conversations/{conversation_id}/messages"
@@ -81,8 +85,7 @@ def send_message_to_chatwoot(conversation_id: int, content: str, is_private: boo
     except Exception as e:
          print(f"[CHATWOOT DEBUG] Excepción enviando mensaje: {e}")
 
-# --- NUEVAS FUNCIONES PARA MANEJAR IMÁGENES ---
-
+ 
 def download_meta_media(media_id: str):
     """Obtiene un archivo temporal de Meta y devuelve sus bytes y MIME type."""
     url = f"https://graph.facebook.com/v20.0/{media_id}"
@@ -136,6 +139,8 @@ def send_image_to_chatwoot(conversation_id: int, content: str, image_bytes: byte
     except Exception as e:
         print(f"[CHATWOOT DEBUG] Excepción enviando imagen: {e}")
         return None
+
+
 def extension_from_mime(mime_type: str, default: str = ".ogg"):
     if not mime_type:
         return default
