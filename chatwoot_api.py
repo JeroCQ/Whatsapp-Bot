@@ -116,29 +116,31 @@ def download_meta_image(media_id: str):
     return media_bytes
 
 
-def send_image_to_chatwoot(conversation_id: int, content: str, image_bytes: bytes, is_private: bool = False):
-    """Envía un mensaje con archivo adjunto a Chatwoot (Multipart Form-Data)."""
+
+def send_media_to_chatwoot(conversation_id: int, content: str, media_bytes: bytes, mime_type: str = "application/octet-stream", filename: str = "archivo", is_private: bool = False):
+    """Sube cualquier archivo de WhatsApp como mensaje entrante visible al asesor humano."""
     url = f"{get_base_url()}/conversations/{conversation_id}/messages"
-    
-    data = {
-        "content": content,
-        "message_type": "incoming",
-        # Chatwoot requiere que los booleanos en form-data se envíen como strings
-        "private": "true" if is_private else "false" 
-    }
-    
-    # El campo debe llamarse exactamente 'attachments[]' con los corchetes
     files = {
-        "attachments[]": ("comprobante.jpg", image_bytes, "image/jpeg")
+        "attachments[]": (filename, media_bytes, mime_type or "application/octet-stream")
     }
-    
+    data = {
+        "content": content or "📎 Archivo del cliente",
+        "message_type": "incoming",
+        "private": "true" if is_private else "false"
+    }
     try:
-        res = requests.post(url, headers=get_multipart_headers(), data=data, files=files)
-        print(f"[CHATWOOT DEBUG] Respuesta POST Imagen - Status: {res.status_code}")
-        return res
-    except Exception as e:
-        print(f"[CHATWOOT DEBUG] Excepción enviando imagen: {e}")
+        response = requests.post(url, headers=get_multipart_headers(), files=files, data=data)
+        print(f"[CHATWOOT DEBUG] Respuesta POST Archivo - Status: {response.status_code}")
+        response.raise_for_status()
+        return response
+    except requests.exceptions.RequestException as e:
+        print(f"[CHATWOOT DEBUG] Error enviando archivo a Chatwoot: {e}")
         return None
+
+
+def send_image_to_chatwoot(conversation_id: int, content: str, image_bytes: bytes, is_private: bool = False):
+    """Envía un mensaje con imagen adjunta a Chatwoot (Multipart Form-Data)."""
+    return send_media_to_chatwoot(conversation_id, content, image_bytes, "image/jpeg", "comprobante.jpg", is_private)
 
 
 def extension_from_mime(mime_type: str, default: str = ".ogg"):
@@ -149,21 +151,12 @@ def extension_from_mime(mime_type: str, default: str = ".ogg"):
 
 def send_audio_to_chatwoot(conversation_id: int, audio_bytes: bytes, mime_type: str = "audio/ogg"):
     """Sube un audio de WhatsApp como mensaje entrante visible al asesor humano."""
-    url = f"{get_base_url()}/conversations/{conversation_id}/messages"
     extension = extension_from_mime(mime_type)
-    files = {
-        "attachments[]": (f"nota_de_voz{extension}", audio_bytes, mime_type or "audio/ogg")
-    }
-    data = {
-        "content": "🎙️ Nota de voz del cliente",
-        "message_type": "incoming",
-        "private": "false"
-    }
-    try:
-        response = requests.post(url, headers=get_multipart_headers(), files=files, data=data)
-        print(f"[CHATWOOT DEBUG] Respuesta POST Audio - Status: {response.status_code}")
-        response.raise_for_status()
-        return response
-    except requests.exceptions.RequestException as e:
-        print(f"[CHATWOOT DEBUG] Error enviando archivo de audio a Chatwoot: {e}")
-        return None
+    return send_media_to_chatwoot(
+        conversation_id,
+        "🎙️ Nota de voz del cliente",
+        audio_bytes,
+        mime_type or "audio/ogg",
+        f"nota_de_voz{extension}",
+        False,
+    )
