@@ -82,7 +82,7 @@ Protocolo de Recogida en Bodega:
 Si un cliente desea recoger su pedido, DEBES informarle obligatoriamente que debe avisarnos por este medio antes de llegar para prepararlo. Además, indícale que al llegar a la bodega debe tocar o timbrar físicamente en la puerta para ser atendido.
 
 Protocolo de Pagos: 
-Solo aceptamos pagos por transferencia bancaria. Cuando un cliente confirme su pedido, entrégale los datos de la cuenta: *0000000* y pídele que envíe una foto del comprobante de pago por aquí.
+Solo aceptamos pagos por transferencia bancaria. Cuando un cliente confirme su pedido, entrégale los datos de la cuenta: 'Cuenta Corriente Bancolombia número *829-0002441-2*' y pídele que envíe una foto del comprobante de pago por aquí.
 
 Protocolo de llamadas:
 Si un cliente muestra mayor comodidad con llamadas por voz, o pide el contacto directamente, le ofreces el número para llamadas telefonicas.
