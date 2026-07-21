@@ -7,13 +7,13 @@ from fastapi.responses import PlainTextResponse
 from config import config
 from database import (get_or_create_customer_state, update_chatwoot_conversation_id, 
                       get_phone_by_chatwoot_id, resume_bot_state, get_message_logs)
-from bot import process_message_logic
+from bot import process_message_logic, transcribe_audio_message
 import chatwoot_api
 
 app = FastAPI()
 
 DEPLOYMENT_COMMIT_SHA = os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_COMMIT_SHA") or "unknown"
-print(f"[BOOT] WhatsApp bot code loaded. Commit: {DEPLOYMENT_COMMIT_SHA}. Audio relay build: 2026-07-21.2")
+print(f"[BOOT] WhatsApp bot code loaded. Commit: {DEPLOYMENT_COMMIT_SHA}. Audio understanding build: 2026-07-21.3")
 
 
 @app.get("/")
@@ -22,7 +22,7 @@ async def health_check():
     return {
         "status": "ok",
         "commit": DEPLOYMENT_COMMIT_SHA,
-        "audio_relay_build": "2026-07-21.2",
+        "audio_understanding_build": "2026-07-21.3",
     }
 
 
@@ -156,10 +156,17 @@ def process_whatsapp_message(sender_phone: str, message_body: str, is_image: boo
                     chatwoot_api.send_message_to_chatwoot(conv_id, message_body, is_private=False)
             return
 
-        # 2. SI NO ESTÁ PAUSADO Y ES AUDIO: (Salvaguarda temporal para el Paso 1)
+        # 2. SI NO ESTÁ PAUSADO Y ES AUDIO: transcribir la nota de voz y responder por texto
         if is_audio:
-            send_whatsapp_message(sender_phone, "¡Hola! Por ahora solo puedo entenderte por texto escrito. Si necesitas que un asesor escuche tu audio, por favor escribe la palabra *Asesor*. 🧀")
-            return
+            print("[DEBUG] 5. Audio recibido con bot activo. Descargando y transcribiendo...")
+            audio_bytes, mime_type = chatwoot_api.download_meta_media(audio_media_id) if audio_media_id else (None, None)
+            transcript = transcribe_audio_message(audio_bytes, mime_type or "audio/ogg")
+            if not transcript:
+                send_whatsapp_message(sender_phone, "Perdón, no pude entender bien la nota de voz. ¿Me la puedes escribir por texto, por favor? 🧀")
+                return
+
+            print(f"[DEBUG] 5.1 Transcripción de audio: {transcript}")
+            message_body = transcript
 
         # 3. SI NO ESTÁ PAUSADO: El bot piensa y responde texto con normalidad
         print("[DEBUG] 5. Procesando lógica del bot...")
