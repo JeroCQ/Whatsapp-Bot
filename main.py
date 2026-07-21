@@ -295,3 +295,17 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
                 send_whatsapp_message(phone, "✅ Tu solicitud ha sido resuelta. Si necesitas algo más, envíame un mensaje.")
 
     return {"status": "success"}
+
+@app.post("/")
+async def root_webhook_dispatcher(request: Request, background_tasks: BackgroundTasks):
+    """Accept webhook POSTs sent to root and dispatch them to the proper handler."""
+    data = await request.json()
+
+    if data.get("object") == "whatsapp_business_account":
+        return await receive_webhook(request, background_tasks)
+
+    if data.get("event"):
+        return await chatwoot_webhook(request, background_tasks)
+
+    print(f"[WEBHOOK DEBUG] POST / payload no reconocido: keys={list(data.keys())}")
+    return {"status": "ignored", "reason": "unrecognized_root_webhook_payload"}
