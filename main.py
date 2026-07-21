@@ -1,3 +1,5 @@
+import os
+
 import requests
 from fastapi import FastAPI, Request, HTTPException, Query, BackgroundTasks
 from fastapi.responses import PlainTextResponse
@@ -9,6 +11,13 @@ from bot import process_message_logic
 import chatwoot_api
 
 app = FastAPI()
+
+@app.on_event("startup")
+async def log_deployment_version():
+    """Log the Railway commit so audio relay fixes can be verified after deploy."""
+    commit_sha = os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_COMMIT_SHA") or "unknown"
+    print(f"[STARTUP] WhatsApp bot running commit: {commit_sha}")
+
 
 def send_whatsapp_message(to_number: str, text: str):
     """Envía un mensaje de texto usando la API de Meta."""
@@ -72,8 +81,17 @@ def upload_audio_to_meta(audio_url: str) -> str:
         }
         data = {"messaging_product": "whatsapp"}
         response = requests.post(url, headers=headers, files=files, data=data)
+        print(f"[META DEBUG] Respuesta POST Audio Media - Status: {response.status_code}")
         response.raise_for_status()
-        return response.json().get("id")
+        media_id = response.json().get("id")
+        if not media_id:
+            print(f"[META DEBUG] Meta no devolvió media id para audio de Chatwoot: {response.text}")
+        return media_id
+    except requests.exceptions.RequestException as e:
+        response = getattr(e, "response", None)
+        detail = response.text if response is not None else str(e)
+        print(f"Error al subir audio transitorio a Meta: {detail}")
+        return None
     except Exception as e:
         print(f"Error al subir audio transitorio a Meta: {e}")
         return None
@@ -130,114 +148,3 @@ def process_whatsapp_message(sender_phone: str, message_body: str, is_image: boo
             if new_state["is_paused"] and not new_state.get("chatwoot_conversation_id"):
                 print("[DEBUG] 8. Bot decidió pausarse, creando ticket...")
                 contact_id = chatwoot_api.get_or_create_contact(sender_phone)
-                
-                if contact_id:
-                    conv_id = chatwoot_api.create_conversation(contact_id)
-                    if conv_id:
-                        update_chatwoot_conversation_id(sender_phone, conv_id)
-                        
-                        logs = get_message_logs(sender_phone, limit=6)
-                        context_str = "\n".join([f"{'👤' if m['role']=='user' else '🤖'}: {m['content']}" for m in logs])
-                        reason = new_state.get("handoff_reason", "Razón no especificada")
-                        
-                        summary = (
-                            f"🚨 **ALERTA DE BOT: Handoff requerido**\n"
-                            f"**Razón:** {reason}\n\n"
-                            f"**Resumen de últimos mensajes:**\n{context_str}"
-                        )
-
-                        if is_image and media_id:
-                            img_bytes = chatwoot_api.download_meta_image(media_id)
-                            if img_bytes:
-                                chatwoot_api.send_image_to_chatwoot(conv_id, summary, img_bytes, is_private=True)
-                            else:
-                                chatwoot_api.send_message_to_chatwoot(conv_id, summary + "\n\n*(Error descargando la imagen)*", is_private=True)
-                        else:
-                            chatwoot_api.send_message_to_chatwoot(conv_id, summary, is_private=True)
-
-    except Exception as e:
-        import traceback
-        print(f"\n[ERROR CRÍTICO] Falló process_whatsapp_message:")
-        traceback.print_exc()
-
-# --- ENDPOINTS DE META ---
-
-@app.get("/webhook")
-async def verify_webhook(
-    hub_mode: str = Query(None, alias="hub.mode"),
-    hub_verify_token: str = Query(None, alias="hub.verify_token"),
-    hub_challenge: str = Query(None, alias="hub.challenge")
-):
-    if hub_mode == "subscribe" and hub_verify_token == config.WA_VERIFY_TOKEN:
-        return PlainTextResponse(content=hub_challenge)
-    raise HTTPException(status_code=403, detail="Invalid token")
-
-@app.post("/webhook")
-async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
-    data = await request.json()
-    try:
-        if data.get("object") == "whatsapp_business_account":
-            for entry in data.get("entry", []):
-                for change in entry.get("changes", []):
-                    value = change.get("value", {})
-                    if "messages" in value:
-                        for message in value["messages"]:
-                            sender_phone = message.get("from")
-                            
-                            if message.get("type") == "text":
-                                background_tasks.add_task(process_whatsapp_message, sender_phone, message.get("text", {}).get("body"), False, None, False, None)
-                            elif message.get("type") == "image":
-                                media_id = message.get("image", {}).get("id")
-                                caption = message.get("image", {}).get("caption", "") 
-                                background_tasks.add_task(process_whatsapp_message, sender_phone, caption, True, media_id, False, None)
-                            # MODIFICADO: Capturar los eventos entrantes de tipo audio
-                            elif message.get("type") == "audio":
-                                audio_id = message.get("audio", {}).get("id")
-                                background_tasks.add_task(process_whatsapp_message, sender_phone, "[Audio Nota]", False, None, True, audio_id)
-        return {"status": "success"}
-    except Exception as e:
-        print(f"Error Webhook Meta: {e}")
-        return {"status": "error"}
-
-# --- ENDPOINT PARA CHATWOOT (WEBHOOK INVERSO) ---
-
-@app.post("/chatwoot-webhook")
-async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
-    data = await request.json()
-    event = data.get("event")
-    
-    if event == "message_created" and data.get("message_type") == "outgoing":
-        is_private = data.get("private", False)
-        if not is_private:
-            conv_id = data.get("conversation", {}).get("id")
-            content = data.get("content")
-            attachments = data.get("attachments") # NUEVO: Interceptar adjuntos salientes del asesor
-            
-            if conv_id:
-                phone = get_phone_by_chatwoot_id(conv_id)
-                if phone:
-                    # 1. Verificar si el asesor grabó un audio o adjuntó un archivo de sonido
-                    if attachments and len(attachments) > 0:
-                        for attachment in attachments:
-                            file_type = attachment.get("file_type")
-                            data_url = attachment.get("data_url")
-                            
-                            if file_type == "audio" and data_url:
-                                print(f"[DEBUG] Asesor envió audio desde Chatwoot. Procesando...")
-                                meta_media_id = upload_audio_to_meta(data_url)
-                                if meta_media_id:
-                                    send_whatsapp_audio(phone, meta_media_id)
-                    
-                    # 2. Si el mensaje además lleva texto explicativo
-                    if content:
-                        send_whatsapp_message(phone, content)
-                    
-    elif event == "conversation_status_changed" and data.get("status") == "resolved":
-        conv_id = data.get("id")
-        if conv_id:
-            resume_bot_state(conv_id)
-            phone = get_phone_by_chatwoot_id(conv_id)
-            if phone:
-                send_whatsapp_message(phone, "✅ Tu solicitud ha sido resuelta. Si necesitas algo más, envíame un mensaje.")
-
-    return {"status": "success"}
