@@ -86,6 +86,7 @@ def send_message_to_chatwoot(conversation_id: int, content: str, is_private: boo
          print(f"[CHATWOOT DEBUG] Excepción enviando mensaje: {e}")
 
 
+ 
 def download_meta_media(media_id: str):
     """Obtiene un archivo temporal de Meta y devuelve sus bytes y MIME type."""
     url = f"https://graph.facebook.com/v20.0/{media_id}"
