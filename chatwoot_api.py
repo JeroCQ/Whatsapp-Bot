@@ -22,7 +22,7 @@ def get_multipart_headers():
 
 
 def get_or_create_contact(phone: str, name: str = "Cliente WhatsApp"):
-    """Busca al cliente en Chatwoot, si no existe, lo crea."""
+    """Busca al cliente en Chatwoot, si no existe, lo crea. Si existe, actualiza su nombre."""
     url = f"{get_base_url()}/contacts"
     
     try:
@@ -31,6 +31,25 @@ def get_or_create_contact(phone: str, name: str = "Cliente WhatsApp"):
         print(f"[CHATWOOT DEBUG] ERROR GRAVE: CHATWOOT_INBOX_ID no es válido.")
         return None
 
+    # 1. Buscar si el contacto ya existe
+    search_url = f"{url}/search?q={phone}"
+    try:
+        search_res = requests.get(search_url, headers=get_headers())
+        if search_res.status_code == 200 and search_res.json().get("payload"):
+            contact = search_res.json()["payload"][0]
+            contact_id = contact["id"]
+            current_name = contact.get("name")
+            
+            # Si encontramos al cliente, y el nuevo nombre no es el genérico, actualizamos Chatwoot
+            if name != "Cliente WhatsApp" and current_name != name:
+                update_url = f"{url}/{contact_id}"
+                requests.put(update_url, headers=get_headers(), json={"name": name})
+                
+            return contact_id
+    except Exception as e:
+         print(f"[CHATWOOT DEBUG] Error buscando contacto: {e}")
+
+    # 2. Si no existe, crear uno nuevo
     data = {
         "inbox_id": inbox_id_int,
         "name": name,
@@ -41,18 +60,10 @@ def get_or_create_contact(phone: str, name: str = "Cliente WhatsApp"):
         res = requests.post(url, headers=get_headers(), json=data)
         if res.status_code in [200, 201]:
             return res.json()["payload"]["contact"]["id"]
-        
-        # Si falla, intentamos buscarlo
-        search_url = f"{url}/search?q={phone}"
-        search_res = requests.get(search_url, headers=get_headers())
-        if search_res.status_code == 200 and search_res.json().get("payload"):
-            return search_res.json()["payload"][0]["id"]
-            
     except Exception as e:
-        print(f"[CHATWOOT DEBUG] Excepción en get_or_create_contact: {e}")
+        print(f"[CHATWOOT DEBUG] Excepción en get_or_create_contact (creando): {e}")
     
     return None
-
 
 def create_conversation(contact_id: int):
     """Abre un ticket nuevo para el asesor (Sin enviar mensaje aún)."""
