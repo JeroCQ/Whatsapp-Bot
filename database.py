@@ -91,3 +91,27 @@ def resume_bot_state(conv_id: int):
         "is_paused": False,
         "chatwoot_conversation_id": None
     }).eq("chatwoot_conversation_id", conv_id).execute()
+
+def reset_client_history(phone: str):
+    """Borra el historial de mensajes y resetea el estado del cliente para pruebas."""
+    from config import get_db_connection # Asegúrate de importar tu conexión a la DB
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        # 1. Borrar todos los logs de este número
+        cur.execute("DELETE FROM message_logs WHERE phone_number = %s", (phone,))
+        
+        # 2. Resetear el estado a GREETING y quitar la pausa
+        cur.execute("""
+            UPDATE conversation_states 
+            SET is_paused = false, handoff_reason = NULL, current_state = 'GREETING' 
+            WHERE phone_number = %s
+        """, (phone,))
+        
+        conn.commit()
+    except Exception as e:
+        print(f"[DB ERROR] Falló el reset de historial para {phone}: {e}")
+        conn.rollback()
+    finally:
+        cur.close()
+        conn.close()
