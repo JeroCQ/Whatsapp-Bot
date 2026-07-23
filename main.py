@@ -242,10 +242,8 @@ def process_whatsapp_message(sender_phone: str, sender_name: str, message_body: 
                         context_str = "\n".join([f"{'👤' if m['role']=='user' else '🤖'}: {m['content']}" for m in logs])
                         reason = new_state.get("handoff_reason", "Razón no especificada")
                         
-                        # 1. Mensaje corto para disparar una notificación limpia en el celular
-                        short_alert = f"🔔 Handoff: {reason}"
-                        
-                        # 2. Mensaje detallado con el contexto para lectura interna del asesor
+                        # Definimos ambos mensajes
+                        short_alert = f"🔔 {reason}"
                         context_details = f"**Resumen de últimos mensajes:**\n{context_str}"
 
                         if effective_media_id:
@@ -253,19 +251,18 @@ def process_whatsapp_message(sender_phone: str, sender_name: str, message_body: 
                             final_mime_type = mime_type or downloaded_mime or "application/octet-stream"
                             extension = chatwoot_api.extension_from_mime(final_mime_type, ".bin")
                             if file_bytes:
-                                # Enviamos el archivo adjunto junto con la alerta corta
+                                # 1. Enviamos el historial largo PRIMERO
+                                chatwoot_api.send_message_to_chatwoot(conv_id, context_details, is_private=True)
+                                # 2. Enviamos el archivo + alerta corta de ÚLTIMO (esta será la notificación)
                                 chatwoot_api.send_media_to_chatwoot(conv_id, short_alert, file_bytes, final_mime_type, filename or f"archivo_cliente{extension}", is_private=True)
-                                # Inmediatamente enviamos el historial completo en otra nota
-                                chatwoot_api.send_message_to_chatwoot(conv_id, context_details, is_private=True)
                             else:
-                                chatwoot_api.send_message_to_chatwoot(conv_id, short_alert + " *(Error descargando el adjunto)*", is_private=True)
                                 chatwoot_api.send_message_to_chatwoot(conv_id, context_details, is_private=True)
+                                chatwoot_api.send_message_to_chatwoot(conv_id, short_alert + " *(Error descargando el adjunto)*", is_private=True)
                         else:
-                            # Enviamos primero la alerta corta (esta será la notificación push)
-                            chatwoot_api.send_message_to_chatwoot(conv_id, short_alert, is_private=True)
-                            # Luego inyectamos el historial completo en el chat
+                            # 1. Enviamos el historial largo PRIMERO
                             chatwoot_api.send_message_to_chatwoot(conv_id, context_details, is_private=True)
-
+                            # 2. Enviamos la alerta corta de ÚLTIMO (esta será la notificación)
+                            chatwoot_api.send_message_to_chatwoot(conv_id, short_alert, is_private=True)
     except Exception as e:
         import traceback
         print(f"\n[ERROR CRÍTICO] Falló process_whatsapp_message:")
