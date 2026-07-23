@@ -115,7 +115,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> str:
     save_message_log(phone, "user", user_input_to_log)
 
     # Recuperar el historial
-    history = get_message_logs(phone, limit=8)
+    history = get_message_logs(phone, limit=50)
     formatted_history = [f"{'Usuario' if msg['role'] == 'user' else 'Bot'}: {msg['content']}" for msg in history]
     context_str = "\n".join(formatted_history)
 
