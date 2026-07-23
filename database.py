@@ -73,17 +73,24 @@ def get_message_logs(phone_number: str, limit: int = 6):
 # --- MODIFICACIÓN DE RESUME_BOT_STATE ---
 
 def resume_bot_state(conv_id: int):
-    """Cuando el asesor cierra el ticket, reiniciamos el bot y limpiamos su memoria."""
+    """Cuando el asesor cierra el ticket, reiniciamos el bot y conservamos su memoria."""
     try:
-        # Buscamos el teléfono asociado a esa conversación antes de borrar o reiniciar
+        # Buscamos el teléfono asociado a esa conversación
         phone_res = supabase.table("conversation_states").select("phone_number").eq("chatwoot_conversation_id", conv_id).execute()
+        
         if phone_res.data:
             phone = phone_res.data[0]["phone_number"]
-            # Limpiamos los logs de mensajes para que el bot no recuerde la conversación anterior resuelta
-            supabase.table("message_logs").delete().eq("phone_number", phone).execute()
-            print(f"[DEBUG DB] Logs de mensajes eliminados para {phone} tras resolución de ticket.")
+            print(f"[DEBUG DB] Ticket resuelto para {phone}. Conservando historial de mensajes.")
+            
+        # (Mantén aquí el resto de tu código que hace el UPDATE/PATCH para cambiar is_paused a False)
+        supabase.table("conversation_states").update({
+            "is_paused": False,
+            "chatwoot_conversation_id": None,
+            "handoff_reason": None
+        }).eq("chatwoot_conversation_id", conv_id).execute()
+
     except Exception as e:
-        print(f"Error al limpiar logs en resume_bot_state: {e}")
+        print(f"Error al actualizar estado en resume_bot_state: {e}")
 
     # Reiniciamos el estado del bot
     supabase.table("conversation_states").update({
