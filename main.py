@@ -164,7 +164,7 @@ def upload_audio_to_meta(audio_url: str) -> str:
     return upload_chatwoot_attachment_to_meta(audio_url, "audio/ogg", "voice_note.ogg")
 
 
-def process_whatsapp_message(sender_phone: str, message_body: str, is_image: bool = False, media_id: str = None, is_audio: bool = False, audio_media_id: str = None, media_type: str = None, mime_type: str = None, filename: str = None):
+def process_whatsapp_message(sender_phone: str, sender_name: str, message_body: str, is_image: bool = False, media_id: str = None, is_audio: bool = False, audio_media_id: str = None, media_type: str = None, mime_type: str = None, filename: str = None):
     """Procesador que enruta entre el Bot y Chatwoot basado en el estado (Soporta cualquier archivo)."""
     effective_media_id = media_id or audio_media_id
     effective_media_type = normalize_media_type(media_type or ("image" if is_image else "audio" if is_audio else None), mime_type) if effective_media_id else None
@@ -228,7 +228,10 @@ def process_whatsapp_message(sender_phone: str, message_body: str, is_image: boo
             new_state = get_or_create_customer_state(sender_phone)
             if new_state["is_paused"] and not new_state.get("chatwoot_conversation_id"):
                 print("[DEBUG] 8. Bot decidió pausarse, creando ticket...")
-                contact_id = chatwoot_api.get_or_create_contact(sender_phone)
+            
+                # NUEVO: Pasamos el nombre real y el número en el formato "Nombre (+Numero)"
+                display_name = f"{sender_name} (+{sender_phone})"
+                contact_id = chatwoot_api.get_or_create_contact(sender_phone, name=display_name)
                 
                 if contact_id:
                     conv_id = chatwoot_api.create_conversation(contact_id)
@@ -289,31 +292,36 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                 for change in entry.get("changes", []):
                     value = change.get("value", {})
                     if "messages" in value:
-                        for message in value["messages"]:
-                            sender_phone = message.get("from")
-                            message_type = message.get("type")
-
-                            if message_type == "text":
-                                background_tasks.add_task(process_whatsapp_message, sender_phone, message.get("text", {}).get("body"), False, None, False, None)
-                            elif message_type in WHATSAPP_MEDIA_TYPES:
-                                media_payload = message.get(message_type, {})
-                                inbound_media_id = media_payload.get("id")
-                                caption = media_payload.get("caption", "")
-                                inbound_mime_type = media_payload.get("mime_type")
-                                inbound_filename = media_payload.get("filename")
-                                body = caption or ("[Audio Nota]" if message_type == "audio" else "")
-                                background_tasks.add_task(
-                                    process_whatsapp_message,
-                                    sender_phone,
-                                    body,
-                                    message_type == "image",
-                                    inbound_media_id,
-                                    message_type == "audio",
-                                    inbound_media_id if message_type == "audio" else None,
-                                    message_type,
-                                    inbound_mime_type,
-                                    inbound_filename,
-                                )
+                    # EXTRAER EL NOMBRE DEL CONTACTO DE META
+                      contacts = value.get("contacts", [])
+                      sender_name = "Cliente"
+                      if contacts:
+                          sender_name = contacts[0].get("profile", {}).get("name", "Cliente")
+                      for message in value["messages"]:
+                          sender_phone = message.get("from")
+                          message_type = message.get("type")
+                          if message_type == "text":
+                              background_tasks.add_task(process_whatsapp_message, sender_phone, sender_name, message.get("text", {}).get("body"), False, None, False, None)
+                          elif message_type in WHATSAPP_MEDIA_TYPES:
+                              media_payload = message.get(message_type, {})
+                              inbound_media_id = media_payload.get("id")
+                              caption = media_payload.get("caption", "")
+                              inbound_mime_type = media_payload.get("mime_type")
+                              inbound_filename = media_payload.get("filename")
+                              body = caption or ("[Audio Nota]" if message_type == "audio" else "")
+                              background_tasks.add_task(
+                                  process_whatsapp_message,
+                                  sender_phone,
+                                  sender_name,  # SE AGREGA AQUÍ TAMBIÉN
+                                  body,
+                                  message_type == "image",
+                                  inbound_media_id,
+                                  message_type == "audio",
+                                  inbound_media_id if message_type == "audio" else None,
+                                  message_type,
+                                  inbound_mime_type,
+                                  inbound_filename,
+                              )
         return {"status": "success"}
     except Exception as e:
         print(f"Error Webhook Meta: {e}")
