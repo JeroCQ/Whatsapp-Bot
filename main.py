@@ -1,3 +1,6 @@
+from database import (get_or_create_customer_state, update_chatwoot_conversation_id, 
+                      get_phone_by_chatwoot_id, resume_bot_state, get_message_logs,
+                      save_message_log, reset_client_history) # AÑADIDOS
 import os
 
 import requests
@@ -172,6 +175,12 @@ def process_whatsapp_message(sender_phone: str, sender_name: str, message_body: 
     is_audio = effective_media_type == "audio"
     print(f"\n[DEBUG] 1. Recibido mensaje de {sender_phone} (Media: {effective_media_type or 'texto'})")
     
+    # 0. COMANDO SECRETO DE RESET
+    if message_body and message_body.strip().lower() == "/reset":
+        reset_client_history(sender_phone)
+        send_whatsapp_message(sender_phone, "🔄 Historial borrado. Empezando de cero.")
+        return
+
     try:
         state_record = get_or_create_customer_state(sender_phone)
         
@@ -182,6 +191,11 @@ def process_whatsapp_message(sender_phone: str, sender_name: str, message_body: 
         # 1. SI ESTÁ PAUSADO: Reenviar todo tipo de mensajes al Asesor en Chatwoot
         if state_record["is_paused"]:
             print("[DEBUG] 4. Bot pausado, derivando mensaje al asesor humano en Chatwoot")
+            
+            # NUEVO: Guardar el mensaje del usuario en la base de datos mientras está en manual
+            log_text = f"[Archivo/Imagen] Texto adjunto: '{message_body}'" if effective_media_id else message_body
+            save_message_log(sender_phone, "user", log_text)
+            
             conv_id = state_record.get("chatwoot_conversation_id")
             if conv_id:
                 if effective_media_id:
@@ -242,7 +256,9 @@ def process_whatsapp_message(sender_phone: str, sender_name: str, message_body: 
                         context_str = "\n".join([f"{'👤' if m['role']=='user' else '🤖'}: {m['content']}" for m in logs])
                         reason = new_state.get("handoff_reason", "Razón no especificada")
                         
-                        # Definimos ambos mensajes
+                        # NUEVO: Registrar el evento de Handoff en el historial
+                        save_message_log(sender_phone, "system", f"HANDOFF: Transferido a humano. Razón: {reason}")
+                        
                         short_alert = f"🔔 {reason}"
                         context_details = f"**Resumen de últimos mensajes:**\n{context_str}"
 
@@ -336,12 +352,15 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
         if not is_private:
             conv_id = data.get("conversation", {}).get("id")
             content = data.get("content")
-            attachments = data.get("attachments") # NUEVO: Interceptar adjuntos salientes del asesor
+            attachments = data.get("attachments")
             
             if conv_id:
                 phone = get_phone_by_chatwoot_id(conv_id)
                 if phone:
-                    # 1. Reenviar cualquier adjunto del asesor a WhatsApp
+                    # NUEVO: Guardar el mensaje del asesor en la base de datos
+                    agent_log = content or "[Adjunto enviado por asesor]"
+                    save_message_log(phone, "asesor", agent_log)
+                      # 1. Reenviar cualquier adjunto del asesor a WhatsApp
                     if attachments and len(attachments) > 0:
                         for attachment in attachments:
                             data_url = _attachment_url(attachment)
@@ -373,9 +392,12 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
             resume_bot_state(conv_id)
             phone = get_phone_by_chatwoot_id(conv_id)
             if phone:
+                # NUEVO: Registrar que el caso fue cerrado
+                save_message_log(phone, "system", "RESOLVED: Conversación cerrada por el asesor.")
                 send_whatsapp_message(phone, "✅ Tu solicitud ha sido resuelta. Si necesitas algo más, envíame un mensaje.")
 
     return {"status": "success"}
+
 
 @app.post("/")
 async def root_webhook_dispatcher(request: Request, background_tasks: BackgroundTasks):
