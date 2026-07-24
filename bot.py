@@ -1,6 +1,7 @@
 # EN bot.py - Reemplaza tu archivo actual por este ajustado:
 
 import json
+import threading
 from pydantic import BaseModel
 from google import genai
 from google.genai import types
@@ -14,6 +15,7 @@ from database import (
 
 # 1. Inicializar el cliente con el nuevo SDK
 client = genai.Client(api_key=config.GEMINI_API_KEY)
+_gemini_semaphore = threading.BoundedSemaphore(config.GEMINI_MAX_CONCURRENT)
 
 # 2. Definir el esquema estricto
 class BotResponse(BaseModel):
@@ -28,18 +30,19 @@ def transcribe_audio_message(audio_bytes: bytes, mime_type: str = "audio/ogg") -
         return None
 
     try:
-        response = client.models.generate_content(
-            model="gemini-flash-latest",
-            contents=[
-                "Transcribe este audio de WhatsApp en español. "
-                "Devuelve únicamente el texto que dijo el cliente, sin explicaciones.",
-                types.Part.from_bytes(
-                    data=audio_bytes,
-                    mime_type=mime_type or "audio/ogg",
-                ),
-            ],
-            config=types.GenerateContentConfig(temperature=0),
-        )
+        with _gemini_semaphore:
+            response = client.models.generate_content(
+                model="gemini-flash-latest",
+                contents=[
+                    "Transcribe este audio de WhatsApp en español. "
+                    "Devuelve únicamente el texto que dijo el cliente, sin explicaciones.",
+                    types.Part.from_bytes(
+                        data=audio_bytes,
+                        mime_type=mime_type or "audio/ogg",
+                    ),
+                ],
+                config=types.GenerateContentConfig(temperature=0),
+            )
         transcript = (response.text or "").strip()
         return transcript or None
     except Exception:
@@ -138,16 +141,17 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> str:
     """
 
     try:
-        response = client.models.generate_content(
-            model="gemini-flash-latest",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_INSTRUCTION,
-                response_mime_type="application/json",
-                response_schema=BotResponse,
-                temperature=0.1, # Bajamos un poco más la temperatura para máxima adherencia a las reglas
-            ),
-        )
+        with _gemini_semaphore:
+            response = client.models.generate_content(
+                model="gemini-flash-latest",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_INSTRUCTION,
+                    response_mime_type="application/json",
+                    response_schema=BotResponse,
+                    temperature=0.1, # Bajamos un poco más la temperatura para máxima adherencia a las reglas
+                ),
+            )
         
         ai_data = json.loads(response.text)
         
