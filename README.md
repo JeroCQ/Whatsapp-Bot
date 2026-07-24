@@ -26,26 +26,32 @@ For scalable queued processing, also set:
 - `GEMINI_MAX_CONCURRENT` - optional, defaults to `8` per process.
 - `PHONE_LOCK_TTL_SECONDS` - optional, defaults to `180`.
 
-If Railway logs show `Queue enabled: True`, the web service can see `REDIS_URL`. You still need a worker process connected to the same Redis service, or jobs will sit in Redis and the bot will not answer.
+If Railway logs show `Queue enabled: True`, the web service can see `REDIS_URL`. The Railway launcher now starts an embedded worker automatically in the same container by default, so `queue.workers_seen` should become at least `1` after startup.
 
 ### Railway deployment checklist
 
 1. Add a Redis service/plugin in Railway.
 2. In the bot web service variables, set `REDIS_URL` from that Redis service.
-3. Create a second Railway service for the same GitHub repo/branch named something like `whatsapp-worker`.
-4. Set the worker service start command to:
+3. Deploy the bot web service normally. Railway uses `railway.json`, whose start command runs `python run_railway.py`.
+4. Check the deployment logs. You should see both of these lines:
 
-```bash
-python -m workers.runner
+```text
+[LAUNCHER] REDIS_URL detected; starting embedded RQ worker subprocess.
+[WORKER] Starting RQ worker for queue=whatsapp-events
 ```
 
-5. Give the worker service the same environment variables as the web service, including `REDIS_URL`, Supabase, WhatsApp, Chatwoot, and Gemini variables.
-6. Deploy both services.
-7. Open the web app root URL (`https://your-app.up.railway.app/`) and check the JSON. `queue.enabled` should be `true`, and `queue.workers_seen` should be at least `1` after the worker is running.
+5. Open the web app root URL (`https://your-app.up.railway.app/`) and check the JSON. `queue.enabled` should be `true`, and `queue.workers_seen` should be at least `1` after the worker is running.
+6. For larger production scale, you can later create a separate worker service using start command `python -m workers.runner` and set `RUN_WORKER_IN_WEB=false` on the web service. The worker service must have the same environment variables as the web service, including `REDIS_URL`, Supabase, WhatsApp, Chatwoot, and Gemini variables.
 
 ### Local/development commands
 
-Run the web process:
+Run the Railway-style web process, which starts an embedded worker when `REDIS_URL` exists:
+
+```bash
+python run_railway.py
+```
+
+Run only the FastAPI web process:
 
 ```bash
 uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}
@@ -60,7 +66,7 @@ python -m workers.runner
 The Procfile also defines both process types:
 
 ```Procfile
-web: python -m py_compile main.py chatwoot_api.py config.py database.py queue_client.py processing_lock.py workers/runner.py && uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}
+web: python -m py_compile main.py chatwoot_api.py config.py database.py queue_client.py processing_lock.py workers/runner.py run_railway.py && python run_railway.py
 worker: python -m workers.runner
 ```
 
