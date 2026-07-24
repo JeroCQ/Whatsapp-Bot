@@ -2,6 +2,7 @@ import mimetypes
 
 import requests
 from config import config
+from http_client import MEDIA_TIMEOUT, get, post, put
 
 
 def get_base_url():
@@ -34,7 +35,7 @@ def get_or_create_contact(phone: str, name: str = "Cliente WhatsApp"):
     # 1. Buscar si el contacto ya existe
     search_url = f"{url}/search?q={phone}"
     try:
-        search_res = requests.get(search_url, headers=get_headers())
+        search_res = get(search_url, headers=get_headers())
         if search_res.status_code == 200 and search_res.json().get("payload"):
             contact = search_res.json()["payload"][0]
             contact_id = contact["id"]
@@ -43,7 +44,7 @@ def get_or_create_contact(phone: str, name: str = "Cliente WhatsApp"):
             # Si encontramos al cliente, y el nuevo nombre no es el genérico, actualizamos Chatwoot
             if name != "Cliente WhatsApp" and current_name != name:
                 update_url = f"{url}/{contact_id}"
-                requests.put(update_url, headers=get_headers(), json={"name": name})
+                put(update_url, headers=get_headers(), json={"name": name})
                 
             return contact_id
     except Exception as e:
@@ -57,7 +58,7 @@ def get_or_create_contact(phone: str, name: str = "Cliente WhatsApp"):
     }
     
     try:
-        res = requests.post(url, headers=get_headers(), json=data)
+        res = post(url, headers=get_headers(), json=data)
         if res.status_code in [200, 201]:
             return res.json()["payload"]["contact"]["id"]
     except Exception as e:
@@ -75,7 +76,7 @@ def create_conversation(contact_id: int):
     }
     
     try:
-        res = requests.post(url, headers=get_headers(), json=data)
+        res = post(url, headers=get_headers(), json=data)
         if res.status_code == 200:
             return res.json()["id"]
     except Exception as e:
@@ -92,7 +93,7 @@ def send_message_to_chatwoot(conversation_id: int, content: str, is_private: boo
         "private": is_private       
     }
     try:
-        requests.post(url, headers=get_headers(), json=data)
+        post(url, headers=get_headers(), json=data)
     except Exception as e:
          print(f"[CHATWOOT DEBUG] Excepción enviando mensaje: {e}")
 
@@ -104,7 +105,7 @@ def download_meta_media(media_id: str):
     
     try:
         # 1. Obtener la URL temporal del archivo
-        res = requests.get(url, headers=headers)
+        res = get(url, headers=headers)
         res.raise_for_status()
         media_url = res.json().get("url")
         mime_type = res.json().get("mime_type")
@@ -113,7 +114,7 @@ def download_meta_media(media_id: str):
             return None, None
 
         # 2. Descargar los bytes (Meta exige Authorization también en esta URL)
-        media_res = requests.get(media_url, headers=headers)
+        media_res = get(media_url, headers=headers, timeout=MEDIA_TIMEOUT)
         media_res.raise_for_status()
         return media_res.content, mime_type or media_res.headers.get("Content-Type")
     except Exception as e:
@@ -140,7 +141,7 @@ def send_media_to_chatwoot(conversation_id: int, content: str, media_bytes: byte
         "private": "true" if is_private else "false"
     }
     try:
-        response = requests.post(url, headers=get_multipart_headers(), files=files, data=data)
+        response = post(url, headers=get_multipart_headers(), files=files, data=data, timeout=MEDIA_TIMEOUT)
         print(f"[CHATWOOT DEBUG] Respuesta POST Archivo - Status: {response.status_code}")
         response.raise_for_status()
         return response

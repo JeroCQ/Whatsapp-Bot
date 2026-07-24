@@ -1,2 +1,96 @@
 # Whatsapp-Bot
-Customer Service Bot
+
+FastAPI WhatsApp sales bot with Chatwoot handoff and Gemini responses.
+
+## Scalability setup
+
+The app can still run without Redis for small deployments, but production scale should use the queue worker path.
+
+### Required environment variables
+
+Existing required variables are still needed:
+
+- `SUPABASE_URL`
+- `SUPABASE_KEY`
+- `WA_VERIFY_TOKEN`
+- `WA_TOKEN`
+- `WA_PHONE_NUMBER_ID`
+- `GEMINI_API_KEY`
+- Chatwoot variables used by handoff: `CHATWOOT_BASE_URL`, `CHATWOOT_API_TOKEN`, `CHATWOOT_ACCOUNT_ID`, `CHATWOOT_INBOX_ID`
+
+For scalable queued processing, also set:
+
+- `REDIS_URL` - enables durable RQ queue processing.
+- `QUEUE_NAME` - optional, defaults to `whatsapp-events`.
+- `QUEUE_JOB_TIMEOUT_SECONDS` - optional, defaults to `180`.
+- `GEMINI_MAX_CONCURRENT` - optional, defaults to `8` per process.
+- `PHONE_LOCK_TTL_SECONDS` - optional, defaults to `180`.
+
+If Railway logs show `Queue enabled: True`, the web service can see `REDIS_URL`. The Railway launcher now starts an embedded worker automatically in the same container by default, so `queue.workers_seen` should become at least `1` after startup.
+
+### Railway deployment checklist
+
+1. Add a Redis service/plugin in Railway.
+2. In the bot web service variables, set `REDIS_URL` from that Redis service.
+3. Deploy the bot web service normally. Railway uses `railway.json`, whose start command runs `python run_railway.py`.
+4. Check the deployment logs. You should see both of these lines:
+
+```text
+[LAUNCHER] REDIS_URL detected; starting embedded RQ worker subprocess.
+[WORKER] Starting RQ worker for queue=whatsapp-events
+```
+
+5. Open the web app root URL (`https://your-app.up.railway.app/`) and check the JSON. `queue.enabled` should be `true`, and `queue.workers_seen` should be at least `1` after the worker is running.
+6. For larger production scale, you can later create a separate worker service using start command `python -m workers.runner` and set `RUN_WORKER_IN_WEB=false` on the web service. The worker service must have the same environment variables as the web service, including `REDIS_URL`, Supabase, WhatsApp, Chatwoot, and Gemini variables.
+
+### Local/development commands
+
+Run the Railway-style web process, which starts an embedded worker when `REDIS_URL` exists:
+
+```bash
+python run_railway.py
+```
+
+Run only the FastAPI web process:
+
+```bash
+uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}
+```
+
+Run one worker process:
+
+```bash
+python -m workers.runner
+```
+
+The Procfile also defines both process types:
+
+```Procfile
+web: python -m py_compile main.py chatwoot_api.py config.py database.py queue_client.py processing_lock.py workers/runner.py run_railway.py && python run_railway.py
+worker: python -m workers.runner
+```
+
+The web process accepts webhooks quickly. When `REDIS_URL` is set, webhook payloads are placed on the queue and workers process Gemini, Meta, Supabase, and Chatwoot calls outside the request path.
+
+### Database migration
+
+Before enabling `REDIS_URL`, run `scalability.sql` in the Supabase SQL editor. It creates the webhook idempotency table and adds indexes for message history and Chatwoot conversation lookups.
+
+### Where to see logs and latency
+
+Railway shows app logs per service:
+
+- Web service logs show webhook receipt, queue status, Meta send metrics, and fallback queue errors.
+- Worker service logs show Gemini processing, media forwarding, Chatwoot handling, and end-to-end message duration.
+
+Search Railway logs for these markers:
+
+- `[QUEUE ERROR]` - Redis/RQ enqueue failed and the web process fell back to a FastAPI background task.
+- `[METRIC] gemini_message_logic` - Gemini text response latency.
+- `[METRIC] gemini_audio_transcription` - Gemini audio transcription latency.
+- `[METRIC] http_request host=graph.facebook.com` - WhatsApp/Meta API request latency/status.
+- `[METRIC] http_request host=<your-chatwoot-host>` - Chatwoot API request latency/status.
+- `[METRIC] whatsapp_message_processed` - full WhatsApp message processing time.
+- `[METRIC] chatwoot_event_processed` - full Chatwoot webhook processing time.
+
+You can also open the root endpoint in a browser. It returns queue diagnostics without exposing secrets, including queued jobs, failed jobs, and how many RQ workers Redis can currently see.

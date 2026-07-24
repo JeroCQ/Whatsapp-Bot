@@ -25,6 +25,11 @@ class Settings:
     CHATWOOT_ACCESS_TOKEN = os.getenv("CHATWOOT_ACCESS_TOKEN") or CHATWOOT_API_TOKEN
 
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+    REDIS_URL = os.getenv("REDIS_URL")
+    QUEUE_NAME = os.getenv("QUEUE_NAME", "whatsapp-events")
+    GEMINI_MAX_CONCURRENT = int(os.getenv("GEMINI_MAX_CONCURRENT", "8"))
+    PHONE_LOCK_TTL_SECONDS = int(os.getenv("PHONE_LOCK_TTL_SECONDS", "180"))
     
     @classmethod
     def validate(cls):

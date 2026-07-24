@@ -4,3 +4,5 @@ requests
 pydantic
 supabase
 google-genai
+redis
+rq
