@@ -12,6 +12,7 @@ def main():
 
     connection = Redis.from_url(REDIS_URL)
     worker = Worker([QUEUE_NAME], connection=connection)
+    print(f"[WORKER] Starting RQ worker for queue={QUEUE_NAME}")
     worker.work(with_scheduler=True)
 
 

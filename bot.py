@@ -1,6 +1,7 @@
 # EN bot.py - Reemplaza tu archivo actual por este ajustado:
 
 import json
+import time
 import threading
 from pydantic import BaseModel
 from google import genai
@@ -31,6 +32,7 @@ def transcribe_audio_message(audio_bytes: bytes, mime_type: str = "audio/ogg") -
 
     try:
         with _gemini_semaphore:
+            started_at = time.perf_counter()
             response = client.models.generate_content(
                 model="gemini-flash-latest",
                 contents=[
@@ -43,6 +45,8 @@ def transcribe_audio_message(audio_bytes: bytes, mime_type: str = "audio/ogg") -
                 ],
                 config=types.GenerateContentConfig(temperature=0),
             )
+            duration_ms = int((time.perf_counter() - started_at) * 1000)
+            print(f"[METRIC] gemini_audio_transcription duration_ms={duration_ms}")
         transcript = (response.text or "").strip()
         return transcript or None
     except Exception:
@@ -146,6 +150,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> str:
 
     try:
         with _gemini_semaphore:
+            started_at = time.perf_counter()
             response = client.models.generate_content(
                 model="gemini-flash-latest",
                 contents=prompt,
@@ -156,6 +161,8 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> str:
                     temperature=0.1, # Bajamos un poco más la temperatura para máxima adherencia a las reglas
                 ),
             )
+            duration_ms = int((time.perf_counter() - started_at) * 1000)
+            print(f"[METRIC] gemini_message_logic phone={phone} duration_ms={duration_ms}")
         
         ai_data = json.loads(response.text)
         

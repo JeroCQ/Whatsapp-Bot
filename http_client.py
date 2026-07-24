@@ -1,4 +1,5 @@
 import logging
+import time
 from typing import Any, Tuple
 
 import requests
@@ -30,7 +31,12 @@ _session.mount("https://", _adapter)
 
 def request(method: str, url: str, *, timeout: Tuple[int, int] = DEFAULT_TIMEOUT, **kwargs: Any) -> requests.Response:
     """Send an HTTP request with bounded timeouts and shared connection pooling."""
-    return _session.request(method, url, timeout=timeout, **kwargs)
+    started_at = time.perf_counter()
+    response = _session.request(method, url, timeout=timeout, **kwargs)
+    duration_ms = int((time.perf_counter() - started_at) * 1000)
+    host = requests.utils.urlparse(url).netloc
+    print(f"[METRIC] http_request method={method} host={host} status={response.status_code} duration_ms={duration_ms}")
+    return response
 
 
 def get(url: str, *, timeout: Tuple[int, int] = DEFAULT_TIMEOUT, **kwargs: Any) -> requests.Response:

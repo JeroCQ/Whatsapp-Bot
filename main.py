@@ -1,4 +1,5 @@
 import os
+import time
 
 import requests
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
@@ -20,12 +21,12 @@ from database import (
 )
 from http_client import MEDIA_TIMEOUT, get, post
 from processing_lock import phone_lock
-from queue_client import enqueue, queue_enabled
+from queue_client import enqueue, get_queue_stats, queue_enabled
 
 app = FastAPI()
 
 DEPLOYMENT_COMMIT_SHA = os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_COMMIT_SHA") or "unknown"
-print(f"[BOOT] WhatsApp bot code loaded. Commit: {DEPLOYMENT_COMMIT_SHA}. Scalable queue build: 2026-07-24.1")
+print(f"[BOOT] WhatsApp bot code loaded. Commit: {DEPLOYMENT_COMMIT_SHA}. Scalable queue build: 2026-07-24.2")
 
 WHATSAPP_MEDIA_TYPES = {"audio", "document", "image", "sticker", "video"}
 
@@ -37,7 +38,8 @@ async def health_check():
         "status": "ok",
         "commit": DEPLOYMENT_COMMIT_SHA,
         "queue_enabled": queue_enabled(),
-        "scalable_queue_build": "2026-07-24.1",
+        "queue": get_queue_stats(),
+        "scalable_queue_build": "2026-07-24.2",
     }
 
 
@@ -195,9 +197,12 @@ def _create_handoff_ticket_if_needed(sender_phone: str, sender_name: str, new_st
 
 def process_whatsapp_message(sender_phone: str, sender_name: str, message_body: str, is_image: bool = False, media_id: str = None, is_audio: bool = False, audio_media_id: str = None, media_type: str = None, mime_type: str = None, filename: str = None, event_id: str = None):
     """Procesador que enruta entre el Bot y Chatwoot basado en el estado."""
+    started_at = time.perf_counter()
     try:
         with phone_lock(sender_phone):
             _process_whatsapp_message_unlocked(sender_phone, sender_name, message_body, is_image, media_id, is_audio, audio_media_id, media_type, mime_type, filename)
+        duration_ms = int((time.perf_counter() - started_at) * 1000)
+        print(f"[METRIC] whatsapp_message_processed event_id={event_id} phone={sender_phone} duration_ms={duration_ms}")
         mark_webhook_event_processed("whatsapp", event_id)
     except Exception as e:
         import traceback
@@ -273,6 +278,7 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
 
 def process_chatwoot_event(data: dict, event_id: str = None):
     """Process a Chatwoot webhook event from the queue/worker."""
+    started_at = time.perf_counter()
     try:
         event = data.get("event")
         if event == "message_created" and data.get("message_type") == "outgoing" and not data.get("private", False):
@@ -302,6 +308,8 @@ def process_chatwoot_event(data: dict, event_id: str = None):
             if phone:
                 save_message_log(phone, "system", "RESOLVED: Conversación cerrada por el asesor.")
                 send_whatsapp_message(phone, "✅ Tu solicitud ha sido resuelta. Si necesitas algo más, envíame un mensaje.")
+        duration_ms = int((time.perf_counter() - started_at) * 1000)
+        print(f"[METRIC] chatwoot_event_processed event_id={event_id} event={event} duration_ms={duration_ms}")
         mark_webhook_event_processed("chatwoot", event_id)
     except Exception as e:
         import traceback
@@ -315,9 +323,13 @@ def _dispatch(background_tasks: BackgroundTasks, func, *args, event_id: str = No
     if event_id:
         func_kwargs["event_id"] = event_id
     if queue_enabled():
-        job_id = f"{func.__name__}:{event_id}" if event_id else None
-        enqueue(func, *args, job_id=job_id, **func_kwargs)
-        return "queued"
+        job_id = f"{func.__name__}-{event_id}" if event_id else None
+        try:
+            enqueue(func, *args, job_id=job_id, **func_kwargs)
+            return "queued"
+        except Exception as exc:
+            # Do not drop customer messages just because Redis/RQ is misconfigured.
+            print(f"[QUEUE ERROR] Failed to enqueue event_id={event_id}; falling back to FastAPI background task: {exc}")
     background_tasks.add_task(func, *args, **func_kwargs)
     return "background_task"
 
