@@ -44,3 +44,26 @@ CREATE TABLE orders (
 CREATE INDEX idx_customers_phone ON customers(phone_number);
 CREATE INDEX idx_orders_customer ON orders(customer_id);
 CREATE INDEX idx_states_paused ON conversation_states(is_paused);
+
+-- 6. Scalability additions for queue/idempotency deployments
+CREATE TABLE IF NOT EXISTS processed_webhook_events (
+    source VARCHAR(50) NOT NULL,
+    event_id VARCHAR(255) NOT NULL,
+    phone_number VARCHAR(50),
+    status VARCHAR(50) NOT NULL DEFAULT 'received',
+    received_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    processed_at TIMESTAMP WITH TIME ZONE,
+    error TEXT,
+    PRIMARY KEY (source, event_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_message_logs_phone_created_at
+ON message_logs(phone_number, created_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_conversation_states_chatwoot_conversation_id
+ON conversation_states(chatwoot_conversation_id)
+WHERE chatwoot_conversation_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_conversation_states_active_chatwoot_conversation_id
+ON conversation_states(chatwoot_conversation_id)
+WHERE chatwoot_conversation_id IS NOT NULL;
