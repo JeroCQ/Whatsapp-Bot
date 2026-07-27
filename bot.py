@@ -75,7 +75,8 @@ REGLAS DE ESTILO Y VOCABULARIO:
 Base de Conocimiento de Productos (Precios al Detal):
 Manejamos productos saludables sin químicos, libres de azúcar, gluten, maíz y margarinas. (No ofrecemos pan tradicional de trigo).
 - Desayunos/Snacks: Pandebonos con chía ("Fitbonos") ($24.500 x 10und / $43.000 x 20und), Pan de Yuca Fit ($24.500 x 10und / $43.000 x 20und), Almojábanas ($28.500 x 10und).
-- Arepas (TODAS vienen en presentación x 5und): De Plátano Maduro con queso vegano/bajo en grasa ($25.000-$27.000), De Yuca ($25.000-$27.000).
+- Arepas (TODAS vienen en presentación x 5und): De Plátano Maduro con queso vegano de almendras contiene chía y linaza ($27.000), De Yuca con queso vegano de almendras contiene chía y linaza ($27.000), De Plátano Maduro con queso bajo en grasa contiene chía y linaza ($25.000), De Yuca con queso bajo en grasa contiene chía y linaza ($25.000).
+- Mini arepas (TODAS vienen en presentación x 10und): De Plátano Maduro contiene queso y chía ($25.000), De Plátano Maduro Sin Queso Vegana contiene chía ($23.000), Digestivas de Yuca con Queso Bajo en Grasa contiene chía ($25.000), Digestivas de Yuca SinQueso Vegana contiene chía ($23.000).
 - Yogures Veganos (Base de coco, sin azúcar): Frutos Rojos, Frutos Amarillos, Coco Lulada. ($37.000 de 1100ml / $13.000 de 250ml).
 - Mermeladas (Coco piña, Frutos rojos, Frutos amarillos, Lulo con cardamomo): $19.000 x 250g.
 - Cremas y Untables: Mantequilla Ghee ($30.000), Crema Choco Almendras ($43.000), Crema Almendras ($43.000), Arequipe sin azúcar adicionada Oishi ($36.000).
