@@ -7,6 +7,7 @@ from fastapi.responses import PlainTextResponse
 
 import chatwoot_api
 from bot import process_message_logic, transcribe_audio_message
+from chatwoot_events import SUPPORTED_CHATWOOT_EVENTS, conversation_id, event_id as chatwoot_event_id
 from config import config
 from database import (
     claim_webhook_event,
@@ -121,6 +122,29 @@ def send_whatsapp_media(to_number: str, media_id: str, media_type: str, caption:
         post(url, headers=headers, json=payload).raise_for_status()
     except requests.exceptions.RequestException as e:
         print(f"Error enviando WhatsApp de {media_type} a {to_number}: {e}")
+
+
+def send_whatsapp_file_link(to_number: str, file_url: str, media_type: str, caption: str = None, filename: str = None):
+    """Send an allowlisted, public HTTPS file directly through WhatsApp."""
+    media_type = normalize_media_type(media_type, url=file_url)
+    media_payload = {"link": file_url}
+    if caption and media_type in {"document", "image", "video"}:
+        media_payload["caption"] = caption
+    if filename and media_type == "document":
+        media_payload["filename"] = filename
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to_number,
+        "type": media_type,
+        media_type: media_payload,
+    }
+    url = f"https://graph.facebook.com/v20.0/{config.WA_PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {config.WA_TOKEN}", "Content-Type": "application/json"}
+    try:
+        post(url, headers=headers, json=payload).raise_for_status()
+    except requests.exceptions.RequestException as exc:
+        print(f"Error enviando archivo configurado {file_url} a {to_number}: {exc}")
 
 
 def upload_chatwoot_attachment_to_meta(attachment_url: str, fallback_mime_type: str = "application/octet-stream", filename: str = "archivo") -> str:
@@ -254,6 +278,10 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
                 chatwoot_api.send_message_to_chatwoot(conv_id, f"{label} [Error al descargar adjunto]. Texto: {message_body}", is_private=False)
         else:
             chatwoot_api.send_message_to_chatwoot(conv_id, message_body, is_private=False)
+        send_whatsapp_message(
+            sender_phone,
+            "🙌 Tu conversación ya está con un asesor. Por favor espera un momento mientras te responde.",
+        )
         return
 
     if is_audio:
@@ -267,11 +295,21 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
         message_body = transcript
 
     print("[DEBUG] 5. Procesando lógica del bot...")
-    ai_response = process_message_logic(sender_phone, message_body, is_image)
+    ai_result = process_message_logic(sender_phone, message_body, is_image)
     print("[DEBUG] 6. Respuesta IA generada")
 
-    if ai_response:
-        send_whatsapp_message(sender_phone, ai_response)
+    if ai_result:
+        if ai_result.response:
+            send_whatsapp_message(sender_phone, ai_result.response)
+        for selected_file in ai_result.files:
+            send_whatsapp_file_link(
+                sender_phone,
+                selected_file["url"],
+                selected_file["media_type"],
+                selected_file.get("caption"),
+                selected_file.get("filename"),
+            )
+            save_message_log(sender_phone, "model", f"[Archivo enviado: {selected_file['id']}]")
         new_state = get_or_create_customer_state(sender_phone)
         _create_handoff_ticket_if_needed(sender_phone, sender_name, new_state, effective_media_id, message_body, mime_type, filename)
 
@@ -303,7 +341,7 @@ def process_chatwoot_event(data: dict, event_id: str = None):
                 if content and not attachments:
                     send_whatsapp_message(phone, content)
         elif event == "conversation_status_changed" and data.get("status") == "resolved":
-            conv_id = data.get("id")
+            conv_id = conversation_id(data)
             phone = resume_bot_state(conv_id) if conv_id else None
             if phone:
                 save_message_log(phone, "system", "RESOLVED: Conversación cerrada por el asesor.")
@@ -399,8 +437,11 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
 @app.post("/chatwoot-webhook")
 async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
     data = await request.json()
-    event_id = str(data.get("id") or data.get("message_id") or data.get("event_id") or data.get("created_at") or "")
-    conv_id = data.get("conversation", {}).get("id") or data.get("id")
+    event = data.get("event")
+    if event not in SUPPORTED_CHATWOOT_EVENTS:
+        return {"status": "ignored", "reason": "unsupported_chatwoot_event"}
+    event_id = chatwoot_event_id(data)
+    conv_id = conversation_id(data)
     if not claim_webhook_event("chatwoot", event_id, str(conv_id) if conv_id else None):
         print(f"[WEBHOOK DEBUG] Chatwoot duplicado ignorado: {event_id}")
         return {"status": "success", "duplicate": True}
