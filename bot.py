@@ -3,10 +3,13 @@
 import json
 import time
 import threading
-from pydantic import BaseModel
+from dataclasses import dataclass
+from typing import List
+from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
 from config import config
+from file_catalog import extend_system_instruction, load_file_catalog
 from database import (
     get_or_create_customer_state, 
     pause_bot_for_handoff, 
@@ -23,6 +26,18 @@ class BotResponse(BaseModel):
     response: str
     trigger_handoff: bool
     handoff_reason: str
+    requested_files: List[str] = Field(default_factory=list)
+    send_files_before_response: bool = False
+
+
+@dataclass
+class BotTurn:
+    response: str
+    requested_files: list[str]
+    send_files_before_response: bool = False
+
+
+FILE_CATALOG = load_file_catalog(config.PRESAVED_FILES_JSON)
 
 
 def transcribe_audio_message(audio_bytes: bytes, mime_type: str = "audio/ogg") -> str:
@@ -153,17 +168,21 @@ Activa el handoff (trigger_handoff = true) en estos casos:
 4. Problemas operativos o dudas médicas complejas.
 """
 
-def process_message_logic(phone: str, text: str, is_image: bool = False) -> str:
+# Keep the carefully maintained business prompt above intact. File capabilities are
+# appended at runtime instead of replacing, templating, or editing its contents.
+SYSTEM_INSTRUCTION_WITH_FILES = extend_system_instruction(SYSTEM_INSTRUCTION, FILE_CATALOG)
+
+def process_message_logic(phone: str, text: str, is_image: bool = False) -> BotTurn:
     """
     Usa Gemini para procesar el mensaje, entender el contexto y decidir si hace handoff.
     """
     state_record = get_or_create_customer_state(phone)
     if not state_record:
-        return "Disculpa, tuvimos un problema técnico. ¿Puedes intentarlo de nuevo?"
+        return BotTurn("Disculpa, tuvimos un problema técnico. ¿Puedes intentarlo de nuevo?", [])
         
     if state_record["is_paused"]:
         print(f"Mensaje ignorado de {phone} porque is_paused=True")
-        return None 
+        return None
 
     # Guardar el mensaje entrante conservando el texto real si lo acompaña
     if is_image:
@@ -188,6 +207,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> str:
     - Texto enviado por el usuario junto al mensaje: "{text}"
 
     Analiza la situación aplicando rigurosamente las REGLAS ESTRICTAS DE ESCALAMIENTO.
+
     """
 
     try:
@@ -197,7 +217,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> str:
                 model="gemini-flash-latest",
                 contents=prompt,
                 config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_INSTRUCTION,
+                    system_instruction=SYSTEM_INSTRUCTION_WITH_FILES,
                     response_mime_type="application/json",
                     response_schema=BotResponse,
                     temperature=0.1, # Bajamos un poco más la temperatura para máxima adherencia a las reglas
@@ -219,7 +239,10 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> str:
             print(f"[IA HANDOFF TRIGGERED] Razón: {reason}")
             pause_bot_for_handoff(phone, reason)
 
-        return response_text
+        requested_files = list(dict.fromkeys(
+            file_id for file_id in ai_data.get("requested_files", []) if file_id in FILE_CATALOG
+        ))
+        return BotTurn(response_text, requested_files, bool(ai_data.get("send_files_before_response", False)))
 
     except Exception as e:
         import traceback
@@ -228,5 +251,5 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> str:
         
         if is_image:
             pause_bot_for_handoff(phone, "Envío de imagen (Fallback)")
-            return "¡Recibimos tu archivo! Un asesor lo va a revisar en este momento. Por favor espera un momento."
-        return "Disculpa, en este momento estoy teniendo un retraso en procesar tu mensaje. ¿Podrías escribir nuevamente?"
+            return BotTurn("¡Recibimos tu archivo! Un asesor lo va a revisar en este momento. Por favor espera un momento.", [])
+        return BotTurn("Disculpa, en este momento estoy teniendo un retraso en procesar tu mensaje. ¿Podrías escribir nuevamente?", [])

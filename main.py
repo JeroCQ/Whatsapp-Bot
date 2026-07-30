@@ -6,7 +6,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
 import chatwoot_api
-from bot import process_message_logic, transcribe_audio_message
+from bot import FILE_CATALOG, process_message_logic, transcribe_audio_message
 from config import config
 from database import (
     claim_webhook_event,
@@ -121,6 +121,33 @@ def send_whatsapp_media(to_number: str, media_id: str, media_type: str, caption:
         post(url, headers=headers, json=payload).raise_for_status()
     except requests.exceptions.RequestException as e:
         print(f"Error enviando WhatsApp de {media_type} a {to_number}: {e}")
+
+
+def send_presaved_file(to_number: str, file_id: str):
+    """Send one allow-listed file selected by Gemini from the configured catalog."""
+    item = FILE_CATALOG.get(file_id)
+    if not item:
+        print(f"[FILE CATALOG] Ignoring unknown file id requested by AI: {file_id}")
+        return
+    media_reference = {"id": item.media_id} if item.media_id else {"link": item.link}
+    if item.default_caption and item.media_type in {"document", "image", "video"}:
+        media_reference["caption"] = item.default_caption
+    if item.filename and item.media_type == "document":
+        media_reference["filename"] = item.filename
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to_number,
+        "type": item.media_type,
+        item.media_type: media_reference,
+    }
+    url = f"https://graph.facebook.com/v20.0/{config.WA_PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {config.WA_TOKEN}", "Content-Type": "application/json"}
+    try:
+        post(url, headers=headers, json=payload).raise_for_status()
+        print(f"[FILE CATALOG] Sent file id={file_id} to={to_number}")
+    except requests.exceptions.RequestException as exc:
+        print(f"[FILE CATALOG] Error sending file id={file_id} to={to_number}: {exc}")
 
 
 def upload_chatwoot_attachment_to_meta(attachment_url: str, fallback_mime_type: str = "application/octet-stream", filename: str = "archivo") -> str:
@@ -267,11 +294,20 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
         message_body = transcript
 
     print("[DEBUG] 5. Procesando lógica del bot...")
-    ai_response = process_message_logic(sender_phone, message_body, is_image)
+    ai_turn = process_message_logic(sender_phone, message_body, is_image)
     print("[DEBUG] 6. Respuesta IA generada")
 
-    if ai_response:
-        send_whatsapp_message(sender_phone, ai_response)
+    if ai_turn:
+        if ai_turn.send_files_before_response:
+            for file_id in ai_turn.requested_files:
+                send_presaved_file(sender_phone, file_id)
+        if ai_turn.response:
+            send_whatsapp_message(sender_phone, ai_turn.response)
+        if not ai_turn.send_files_before_response:
+            for file_id in ai_turn.requested_files:
+                send_presaved_file(sender_phone, file_id)
+        if ai_turn.requested_files:
+            save_message_log(sender_phone, "system", f"Archivos enviados: {', '.join(ai_turn.requested_files)}")
         new_state = get_or_create_customer_state(sender_phone)
         _create_handoff_ticket_if_needed(sender_phone, sender_name, new_state, effective_media_id, message_body, mime_type, filename)
 
