@@ -22,6 +22,7 @@ from database import (
 from http_client import MEDIA_TIMEOUT, get, post
 from processing_lock import phone_lock
 from queue_client import enqueue, get_queue_stats, queue_enabled
+from webhook_utils import chatwoot_event_identity, is_restart_command
 
 app = FastAPI()
 
@@ -245,9 +246,9 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
     is_audio = effective_media_type == "audio"
     print(f"\n[DEBUG] 1. Recibido mensaje de {sender_phone} (Media: {effective_media_type or 'texto'})")
 
-    if message_body and message_body.strip().lower() == "/reset":
+    if is_restart_command(message_body):
         reset_client_history(sender_phone)
-        send_whatsapp_message(sender_phone, "🔄 Historial borrado. Empezando de cero.")
+        send_whatsapp_message(sender_phone, "🔄 Conversación reiniciada. El bot está activo y empezamos de cero.")
         return
 
     state_record = get_or_create_customer_state(sender_phone, sender_name or "Cliente")
@@ -435,7 +436,7 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
 @app.post("/chatwoot-webhook")
 async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
     data = await request.json()
-    event_id = str(data.get("id") or data.get("message_id") or data.get("event_id") or data.get("created_at") or "")
+    event_id = chatwoot_event_identity(data)
     conv_id = data.get("conversation", {}).get("id") or data.get("id")
     if not claim_webhook_event("chatwoot", event_id, str(conv_id) if conv_id else None):
         print(f"[WEBHOOK DEBUG] Chatwoot duplicado ignorado: {event_id}")

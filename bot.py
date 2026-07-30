@@ -10,6 +10,7 @@ from google import genai
 from google.genai import types
 from config import config
 from file_catalog import extend_system_instruction, load_file_catalog
+from webhook_utils import is_simple_greeting
 from database import (
     get_or_create_customer_state, 
     pause_bot_for_handoff, 
@@ -231,6 +232,13 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> BotT
         response_text = ai_data.get("response", "")
         trigger_handoff = ai_data.get("trigger_handoff", False)
         reason = ai_data.get("handoff_reason", "Transferencia por IA")
+
+        # A greeting by itself can never satisfy a handoff rule. Keep this deterministic
+        # so a model classification error cannot pause a newly resolved conversation.
+        if trigger_handoff and is_simple_greeting(text) and not is_image:
+            print(f"[IA HANDOFF SUPPRESSED] Saludo simple no requiere asesor: {text!r}")
+            trigger_handoff = False
+            reason = ""
 
         if response_text:
             save_message_log(phone, "model", response_text)
