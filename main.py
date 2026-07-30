@@ -6,7 +6,7 @@ import psycopg2
 from datetime import datetime
 from typing import Optional
 
-from fastapi import FastAPI, BackgroundTasks, Response
+from fastapi import FastAPI, BackgroundTasks, Request, Response
 from pydantic import BaseModel
 import google.generativeai as genai
 
@@ -19,6 +19,24 @@ database_url = os.getenv('DATABASE_URL')
 EVOLUTION_API_URL = os.getenv("EVOLUTION_API_URL", "https://your-evolution-api-domain.com")
 INSTANCE_NAME = os.getenv("INSTANCE_NAME", "company_main_line")
 EVOLUTION_API_KEY = os.getenv("EVOLUTION_API_KEY", "your_global_api_key_here")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
+# Business-specific instructions live in Railway instead of in the source code.
+# A prompt can include {{file:ALIAS}} to inject BUSINESS_FILE_ALIAS.
+DEFAULT_SYSTEM_PROMPT = """You are a helpful and concise sales assistant for our retail company.
+Your ONLY goal is to assist customers with retail purchases based on the inventory below.
+
+CURRENT INVENTORY:
+{{inventory}}
+
+RULES:
+1. NEVER make up information, prices, or products. If it is not in the inventory, you do not know it.
+2. NEVER attempt to negotiate or offer wholesale prices.
+3. Keep responses under 3 sentences. Use a friendly, professional tone.
+"""
+SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT)
+BUSINESS_FILE_PATTERN = re.compile(r"\{\{file:([A-Za-z][A-Za-z0-9_]*)\}\}")
+MAX_BUSINESS_FILE_BYTES = int(os.getenv("MAX_BUSINESS_FILE_BYTES", "1000000"))
 
 # Business-specific instructions live in Railway instead of in the source code.
 # A prompt can include {{file:ALIAS}} to inject BUSINESS_FILE_ALIAS.
@@ -41,7 +59,7 @@ MAX_BUSINESS_FILE_BYTES = int(os.getenv("MAX_BUSINESS_FILE_BYTES", "1000000"))
 GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
 if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
-gemini_model = genai.GenerativeModel('gemini-1.5-pro-latest')
+gemini_model = genai.GenerativeModel(GEMINI_MODEL)
 
 # The SQL schema
 sql_schema = """
@@ -99,6 +117,8 @@ async def startup():
 
 def get_db_connection():
     """Establishes a new database connection."""
+    if not database_url:
+        raise RuntimeError("DATABASE_URL is not configured")
     return psycopg2.connect(database_url)
 
 class WhatsAppMessage(BaseModel):
@@ -107,6 +127,8 @@ class WhatsAppMessage(BaseModel):
     text_content: Optional[str] = None
 
 def get_client_state(phone: str):
+    if not database_url:
+        return {"is_vip": False, "bot_paused": False}
     with get_db_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute(
@@ -124,6 +146,8 @@ def get_client_state(phone: str):
                 return {"is_vip": result[0], "bot_paused": result[1]}
 
 def get_active_inventory_string():
+    if not database_url:
+        return "No database inventory configured."
     with get_db_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute(
@@ -166,13 +190,8 @@ def send_whatsapp_message(phone_number: str, text: str):
 
     payload = {
         "number": phone_number,
-        "options": {
-            "delay": 1200, 
-            "presence": "composing"
-        },
-        "textMessage": {
-            "text": text
-        }
+        "text": text,
+        "delay": 1200,
     }
 
     try:
@@ -281,13 +300,14 @@ async def process_chat_logic(msg: WhatsAppMessage):
 
     # Manager command to hand control back to the AI (Manager types this in Chatwoot)
     if msg.text_content and msg.text_content.strip().lower() == "#bot":
-        with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    "UPDATE clients SET bot_paused = FALSE WHERE phone_number = %s;",
-                    (phone,)
-                )
-                conn.commit()
+        if database_url:
+            with get_db_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "UPDATE clients SET bot_paused = FALSE WHERE phone_number = %s;",
+                        (phone,)
+                    )
+                    conn.commit()
         send_whatsapp_message(phone, "🤖 Chatbot reactivado para esta conversación.")
         return
 
@@ -312,7 +332,84 @@ async def process_chat_logic(msg: WhatsAppMessage):
 def read_root():
     return {"status": "ok", "message": "API is online"}
 
+
+def _phone_from_jid(jid: Optional[str]) -> Optional[str]:
+    if not jid:
+        return None
+    return jid.split("@", 1)[0].split(":", 1)[0].lstrip("+")
+
+
+def normalize_webhook_payload(payload: dict) -> Optional[WhatsAppMessage]:
+    """Convert Evolution API or Chatwoot webhook JSON into one internal message."""
+    event = str(payload.get("event", "")).lower().replace("_", ".")
+
+    # Keep compatibility with the original, simple webhook body.
+    if payload.get("sender_id") and payload.get("message_type"):
+        return WhatsAppMessage(**payload)
+
+    if event in {"messages.upsert", "messages.update"} or "data" in payload:
+        data = payload.get("data") or {}
+        if isinstance(data, list):
+            data = data[0] if data else {}
+        key = data.get("key") or {}
+        if key.get("fromMe") or data.get("fromMe"):
+            return None
+
+        message = data.get("message") or {}
+        phone = _phone_from_jid(key.get("remoteJidAlt") or key.get("remoteJid"))
+        text = message.get("conversation")
+        message_type = "text"
+        if not text and message.get("extendedTextMessage"):
+            text = message["extendedTextMessage"].get("text")
+        if message.get("imageMessage"):
+            message_type = "image"
+            text = message["imageMessage"].get("caption")
+        elif message.get("documentMessage"):
+            message_type = "document"
+            text = message["documentMessage"].get("caption")
+        if phone and (text or message_type != "text"):
+            return WhatsAppMessage(
+                sender_id=phone, message_type=message_type, text_content=text
+            )
+        return None
+
+    if event == "message.created" or payload.get("message_type") is not None:
+        if str(payload.get("message_type", "")).lower() not in {"incoming", "0"}:
+            return None
+        conversation = payload.get("conversation") or {}
+        sender = payload.get("sender") or (conversation.get("meta") or {}).get("sender") or {}
+        phone = sender.get("phone_number") or sender.get("identifier")
+        attachments = payload.get("attachments") or []
+        message_type = "text"
+        if attachments:
+            file_type = str(attachments[0].get("file_type", "")).lower()
+            message_type = "image" if file_type == "image" else "document"
+        if phone:
+            return WhatsAppMessage(
+                sender_id=str(phone).lstrip("+"),
+                message_type=message_type,
+                text_content=payload.get("content"),
+            )
+        return None
+
+    return None
+
+
+async def log_and_process_message(msg: WhatsAppMessage):
+    try:
+        await process_chat_logic(msg)
+    except Exception as error:
+        print(f"Error processing message from {msg.sender_id}: {error}")
+
+
 @app.post("/webhook")
-async def whatsapp_webhook(payload: WhatsAppMessage, background_tasks: BackgroundTasks):
-    background_tasks.add_task(process_chat_logic, payload)
+@app.post("/chatwoot-webhook")
+@app.post("/")
+async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
+    payload = await request.json()
+    msg = normalize_webhook_payload(payload)
+    if msg:
+        background_tasks.add_task(log_and_process_message, msg)
+    else:
+        print(f"Ignored unsupported or outgoing webhook event: {payload.get('event', 'unknown')}")
     return Response(status_code=200)

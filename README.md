@@ -42,3 +42,18 @@ the active prompt are loaded and sent to Gemini.
 Knowledge sources must be UTF-8 text (for example TXT, Markdown, CSV, or JSON).
 Binary PDF or Word files should first be exported to text or exposed through a
 text-producing endpoint.
+
+## Webhook setup
+
+Evolution API can send `messages.upsert` events to `/webhook`. The bot also
+accepts Chatwoot `message_created` events at `/chatwoot-webhook`; `/` is accepted
+as a compatibility webhook URL as well. Outgoing messages are ignored to prevent
+reply loops.
+
+`DATABASE_URL` is optional. Without it, the bot runs without persisted pause/VIP
+state and uses the files in `SYSTEM_PROMPT` instead of database inventory. Set a
+PostgreSQL `DATABASE_URL` when persisted customer state and the `products` table
+are needed.
+
+The outbound Evolution API request uses the current `number`, `text`, and
+`delay` fields. `GEMINI_MODEL` can override the default `gemini-2.5-flash` model.

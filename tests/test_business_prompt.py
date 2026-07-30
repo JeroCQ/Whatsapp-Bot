@@ -47,5 +47,68 @@ class BusinessPromptTests(unittest.TestCase):
             self.assertEqual(main.generate_system_prompt("Tea - $2"), "Inventory:\nTea - $2")
 
 
+class WebhookNormalizationTests(unittest.TestCase):
+    def test_evolution_text_message(self):
+        message = main.normalize_webhook_payload(
+            {
+                "event": "messages.upsert",
+                "data": {
+                    "key": {"remoteJid": "15551234567@s.whatsapp.net", "fromMe": False},
+                    "message": {"conversation": "Hello"},
+                },
+            }
+        )
+
+        self.assertEqual(message.sender_id, "15551234567")
+        self.assertEqual(message.message_type, "text")
+        self.assertEqual(message.text_content, "Hello")
+
+    def test_evolution_outgoing_message_is_ignored(self):
+        message = main.normalize_webhook_payload(
+            {
+                "event": "messages.upsert",
+                "data": {
+                    "key": {"remoteJid": "15551234567@s.whatsapp.net", "fromMe": True},
+                    "message": {"conversation": "Bot reply"},
+                },
+            }
+        )
+
+        self.assertIsNone(message)
+
+    def test_chatwoot_incoming_message(self):
+        message = main.normalize_webhook_payload(
+            {
+                "event": "message_created",
+                "message_type": "incoming",
+                "content": "Do you have coffee?",
+                "conversation": {
+                    "meta": {"sender": {"phone_number": "+15557654321"}}
+                },
+            }
+        )
+
+        self.assertEqual(message.sender_id, "15557654321")
+        self.assertEqual(message.text_content, "Do you have coffee?")
+
+    def test_original_payload_is_still_supported(self):
+        message = main.normalize_webhook_payload(
+            {"sender_id": "123", "message_type": "text", "text_content": "Hi"}
+        )
+
+        self.assertEqual(message.text_content, "Hi")
+
+    def test_database_is_optional_for_basic_messages(self):
+        with patch.object(main, "database_url", None):
+            self.assertEqual(
+                main.get_client_state("123"),
+                {"is_vip": False, "bot_paused": False},
+            )
+            self.assertEqual(
+                main.get_active_inventory_string(),
+                "No database inventory configured.",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
