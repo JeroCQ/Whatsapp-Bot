@@ -30,6 +30,8 @@ class Settings:
     QUEUE_NAME = os.getenv("QUEUE_NAME", "whatsapp-events")
     GEMINI_MAX_CONCURRENT = int(os.getenv("GEMINI_MAX_CONCURRENT", "8"))
     PHONE_LOCK_TTL_SECONDS = int(os.getenv("PHONE_LOCK_TTL_SECONDS", "180"))
+    # JSON array of customer-facing files the model is allowed to request.
+    PRESAVED_FILES_JSON = os.getenv("PRESAVED_FILES_JSON", "[]")
     
     @classmethod
     def validate(cls):
