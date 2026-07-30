@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import requests
 import psycopg2
 from datetime import datetime
@@ -18,6 +19,23 @@ database_url = os.getenv('DATABASE_URL')
 EVOLUTION_API_URL = os.getenv("EVOLUTION_API_URL", "https://your-evolution-api-domain.com")
 INSTANCE_NAME = os.getenv("INSTANCE_NAME", "company_main_line")
 EVOLUTION_API_KEY = os.getenv("EVOLUTION_API_KEY", "your_global_api_key_here")
+
+# Business-specific instructions live in Railway instead of in the source code.
+# A prompt can include {{file:ALIAS}} to inject BUSINESS_FILE_ALIAS.
+DEFAULT_SYSTEM_PROMPT = """You are a helpful and concise sales assistant for our retail company.
+Your ONLY goal is to assist customers with retail purchases based on the inventory below.
+
+CURRENT INVENTORY:
+{{inventory}}
+
+RULES:
+1. NEVER make up information, prices, or products. If it is not in the inventory, you do not know it.
+2. NEVER attempt to negotiate or offer wholesale prices.
+3. Keep responses under 3 sentences. Use a friendly, professional tone.
+"""
+SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT)
+BUSINESS_FILE_PATTERN = re.compile(r"\{\{file:([A-Za-z][A-Za-z0-9_]*)\}\}")
+MAX_BUSINESS_FILE_BYTES = int(os.getenv("MAX_BUSINESS_FILE_BYTES", "1000000"))
 
 # Configure Gemini API
 GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
@@ -185,18 +203,47 @@ handoff_tool = {
     ]
 }
 
+def load_business_file(alias: str) -> str:
+    """Load a text knowledge file configured as BUSINESS_FILE_<alias>."""
+    variable_name = f"BUSINESS_FILE_{alias.upper()}"
+    source = os.getenv(variable_name)
+    if not source:
+        raise ValueError(f"Missing Railway variable {variable_name}")
+
+    if source.startswith("text:"):
+        content = source.removeprefix("text:")
+        if len(content.encode("utf-8")) > MAX_BUSINESS_FILE_BYTES:
+            raise ValueError(f"{variable_name} exceeds MAX_BUSINESS_FILE_BYTES")
+        return content
+
+    if source.startswith(("https://", "http://")):
+        response = requests.get(source, timeout=10)
+        response.raise_for_status()
+        if len(response.content) > MAX_BUSINESS_FILE_BYTES:
+            raise ValueError(f"{variable_name} exceeds MAX_BUSINESS_FILE_BYTES")
+        return response.content.decode("utf-8-sig")
+
+    if not os.path.isfile(source):
+        raise ValueError(f"{variable_name} is not a valid file path or HTTP(S) URL")
+    if os.path.getsize(source) > MAX_BUSINESS_FILE_BYTES:
+        raise ValueError(f"{variable_name} exceeds MAX_BUSINESS_FILE_BYTES")
+    with open(source, encoding="utf-8-sig") as business_file:
+        return business_file.read()
+
+
 def generate_system_prompt(inventory_string: str) -> str:
-    return f"""You are a helpful and concise sales assistant for our retail company.
-    Your ONLY goal is to assist customers with retail purchases based on the inventory below.
+    """Render the deployment prompt and only the files it explicitly references."""
+    prompt = SYSTEM_PROMPT.replace("{{inventory}}", inventory_string)
 
-    CURRENT INVENTORY:
-    {inventory_string}
+    def replace_file(match):
+        alias = match.group(1)
+        try:
+            return load_business_file(alias)
+        except (OSError, UnicodeError, ValueError, requests.RequestException) as error:
+            print(f"Could not load business file {alias}: {error}")
+            return f"[Business file {alias} is unavailable]"
 
-    RULES:
-    1. NEVER make up information, prices, or products. If it is not in the inventory, you do not know it.
-    2. NEVER attempt to negotiate or offer wholesale prices.
-    3. Keep responses under 3 sentences. Use a friendly, professional tone.
-    """
+    return BUSINESS_FILE_PATTERN.sub(replace_file, prompt)
 
 def run_llm_agent(user_text: str, inventory_string: str, phone: str):
     messages = [
