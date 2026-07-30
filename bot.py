@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
 from config import config
-from file_catalog import catalog_prompt, load_file_catalog
+from file_catalog import extend_system_instruction, load_file_catalog
 from database import (
     get_or_create_customer_state, 
     pause_bot_for_handoff, 
@@ -168,6 +168,10 @@ Activa el handoff (trigger_handoff = true) en estos casos:
 4. Problemas operativos o dudas médicas complejas.
 """
 
+# Keep the carefully maintained business prompt above intact. File capabilities are
+# appended at runtime instead of replacing, templating, or editing its contents.
+SYSTEM_INSTRUCTION_WITH_FILES = extend_system_instruction(SYSTEM_INSTRUCTION, FILE_CATALOG)
+
 def process_message_logic(phone: str, text: str, is_image: bool = False) -> BotTurn:
     """
     Usa Gemini para procesar el mensaje, entender el contexto y decidir si hace handoff.
@@ -204,11 +208,6 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> BotT
 
     Analiza la situación aplicando rigurosamente las REGLAS ESTRICTAS DE ESCALAMIENTO.
 
-    {catalog_prompt(FILE_CATALOG)}
-
-    requested_files controla los adjuntos reales de este turno. Incluye cada archivo como
-    máximo una vez. send_files_before_response indica si los adjuntos deben llegar antes
-    del texto; normalmente usa false para introducirlos primero con el mensaje.
     """
 
     try:
@@ -218,7 +217,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> BotT
                 model="gemini-flash-latest",
                 contents=prompt,
                 config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_INSTRUCTION,
+                    system_instruction=SYSTEM_INSTRUCTION_WITH_FILES,
                     response_mime_type="application/json",
                     response_schema=BotResponse,
                     temperature=0.1, # Bajamos un poco más la temperatura para máxima adherencia a las reglas

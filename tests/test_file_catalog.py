@@ -1,6 +1,6 @@
 import unittest
 
-from file_catalog import catalog_prompt, load_file_catalog
+from file_catalog import catalog_prompt, extend_system_instruction, load_file_catalog
 
 
 class FileCatalogTests(unittest.TestCase):
@@ -19,6 +19,14 @@ class FileCatalogTests(unittest.TestCase):
     def test_empty_configuration_disables_file_requests(self):
         self.assertEqual(load_file_catalog(""), {})
         self.assertIn("requested_files=[]", catalog_prompt({}))
+
+    def test_file_rules_are_appended_without_changing_business_prompt(self):
+        original = "PERSONALIDAD\nPRECIOS\nHANDOFF"
+        catalog = load_file_catalog('[{"id":"catalogo_pdf","description":"Catálogo","media_id":"123"}]')
+        extended = extend_system_instruction(original, catalog)
+        self.assertTrue(extended.startswith(original + "\n\n"))
+        self.assertEqual(extended[:len(original)], original)
+        self.assertIn("catalogo_pdf", extended)
 
 
 if __name__ == "__main__":

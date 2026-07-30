@@ -73,5 +73,15 @@ def catalog_prompt(catalog: dict[str, PresavedFile]) -> str:
     for item in catalog.values():
         extras = f"; texto predeterminado: {item.default_caption}" if item.default_caption else ""
         lines.append(f"- ID {item.id!r} ({item.media_type}): {item.description}{extras}")
-    lines.append("No afirmes que un archivo fue enviado si su ID no aparece arriba.")
+    lines.extend([
+        "Incluye cada ID como máximo una vez.",
+        "send_files_before_response indica si los archivos deben llegar antes del texto; "
+        "normalmente usa false para introducirlos primero con el mensaje.",
+        "No afirmes que un archivo fue enviado si su ID no aparece arriba.",
+    ])
     return "\n".join(lines)
+
+
+def extend_system_instruction(base_instruction: str, catalog: dict[str, PresavedFile]) -> str:
+    """Append file capabilities without editing or replacing the business prompt."""
+    return f"{base_instruction.rstrip()}\n\n{catalog_prompt(catalog)}\n"
