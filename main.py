@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import requests
 import psycopg2
 from datetime import datetime
@@ -18,6 +19,10 @@ database_url = os.getenv('DATABASE_URL')
 EVOLUTION_API_URL = os.getenv("EVOLUTION_API_URL", "https://your-evolution-api-domain.com")
 INSTANCE_NAME = os.getenv("INSTANCE_NAME", "company_main_line")
 EVOLUTION_API_KEY = os.getenv("EVOLUTION_API_KEY", "your_global_api_key_here")
+
+# Only variables with this prefix can be inserted into the system prompt.
+BUSINESS_FILE_PATTERN = re.compile(r"\{\{(BUSINESS_FILE_[A-Z0-9_]+)\}\}")
+MAX_BUSINESS_FILE_BYTES = int(os.getenv("MAX_BUSINESS_FILE_BYTES", "1000000"))
 
 # Configure Gemini API
 GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
@@ -185,18 +190,43 @@ handoff_tool = {
     ]
 }
 
-def generate_system_prompt(inventory_string: str) -> str:
-    return f"""You are a helpful and concise sales assistant for our retail company.
+DEFAULT_SYSTEM_PROMPT = """You are a helpful and concise sales assistant for our retail company.
     Your ONLY goal is to assist customers with retail purchases based on the inventory below.
 
     CURRENT INVENTORY:
-    {inventory_string}
+    {{inventory}}
 
     RULES:
     1. NEVER make up information, prices, or products. If it is not in the inventory, you do not know it.
     2. NEVER attempt to negotiate or offer wholesale prices.
     3. Keep responses under 3 sentences. Use a friendly, professional tone.
     """
+
+
+def load_business_file(variable_name: str) -> str:
+    """Read a Railway business-file variable as inline text or a text-file URL."""
+    value = os.getenv(variable_name)
+    if not value:
+        return f"[{variable_name} is not configured]"
+
+    if value.startswith(("https://", "http://")):
+        response = requests.get(value, timeout=10)
+        response.raise_for_status()
+        if len(response.content) > MAX_BUSINESS_FILE_BYTES:
+            raise ValueError(f"{variable_name} is larger than MAX_BUSINESS_FILE_BYTES")
+        return response.content.decode("utf-8-sig")
+
+    if len(value.encode("utf-8")) > MAX_BUSINESS_FILE_BYTES:
+        raise ValueError(f"{variable_name} is larger than MAX_BUSINESS_FILE_BYTES")
+    return value
+
+
+def generate_system_prompt(inventory_string: str) -> str:
+    prompt = os.getenv("SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT)
+    prompt = prompt.replace("{{inventory}}", inventory_string)
+    return BUSINESS_FILE_PATTERN.sub(
+        lambda match: load_business_file(match.group(1)), prompt
+    )
 
 def run_llm_agent(user_text: str, inventory_string: str, phone: str):
     messages = [
