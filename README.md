@@ -57,3 +57,20 @@ are needed.
 
 The outbound Evolution API request uses the current `number`, `text`, and
 `delay` fields. `GEMINI_MODEL` can override the default `gemini-2.5-flash` model.
+
+## Railway start command
+
+The repository includes a Railway deployment configuration and a compatible
+`workers.runner` module. Railway should start the service with:
+
+```sh
+python -m workers.runner
+```
+
+The runner binds the FastAPI app to `0.0.0.0` using Railway's `PORT` variable
+(or port `8080` locally). If the service has a manually configured Railway Start
+Command, either keep the command above or use:
+
+```sh
+uvicorn main:app --host 0.0.0.0 --port $PORT
+```

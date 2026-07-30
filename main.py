@@ -38,23 +38,6 @@ SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT)
 BUSINESS_FILE_PATTERN = re.compile(r"\{\{file:([A-Za-z][A-Za-z0-9_]*)\}\}")
 MAX_BUSINESS_FILE_BYTES = int(os.getenv("MAX_BUSINESS_FILE_BYTES", "1000000"))
 
-# Business-specific instructions live in Railway instead of in the source code.
-# A prompt can include {{file:ALIAS}} to inject BUSINESS_FILE_ALIAS.
-DEFAULT_SYSTEM_PROMPT = """You are a helpful and concise sales assistant for our retail company.
-Your ONLY goal is to assist customers with retail purchases based on the inventory below.
-
-CURRENT INVENTORY:
-{{inventory}}
-
-RULES:
-1. NEVER make up information, prices, or products. If it is not in the inventory, you do not know it.
-2. NEVER attempt to negotiate or offer wholesale prices.
-3. Keep responses under 3 sentences. Use a friendly, professional tone.
-"""
-SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT)
-BUSINESS_FILE_PATTERN = re.compile(r"\{\{file:([A-Za-z][A-Za-z0-9_]*)\}\}")
-MAX_BUSINESS_FILE_BYTES = int(os.getenv("MAX_BUSINESS_FILE_BYTES", "1000000"))
-
 # Configure Gemini API
 GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
 if GOOGLE_API_KEY:
