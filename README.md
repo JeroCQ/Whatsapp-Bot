@@ -59,7 +59,10 @@ PostgreSQL `DATABASE_URL` when persisted customer state and the `products` table
 are needed.
 
 The outbound Evolution API request uses the current `number`, `text`, and
-`delay` fields. `GEMINI_MODEL` can override the default `gemini-2.5-flash` model.
+`delay` fields. `GEMINI_MODEL` can override the default `gemini-flash-latest`
+model. If Railway already has `GEMINI_MODEL=gemini-2.5-flash`, remove that
+variable or change it to `gemini-flash-latest`, because the former is not
+available to new Gemini API users.
 
 ## Railway start command
 

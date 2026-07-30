@@ -20,7 +20,10 @@ database_url = os.getenv('DATABASE_URL')
 EVOLUTION_API_URL = os.getenv("EVOLUTION_API_URL", "https://your-evolution-api-domain.com")
 INSTANCE_NAME = os.getenv("INSTANCE_NAME", "company_main_line")
 EVOLUTION_API_KEY = os.getenv("EVOLUTION_API_KEY", "your_global_api_key_here")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+# Keep the model alias that existing deployments already use. The alias lets
+# Google route requests to the currently supported Flash model.
+DEFAULT_GEMINI_MODEL = "gemini-flash-latest"
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
 
 # Business-specific instructions live in Railway instead of in the source code.
 # A prompt can include {{file:ALIAS}} to inject BUSINESS_FILE_ALIAS.

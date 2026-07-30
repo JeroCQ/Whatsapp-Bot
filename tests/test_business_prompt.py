@@ -7,6 +7,9 @@ import main
 
 
 class BusinessPromptTests(unittest.TestCase):
+    def test_default_model_uses_supported_flash_alias(self):
+        self.assertEqual(main.DEFAULT_GEMINI_MODEL, "gemini-flash-latest")
+
     def test_prompt_injects_only_referenced_business_file(self):
         with patch.object(main, "SYSTEM_PROMPT", "Catalog:\n{{file:catalog}}"), patch.dict(
             os.environ,
