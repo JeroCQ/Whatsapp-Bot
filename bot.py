@@ -3,10 +3,11 @@
 import json
 import time
 import threading
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
 from config import config
+from file_catalog import PresavedFile, catalog_for_prompt, load_file_catalog
 from database import (
     get_or_create_customer_state, 
     pause_bot_for_handoff, 
@@ -19,10 +20,24 @@ client = genai.Client(api_key=config.GEMINI_API_KEY)
 _gemini_semaphore = threading.BoundedSemaphore(config.GEMINI_MAX_CONCURRENT)
 
 # 2. Definir el esquema estricto
+class RequestedFile(BaseModel):
+    file_id: str
+    caption: str = ""
+
+
 class BotResponse(BaseModel):
     response: str
     trigger_handoff: bool
     handoff_reason: str
+    files_to_send: list[RequestedFile] = Field(default_factory=list)
+
+
+class BotTurnResult(BaseModel):
+    response: str
+    files: list[dict] = Field(default_factory=list)
+
+
+FILE_CATALOG = load_file_catalog(config.AI_FILES_JSON)
 
 
 def transcribe_audio_message(audio_bytes: bytes, mime_type: str = "audio/ogg") -> str:
@@ -111,17 +126,31 @@ REGLAS ESTRICTAS DE ESCALAMIENTO (HANDOFF A CHATWOOT): No intentes resolver las 
 4. Estancamiento/Quejas: Si el cliente se queja de un producto, hace un reclamo, o la conversación no avanza hacia un cierre de venta.
 """
 
-def process_message_logic(phone: str, text: str, is_image: bool = False) -> str:
+FILE_SENDING_INSTRUCTION = f"""
+ENVÍO DE ARCHIVOS CONFIGURADOS:
+Puedes pedirle al sistema que envíe archivos guardados junto con tu respuesta.
+{catalog_for_prompt(FILE_CATALOG)}
+
+Reglas configuradas por el negocio:
+{config.AI_FILE_SENDING_INSTRUCTIONS}
+
+Para enviar, agrega cada elemento a files_to_send con file_id y un caption breve opcional.
+El texto de response debe introducir o acompañar naturalmente el archivo. No afirmes que
+enviaste un archivo si su ID no aparece en la lista permitida. No uses esta función para
+archivos enviados por el cliente ni para comprobantes entrantes.
+"""
+
+def process_message_logic(phone: str, text: str, is_image: bool = False) -> BotTurnResult:
     """
     Usa Gemini para procesar el mensaje, entender el contexto y decidir si hace handoff.
     """
     state_record = get_or_create_customer_state(phone)
     if not state_record:
-        return "Disculpa, tuvimos un problema técnico. ¿Puedes intentarlo de nuevo?"
+        return BotTurnResult(response="Disculpa, tuvimos un problema técnico. ¿Puedes intentarlo de nuevo?")
         
     if state_record["is_paused"]:
         print(f"Mensaje ignorado de {phone} porque is_paused=True")
-        return None 
+        return None
 
     # Guardar el mensaje entrante conservando el texto real si lo acompaña
     if is_image:
@@ -155,7 +184,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> str:
                 model="gemini-flash-latest",
                 contents=prompt,
                 config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_INSTRUCTION,
+                    system_instruction=SYSTEM_INSTRUCTION + FILE_SENDING_INSTRUCTION,
                     response_mime_type="application/json",
                     response_schema=BotResponse,
                     temperature=0.1, # Bajamos un poco más la temperatura para máxima adherencia a las reglas
@@ -170,6 +199,22 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> str:
         trigger_handoff = ai_data.get("trigger_handoff", False)
         reason = ai_data.get("handoff_reason", "Transferencia por IA")
 
+        selected_files = []
+        seen_ids = set()
+        for requested in ai_data.get("files_to_send") or []:
+            file_id = str(requested.get("file_id", "")).strip()
+            item: PresavedFile = FILE_CATALOG.get(file_id)
+            if not item or file_id in seen_ids:
+                continue
+            seen_ids.add(file_id)
+            selected_files.append({
+                "id": item.id,
+                "url": item.url,
+                "media_type": item.media_type,
+                "filename": item.filename,
+                "caption": str(requested.get("caption", "")).strip(),
+            })
+
         if response_text:
             save_message_log(phone, "model", response_text)
 
@@ -177,7 +222,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> str:
             print(f"[IA HANDOFF TRIGGERED] Razón: {reason}")
             pause_bot_for_handoff(phone, reason)
 
-        return response_text
+        return BotTurnResult(response=response_text, files=selected_files)
 
     except Exception as e:
         import traceback
@@ -186,5 +231,5 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> str:
         
         if is_image:
             pause_bot_for_handoff(phone, "Envío de imagen (Fallback)")
-            return "¡Recibimos tu archivo! Un asesor lo va a revisar en este momento. Por favor espera un momento."
-        return "Disculpa, en este momento estoy teniendo un retraso en procesar tu mensaje. ¿Podrías escribir nuevamente?"
+            return BotTurnResult(response="¡Recibimos tu archivo! Un asesor lo va a revisar en este momento. Por favor espera un momento.")
+        return BotTurnResult(response="Disculpa, en este momento estoy teniendo un retraso en procesar tu mensaje. ¿Podrías escribir nuevamente?")

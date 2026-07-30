@@ -26,6 +26,14 @@ class Settings:
 
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
+    # JSON allowlist of public HTTPS files and prompt-level rules controlling
+    # when the model should send them. See README for the schema.
+    AI_FILES_JSON = os.getenv("AI_FILES_JSON", "[]")
+    AI_FILE_SENDING_INSTRUCTIONS = os.getenv(
+        "AI_FILE_SENDING_INSTRUCTIONS",
+        "Envía un archivo solamente cuando el cliente lo solicite claramente o cuando sea útil para responder su petición.",
+    )
+
     REDIS_URL = os.getenv("REDIS_URL")
     QUEUE_NAME = os.getenv("QUEUE_NAME", "whatsapp-events")
     GEMINI_MAX_CONCURRENT = int(os.getenv("GEMINI_MAX_CONCURRENT", "8"))
