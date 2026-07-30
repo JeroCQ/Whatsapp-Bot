@@ -48,7 +48,10 @@ text-producing endpoint.
 Evolution API can send `messages.upsert` events to `/webhook`. The bot also
 accepts Chatwoot `message_created` events at `/chatwoot-webhook`; `/` is accepted
 as a compatibility webhook URL as well. Outgoing messages are ignored to prevent
-reply loops.
+reply loops. Wrapped and legacy Evolution payloads and Meta Cloud API message
+payloads are also normalized. When an unsupported payload is received, Railway
+logs its event and top-level keys so its shape can be diagnosed without logging
+customer message contents.
 
 `DATABASE_URL` is optional. Without it, the bot runs without persisted pause/VIP
 state and uses the files in `SYSTEM_PROMPT` instead of database inventory. Set a

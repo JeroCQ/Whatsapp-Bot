@@ -1,8 +1,6 @@
 fastapi
 uvicorn
-google-generativeai
+google-genai
 psycopg2-binary
 requests
 pydantic
-psycopg2-binary
-google-generativeai

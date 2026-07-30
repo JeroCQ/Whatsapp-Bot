@@ -8,7 +8,8 @@ from typing import Optional
 
 from fastapi import FastAPI, BackgroundTasks, Request, Response
 from pydantic import BaseModel
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 app = FastAPI()
 
@@ -40,9 +41,7 @@ MAX_BUSINESS_FILE_BYTES = int(os.getenv("MAX_BUSINESS_FILE_BYTES", "1000000"))
 
 # Configure Gemini API
 GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
-if GOOGLE_API_KEY:
-    genai.configure(api_key=GOOGLE_API_KEY)
-gemini_model = genai.GenerativeModel(GEMINI_MODEL)
+gemini_client = genai.Client(api_key=GOOGLE_API_KEY) if GOOGLE_API_KEY else None
 
 # The SQL schema
 sql_schema = """
@@ -248,19 +247,18 @@ def generate_system_prompt(inventory_string: str) -> str:
     return BUSINESS_FILE_PATTERN.sub(replace_file, prompt)
 
 def run_llm_agent(user_text: str, inventory_string: str, phone: str):
-    messages = [
-        {"role": "user", "parts": [generate_system_prompt(inventory_string)]},
-        {"role": "user", "parts": [user_text]}
-    ]
+    if not gemini_client:
+        raise RuntimeError("GOOGLE_API_KEY is not configured")
 
-    response = gemini_model.generate_content(
-        contents=messages,
-        tools=handoff_tool,
-        tool_config={"function_calling_config": "auto"},
-        generation_config={
-            "temperature": 0.2,
-            "max_output_tokens": 1024
-        }
+    response = gemini_client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=user_text,
+        config=types.GenerateContentConfig(
+            system_instruction=generate_system_prompt(inventory_string),
+            tools=[handoff_tool],
+            temperature=0.2,
+            max_output_tokens=1024,
+        ),
     )
 
     if response.candidates and response.candidates[0].content.parts:
@@ -322,39 +320,113 @@ def _phone_from_jid(jid: Optional[str]) -> Optional[str]:
     return jid.split("@", 1)[0].split(":", 1)[0].lstrip("+")
 
 
+def _unwrap_webhook_payload(payload: dict) -> dict:
+    """Unwrap proxy/provider envelopes without mistaking message data for one."""
+    current = payload
+    for _ in range(3):
+        wrapped = next(
+            (
+                current.get(key)
+                for key in ("body", "payload")
+                if isinstance(current.get(key), dict)
+            ),
+            None,
+        )
+        if wrapped is None:
+            break
+        current = wrapped
+    return current
+
+
+def _extract_message_content(message) -> tuple[str, Optional[str]]:
+    """Extract text/media type from common Baileys/Evolution message objects."""
+    if isinstance(message, str):
+        return "text", message
+    if not isinstance(message, dict):
+        return "text", None
+
+    text = message.get("conversation") or message.get("text") or message.get("body")
+    if isinstance(text, dict):
+        text = text.get("body") or text.get("text")
+    if not text and isinstance(message.get("extendedTextMessage"), dict):
+        text = message["extendedTextMessage"].get("text")
+    if isinstance(message.get("imageMessage"), dict):
+        return "image", message["imageMessage"].get("caption")
+    if isinstance(message.get("documentMessage"), dict):
+        return "document", message["documentMessage"].get("caption")
+    if isinstance(message.get("audioMessage"), dict):
+        return "audio", None
+    return "text", text
+
+
 def normalize_webhook_payload(payload: dict) -> Optional[WhatsAppMessage]:
     """Convert Evolution API or Chatwoot webhook JSON into one internal message."""
+    payload = _unwrap_webhook_payload(payload)
     event = str(payload.get("event", "")).lower().replace("_", ".")
 
     # Keep compatibility with the original, simple webhook body.
     if payload.get("sender_id") and payload.get("message_type"):
         return WhatsAppMessage(**payload)
 
-    if event in {"messages.upsert", "messages.update"} or "data" in payload:
-        data = payload.get("data") or {}
-        if isinstance(data, list):
-            data = data[0] if data else {}
+    data = payload.get("data") or {}
+    if isinstance(data, list):
+        data = data[0] if data else {}
+    looks_like_evolution = isinstance(data, dict) and any(
+        key in data for key in ("key", "message", "remoteJid", "sender")
+    )
+    if event in {"messages.upsert", "messages.update"} or looks_like_evolution:
         key = data.get("key") or {}
         if key.get("fromMe") or data.get("fromMe"):
             return None
 
-        message = data.get("message") or {}
-        phone = _phone_from_jid(key.get("remoteJidAlt") or key.get("remoteJid"))
-        text = message.get("conversation")
-        message_type = "text"
-        if not text and message.get("extendedTextMessage"):
-            text = message["extendedTextMessage"].get("text")
-        if message.get("imageMessage"):
-            message_type = "image"
-            text = message["imageMessage"].get("caption")
-        elif message.get("documentMessage"):
-            message_type = "document"
-            text = message["documentMessage"].get("caption")
+        phone = _phone_from_jid(
+            key.get("remoteJidAlt")
+            or key.get("remoteJid")
+            or data.get("remoteJid")
+            or data.get("sender")
+            or data.get("from")
+        )
+        message_type, text = _extract_message_content(
+            data.get("message") or data.get("text") or data.get("body")
+        )
         if phone and (text or message_type != "text"):
             return WhatsAppMessage(
                 sender_id=phone, message_type=message_type, text_content=text
             )
         return None
+
+    # Meta Cloud API shape (also used by some Evolution proxies).
+    entries = payload.get("entry") or []
+    if entries:
+        try:
+            value = entries[0]["changes"][0]["value"]
+            raw_message = value.get("messages", [])[0]
+        except (IndexError, KeyError, TypeError):
+            raw_message = None
+        if raw_message:
+            message_type = raw_message.get("type", "text")
+            content = raw_message.get(message_type) or {}
+            text = content.get("body") or content.get("caption")
+            return WhatsAppMessage(
+                sender_id=str(raw_message["from"]).lstrip("+"),
+                message_type="image" if message_type == "image" else (
+                    "document" if message_type == "document" else "text"
+                ),
+                text_content=text,
+            )
+
+    # Older/forwarded Evolution payloads can put sender and message at the root.
+    phone = _phone_from_jid(
+        payload.get("sender") or payload.get("from") or payload.get("remoteJid")
+    )
+    if phone and not payload.get("fromMe"):
+        message_type, text = _extract_message_content(
+            payload.get("message") or payload.get("text") or payload.get("body")
+        )
+        if text or message_type != "text":
+            return WhatsAppMessage(
+                sender_id=phone, message_type=message_type, text_content=text
+            )
 
     if event == "message.created" or payload.get("message_type") is not None:
         if str(payload.get("message_type", "")).lower() not in {"incoming", "0"}:
@@ -392,7 +464,14 @@ async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
     payload = await request.json()
     msg = normalize_webhook_payload(payload)
     if msg:
+        print(
+            f"Accepted incoming webhook for {msg.sender_id}; "
+            f"message_type={msg.message_type}"
+        )
         background_tasks.add_task(log_and_process_message, msg)
     else:
-        print(f"Ignored unsupported or outgoing webhook event: {payload.get('event', 'unknown')}")
+        print(
+            "Ignored unsupported or outgoing webhook. "
+            f"event={payload.get('event', 'unknown')!r} keys={sorted(payload.keys())}"
+        )
     return Response(status_code=200)

@@ -98,6 +98,59 @@ class WebhookNormalizationTests(unittest.TestCase):
 
         self.assertEqual(message.text_content, "Hi")
 
+    def test_wrapped_evolution_payload_without_event(self):
+        message = main.normalize_webhook_payload(
+            {
+                "body": {
+                    "data": {
+                        "sender": "15559876543@s.whatsapp.net",
+                        "message": {"extendedTextMessage": {"text": "Wrapped hello"}},
+                    }
+                }
+            }
+        )
+
+        self.assertEqual(message.sender_id, "15559876543")
+        self.assertEqual(message.text_content, "Wrapped hello")
+
+    def test_flat_legacy_evolution_payload(self):
+        message = main.normalize_webhook_payload(
+            {
+                "sender": "15551112222@s.whatsapp.net",
+                "message": {"conversation": "Legacy hello"},
+            }
+        )
+
+        self.assertEqual(message.sender_id, "15551112222")
+        self.assertEqual(message.text_content, "Legacy hello")
+
+    def test_meta_cloud_api_payload(self):
+        message = main.normalize_webhook_payload(
+            {
+                "object": "whatsapp_business_account",
+                "entry": [
+                    {
+                        "changes": [
+                            {
+                                "value": {
+                                    "messages": [
+                                        {
+                                            "from": "15553334444",
+                                            "type": "text",
+                                            "text": {"body": "Meta hello"},
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(message.sender_id, "15553334444")
+        self.assertEqual(message.text_content, "Meta hello")
+
     def test_database_is_optional_for_basic_messages(self):
         with patch.object(main, "database_url", None):
             self.assertEqual(
