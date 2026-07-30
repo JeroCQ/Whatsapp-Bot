@@ -1,13 +1,15 @@
 import os
 import json
+import re
 import requests
 import psycopg2
 from datetime import datetime
 from typing import Optional
 
-from fastapi import FastAPI, BackgroundTasks, Response
+from fastapi import FastAPI, BackgroundTasks, Request, Response
 from pydantic import BaseModel
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 app = FastAPI()
 
@@ -18,12 +20,31 @@ database_url = os.getenv('DATABASE_URL')
 EVOLUTION_API_URL = os.getenv("EVOLUTION_API_URL", "https://your-evolution-api-domain.com")
 INSTANCE_NAME = os.getenv("INSTANCE_NAME", "company_main_line")
 EVOLUTION_API_KEY = os.getenv("EVOLUTION_API_KEY", "your_global_api_key_here")
+# Keep the model alias that existing deployments already use. The alias lets
+# Google route requests to the currently supported Flash model.
+DEFAULT_GEMINI_MODEL = "gemini-flash-latest"
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
+
+# Business-specific instructions live in Railway instead of in the source code.
+# A prompt can include {{file:ALIAS}} to inject BUSINESS_FILE_ALIAS.
+DEFAULT_SYSTEM_PROMPT = """You are a helpful and concise sales assistant for our retail company.
+Your ONLY goal is to assist customers with retail purchases based on the inventory below.
+
+CURRENT INVENTORY:
+{{inventory}}
+
+RULES:
+1. NEVER make up information, prices, or products. If it is not in the inventory, you do not know it.
+2. NEVER attempt to negotiate or offer wholesale prices.
+3. Keep responses under 3 sentences. Use a friendly, professional tone.
+"""
+SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT)
+BUSINESS_FILE_PATTERN = re.compile(r"\{\{file:([A-Za-z][A-Za-z0-9_]*)\}\}")
+MAX_BUSINESS_FILE_BYTES = int(os.getenv("MAX_BUSINESS_FILE_BYTES", "1000000"))
 
 # Configure Gemini API
 GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
-if GOOGLE_API_KEY:
-    genai.configure(api_key=GOOGLE_API_KEY)
-gemini_model = genai.GenerativeModel('gemini-1.5-pro-latest')
+gemini_client = genai.Client(api_key=GOOGLE_API_KEY) if GOOGLE_API_KEY else None
 
 # The SQL schema
 sql_schema = """
@@ -81,6 +102,8 @@ async def startup():
 
 def get_db_connection():
     """Establishes a new database connection."""
+    if not database_url:
+        raise RuntimeError("DATABASE_URL is not configured")
     return psycopg2.connect(database_url)
 
 class WhatsAppMessage(BaseModel):
@@ -89,6 +112,8 @@ class WhatsAppMessage(BaseModel):
     text_content: Optional[str] = None
 
 def get_client_state(phone: str):
+    if not database_url:
+        return {"is_vip": False, "bot_paused": False}
     with get_db_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute(
@@ -106,6 +131,8 @@ def get_client_state(phone: str):
                 return {"is_vip": result[0], "bot_paused": result[1]}
 
 def get_active_inventory_string():
+    if not database_url:
+        return "No database inventory configured."
     with get_db_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute(
@@ -148,13 +175,8 @@ def send_whatsapp_message(phone_number: str, text: str):
 
     payload = {
         "number": phone_number,
-        "options": {
-            "delay": 1200, 
-            "presence": "composing"
-        },
-        "textMessage": {
-            "text": text
-        }
+        "text": text,
+        "delay": 1200,
     }
 
     try:
@@ -185,33 +207,61 @@ handoff_tool = {
     ]
 }
 
+def load_business_file(alias: str) -> str:
+    """Load a text knowledge file configured as BUSINESS_FILE_<alias>."""
+    variable_name = f"BUSINESS_FILE_{alias.upper()}"
+    source = os.getenv(variable_name)
+    if not source:
+        raise ValueError(f"Missing Railway variable {variable_name}")
+
+    if source.startswith("text:"):
+        content = source.removeprefix("text:")
+        if len(content.encode("utf-8")) > MAX_BUSINESS_FILE_BYTES:
+            raise ValueError(f"{variable_name} exceeds MAX_BUSINESS_FILE_BYTES")
+        return content
+
+    if source.startswith(("https://", "http://")):
+        response = requests.get(source, timeout=10)
+        response.raise_for_status()
+        if len(response.content) > MAX_BUSINESS_FILE_BYTES:
+            raise ValueError(f"{variable_name} exceeds MAX_BUSINESS_FILE_BYTES")
+        return response.content.decode("utf-8-sig")
+
+    if not os.path.isfile(source):
+        raise ValueError(f"{variable_name} is not a valid file path or HTTP(S) URL")
+    if os.path.getsize(source) > MAX_BUSINESS_FILE_BYTES:
+        raise ValueError(f"{variable_name} exceeds MAX_BUSINESS_FILE_BYTES")
+    with open(source, encoding="utf-8-sig") as business_file:
+        return business_file.read()
+
+
 def generate_system_prompt(inventory_string: str) -> str:
-    return f"""You are a helpful and concise sales assistant for our retail company.
-    Your ONLY goal is to assist customers with retail purchases based on the inventory below.
+    """Render the deployment prompt and only the files it explicitly references."""
+    prompt = SYSTEM_PROMPT.replace("{{inventory}}", inventory_string)
 
-    CURRENT INVENTORY:
-    {inventory_string}
+    def replace_file(match):
+        alias = match.group(1)
+        try:
+            return load_business_file(alias)
+        except (OSError, UnicodeError, ValueError, requests.RequestException) as error:
+            print(f"Could not load business file {alias}: {error}")
+            return f"[Business file {alias} is unavailable]"
 
-    RULES:
-    1. NEVER make up information, prices, or products. If it is not in the inventory, you do not know it.
-    2. NEVER attempt to negotiate or offer wholesale prices.
-    3. Keep responses under 3 sentences. Use a friendly, professional tone.
-    """
+    return BUSINESS_FILE_PATTERN.sub(replace_file, prompt)
 
 def run_llm_agent(user_text: str, inventory_string: str, phone: str):
-    messages = [
-        {"role": "user", "parts": [generate_system_prompt(inventory_string)]},
-        {"role": "user", "parts": [user_text]}
-    ]
+    if not gemini_client:
+        raise RuntimeError("GOOGLE_API_KEY is not configured")
 
-    response = gemini_model.generate_content(
-        contents=messages,
-        tools=handoff_tool,
-        tool_config={"function_calling_config": "auto"},
-        generation_config={
-            "temperature": 0.2,
-            "max_output_tokens": 1024
-        }
+    response = gemini_client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=user_text,
+        config=types.GenerateContentConfig(
+            system_instruction=generate_system_prompt(inventory_string),
+            tools=[handoff_tool],
+            temperature=0.2,
+            max_output_tokens=1024,
+        ),
     )
 
     if response.candidates and response.candidates[0].content.parts:
@@ -234,13 +284,14 @@ async def process_chat_logic(msg: WhatsAppMessage):
 
     # Manager command to hand control back to the AI (Manager types this in Chatwoot)
     if msg.text_content and msg.text_content.strip().lower() == "#bot":
-        with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    "UPDATE clients SET bot_paused = FALSE WHERE phone_number = %s;",
-                    (phone,)
-                )
-                conn.commit()
+        if database_url:
+            with get_db_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "UPDATE clients SET bot_paused = FALSE WHERE phone_number = %s;",
+                        (phone,)
+                    )
+                    conn.commit()
         send_whatsapp_message(phone, "🤖 Chatbot reactivado para esta conversación.")
         return
 
@@ -265,7 +316,165 @@ async def process_chat_logic(msg: WhatsAppMessage):
 def read_root():
     return {"status": "ok", "message": "API is online"}
 
+
+def _phone_from_jid(jid: Optional[str]) -> Optional[str]:
+    if not jid:
+        return None
+    return jid.split("@", 1)[0].split(":", 1)[0].lstrip("+")
+
+
+def _unwrap_webhook_payload(payload: dict) -> dict:
+    """Unwrap proxy/provider envelopes without mistaking message data for one."""
+    current = payload
+    for _ in range(3):
+        wrapped = next(
+            (
+                current.get(key)
+                for key in ("body", "payload")
+                if isinstance(current.get(key), dict)
+            ),
+            None,
+        )
+        if wrapped is None:
+            break
+        current = wrapped
+    return current
+
+
+def _extract_message_content(message) -> tuple[str, Optional[str]]:
+    """Extract text/media type from common Baileys/Evolution message objects."""
+    if isinstance(message, str):
+        return "text", message
+    if not isinstance(message, dict):
+        return "text", None
+
+    text = message.get("conversation") or message.get("text") or message.get("body")
+    if isinstance(text, dict):
+        text = text.get("body") or text.get("text")
+    if not text and isinstance(message.get("extendedTextMessage"), dict):
+        text = message["extendedTextMessage"].get("text")
+    if isinstance(message.get("imageMessage"), dict):
+        return "image", message["imageMessage"].get("caption")
+    if isinstance(message.get("documentMessage"), dict):
+        return "document", message["documentMessage"].get("caption")
+    if isinstance(message.get("audioMessage"), dict):
+        return "audio", None
+    return "text", text
+
+
+def normalize_webhook_payload(payload: dict) -> Optional[WhatsAppMessage]:
+    """Convert Evolution API or Chatwoot webhook JSON into one internal message."""
+    payload = _unwrap_webhook_payload(payload)
+    event = str(payload.get("event", "")).lower().replace("_", ".")
+
+    # Keep compatibility with the original, simple webhook body.
+    if payload.get("sender_id") and payload.get("message_type"):
+        return WhatsAppMessage(**payload)
+
+    data = payload.get("data") or {}
+    if isinstance(data, list):
+        data = data[0] if data else {}
+    looks_like_evolution = isinstance(data, dict) and any(
+        key in data for key in ("key", "message", "remoteJid", "sender")
+    )
+    if event in {"messages.upsert", "messages.update"} or looks_like_evolution:
+        key = data.get("key") or {}
+        if key.get("fromMe") or data.get("fromMe"):
+            return None
+
+        phone = _phone_from_jid(
+            key.get("remoteJidAlt")
+            or key.get("remoteJid")
+            or data.get("remoteJid")
+            or data.get("sender")
+            or data.get("from")
+        )
+        message_type, text = _extract_message_content(
+            data.get("message") or data.get("text") or data.get("body")
+        )
+        if phone and (text or message_type != "text"):
+            return WhatsAppMessage(
+                sender_id=phone, message_type=message_type, text_content=text
+            )
+        return None
+
+    # Meta Cloud API shape (also used by some Evolution proxies).
+    entries = payload.get("entry") or []
+    if entries:
+        try:
+            value = entries[0]["changes"][0]["value"]
+            raw_message = value.get("messages", [])[0]
+        except (IndexError, KeyError, TypeError):
+            raw_message = None
+        if raw_message:
+            message_type = raw_message.get("type", "text")
+            content = raw_message.get(message_type) or {}
+            text = content.get("body") or content.get("caption")
+            return WhatsAppMessage(
+                sender_id=str(raw_message["from"]).lstrip("+"),
+                message_type="image" if message_type == "image" else (
+                    "document" if message_type == "document" else "text"
+                ),
+                text_content=text,
+            )
+
+    # Older/forwarded Evolution payloads can put sender and message at the root.
+    phone = _phone_from_jid(
+        payload.get("sender") or payload.get("from") or payload.get("remoteJid")
+    )
+    if phone and not payload.get("fromMe"):
+        message_type, text = _extract_message_content(
+            payload.get("message") or payload.get("text") or payload.get("body")
+        )
+        if text or message_type != "text":
+            return WhatsAppMessage(
+                sender_id=phone, message_type=message_type, text_content=text
+            )
+
+    if event == "message.created" or payload.get("message_type") is not None:
+        if str(payload.get("message_type", "")).lower() not in {"incoming", "0"}:
+            return None
+        conversation = payload.get("conversation") or {}
+        sender = payload.get("sender") or (conversation.get("meta") or {}).get("sender") or {}
+        phone = sender.get("phone_number") or sender.get("identifier")
+        attachments = payload.get("attachments") or []
+        message_type = "text"
+        if attachments:
+            file_type = str(attachments[0].get("file_type", "")).lower()
+            message_type = "image" if file_type == "image" else "document"
+        if phone:
+            return WhatsAppMessage(
+                sender_id=str(phone).lstrip("+"),
+                message_type=message_type,
+                text_content=payload.get("content"),
+            )
+        return None
+
+    return None
+
+
+async def log_and_process_message(msg: WhatsAppMessage):
+    try:
+        await process_chat_logic(msg)
+    except Exception as error:
+        print(f"Error processing message from {msg.sender_id}: {error}")
+
+
 @app.post("/webhook")
-async def whatsapp_webhook(payload: WhatsAppMessage, background_tasks: BackgroundTasks):
-    background_tasks.add_task(process_chat_logic, payload)
+@app.post("/chatwoot-webhook")
+@app.post("/")
+async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
+    payload = await request.json()
+    msg = normalize_webhook_payload(payload)
+    if msg:
+        print(
+            f"Accepted incoming webhook for {msg.sender_id}; "
+            f"message_type={msg.message_type}"
+        )
+        background_tasks.add_task(log_and_process_message, msg)
+    else:
+        print(
+            "Ignored unsupported or outgoing webhook. "
+            f"event={payload.get('event', 'unknown')!r} keys={sorted(payload.keys())}"
+        )
     return Response(status_code=200)
