@@ -10,11 +10,22 @@ def _truthy(value: str) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def should_run_embedded_worker(environ=None) -> bool:
+    """Run an RQ worker unless a dedicated worker was explicitly configured.
+
+    Defaulting to an embedded worker keeps webhook jobs from getting stranded
+    when a Railway service accidentally uses the web start command. Deployments
+    with a verified dedicated worker must set RUN_WORKER_IN_WEB=false.
+    """
+    environ = os.environ if environ is None else environ
+    return bool(environ.get("REDIS_URL")) and _truthy(environ.get("RUN_WORKER_IN_WEB", "true"))
+
+
 def main():
-    """Start the Railway web server and, by default, an in-container worker."""
+    """Start the Railway web server and optionally an in-container worker."""
     worker_process = None
     redis_url = os.getenv("REDIS_URL")
-    run_worker = _truthy(os.getenv("RUN_WORKER_IN_WEB", "true")) and bool(redis_url)
+    run_worker = should_run_embedded_worker()
 
     if run_worker:
         print("[LAUNCHER] REDIS_URL detected; starting embedded RQ worker subprocess.")
