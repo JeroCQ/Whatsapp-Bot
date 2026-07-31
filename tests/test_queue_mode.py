@@ -1,6 +1,15 @@
 import unittest
+from datetime import timedelta
+from unittest.mock import patch
 
-from queue_client import web_queue_mode
+from queue_client import (
+    claim_follow_up,
+    enqueue_in,
+    follow_up_delay_seconds,
+    invalidate_follow_up,
+    register_follow_up,
+    web_queue_mode,
+)
 
 
 class WebQueueModeTests(unittest.TestCase):
@@ -13,6 +22,66 @@ class WebQueueModeTests(unittest.TestCase):
     def test_false_selects_external_worker(self):
         environment = {"REDIS_URL": "redis://example", "RUN_WORKER_IN_WEB": "false"}
         self.assertEqual(web_queue_mode(environment), "external_worker")
+
+
+class FollowUpDelayTests(unittest.TestCase):
+    def test_converts_model_minutes_to_seconds(self):
+        self.assertEqual(follow_up_delay_seconds(120, {}), 7200)
+
+    def test_test_override_avoids_waiting_two_hours(self):
+        environment = {"FOLLOW_UP_TEST_DELAY_SECONDS": "5"}
+        self.assertEqual(follow_up_delay_seconds(120, environment), 5)
+
+    def test_test_override_never_allows_zero_delay(self):
+        environment = {"FOLLOW_UP_TEST_DELAY_SECONDS": "0"}
+        self.assertEqual(follow_up_delay_seconds(120, environment), 1)
+
+    def test_enqueue_in_passes_exact_delay_to_rq(self):
+        class FakeQueue:
+            def __init__(self):
+                self.call = None
+
+            def enqueue_in(self, *args, **kwargs):
+                self.call = (args, kwargs)
+                return "scheduled-job"
+
+        queue = FakeQueue()
+        callback = lambda: None
+        with patch("queue_client.get_queue", return_value=queue):
+            result = enqueue_in(5, callback, "phone", job_id="follow-up:test")
+
+        self.assertEqual(result, "scheduled-job")
+        self.assertEqual(queue.call[0][:3], (timedelta(seconds=5), callback, "phone"))
+        self.assertEqual(queue.call[1]["job_id"], "follow-up_test")
+
+    def test_redis_token_can_be_registered_cancelled_and_claimed(self):
+        class FakeRedis:
+            def __init__(self):
+                self.values = {}
+
+            def set(self, key, value, ex=None):
+                self.values[key] = value
+
+            def delete(self, key):
+                return int(self.values.pop(key, None) is not None)
+
+            def eval(self, script, key_count, key, token):
+                if self.values.get(key) != token:
+                    return 0
+                return self.delete(key)
+
+        class FakeQueue:
+            connection = FakeRedis()
+
+        queue = FakeQueue()
+        with patch("queue_client.get_queue", return_value=queue):
+            first_token = register_follow_up("57300", 10)
+            self.assertTrue(claim_follow_up("57300", first_token))
+            self.assertFalse(claim_follow_up("57300", first_token))
+
+            second_token = register_follow_up("57300", 10)
+            invalidate_follow_up("57300")
+            self.assertFalse(claim_follow_up("57300", second_token))
 
 
 if __name__ == "__main__":

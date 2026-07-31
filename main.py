@@ -21,7 +21,16 @@ from database import (
 )
 from http_client import MEDIA_TIMEOUT, get, post
 from processing_lock import phone_lock
-from queue_client import enqueue, get_queue_stats, queue_enabled
+from queue_client import (
+    claim_follow_up,
+    enqueue,
+    enqueue_in,
+    follow_up_delay_seconds,
+    get_queue_stats,
+    invalidate_follow_up,
+    queue_enabled,
+    register_follow_up,
+)
 from webhook_utils import chatwoot_event_identity, is_restart_command
 
 app = FastAPI()
@@ -95,6 +104,35 @@ def send_whatsapp_message(to_number: str, text: str):
         post(url, headers=headers, json=payload).raise_for_status()
     except requests.exceptions.RequestException as e:
         print(f"Error enviando WhatsApp de texto a {to_number}: {e}")
+
+
+def send_scheduled_follow_up(phone_number: str, token: str, message: str):
+    """Send a follow-up only if no newer customer message invalidated it."""
+    if not claim_follow_up(phone_number, token):
+        print(f"[FOLLOW UP] Cancelado o reemplazado para {phone_number}")
+        return
+    send_whatsapp_message(phone_number, message)
+    save_message_log(phone_number, "model", message)
+    print(f"[FOLLOW UP] Enviado a {phone_number}")
+
+
+def schedule_follow_up(phone_number: str, message: str, delay_minutes: int):
+    """Persist and enqueue the AI-authored follow-up."""
+    if not message or not queue_enabled():
+        if message:
+            print("[FOLLOW UP WARN] REDIS_URL no configurado; no se puede programar el mensaje durablemente")
+        return
+    try:
+        delay_seconds = follow_up_delay_seconds(delay_minutes)
+        token = register_follow_up(phone_number, delay_seconds)
+        enqueue_in(delay_seconds, send_scheduled_follow_up, phone_number, token, message,
+                   job_id=f"follow-up-{phone_number}-{token}")
+        print(f"[FOLLOW UP] Programado para {phone_number} en {delay_seconds} segundos")
+    except Exception as exc:
+        invalidate_follow_up(phone_number)
+        # A reminder must never turn an otherwise successful customer reply into
+        # a failed/retried webhook (for example, while the SQL migration is pending).
+        print(f"[FOLLOW UP WARN] No se pudo programar para {phone_number}: {exc}")
 
 
 def send_whatsapp_media(to_number: str, media_id: str, media_type: str, caption: str = None, filename: str = None):
@@ -245,6 +283,8 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
     is_image = effective_media_type == "image"
     is_audio = effective_media_type == "audio"
     print(f"\n[DEBUG] 1. Recibido mensaje de {sender_phone} (Media: {effective_media_type or 'texto'})")
+    # Any inbound customer activity cancels the previously planned reminder.
+    invalidate_follow_up(sender_phone)
 
     if is_restart_command(message_body):
         reset_client_history(sender_phone)
@@ -311,6 +351,8 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
             save_message_log(sender_phone, "system", f"Archivos enviados: {', '.join(ai_turn.requested_files)}")
         new_state = get_or_create_customer_state(sender_phone)
         _create_handoff_ticket_if_needed(sender_phone, sender_name, new_state, effective_media_id, message_body, mime_type, filename)
+        if not new_state.get("is_paused"):
+            schedule_follow_up(sender_phone, ai_turn.follow_up_message, ai_turn.follow_up_delay_minutes)
 
 
 def process_chatwoot_event(data: dict, event_id: str = None):
