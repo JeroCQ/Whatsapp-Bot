@@ -68,6 +68,12 @@ scheduler (el worker incluido ya usa `with_scheduler=True`). Vuelve a ejecutar
 `scalability.sql` en Supabase para agregar `follow_up_token` antes de desplegar. Sin
 Redis el bot responde normalmente, pero no programa seguimientos no durables.
 
+Una respuesta de simple confirmación (`ok`, `listo`, `bueno`) no cierra el pendiente
+si anteriormente se solicitaron datos. Gemini debe mencionar en el follow up los datos
+concretos que todavía faltan. Además, cuando `RUN_WORKER_IN_WEB=false`, el launcher
+verifica que exista al menos un worker RQ vivo; si no encuentra ninguno inicia un worker
+embebido de respaldo para evitar que los jobs queden abandonados en Redis.
+
 #### Prueba rápida sin esperar dos horas
 
 En un ambiente de pruebas agrega temporalmente `FOLLOW_UP_TEST_DELAY_SECONDS=10` y

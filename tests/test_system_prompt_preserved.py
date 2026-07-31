@@ -6,7 +6,7 @@ from pathlib import Path
 import unittest
 
 
-EXPECTED_SYSTEM_PROMPT_SHA256 = "66fd307801f0b35018491b35dbabf30d595da3cfbfba9439a29206f63e60b91e"
+EXPECTED_SYSTEM_PROMPT_SHA256 = "da4128eb5aab62eab68454561997ebdb86cb8bee0ab8d929b1e15f4b20a43699"
 
 
 def read_system_instruction_literal() -> str:

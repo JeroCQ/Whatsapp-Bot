@@ -97,7 +97,7 @@ def get_queue_stats() -> dict:
 
         queue = get_queue()
         connection = queue.connection
-        workers = Worker.all(connection=connection)
+        workers = [worker for worker in Worker.all(connection=connection) if QUEUE_NAME in worker.queue_names()]
         return {
             "enabled": True,
             "queue": QUEUE_NAME,
