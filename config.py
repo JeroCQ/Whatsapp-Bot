@@ -32,6 +32,8 @@ class Settings:
     PHONE_LOCK_TTL_SECONDS = int(os.getenv("PHONE_LOCK_TTL_SECONDS", "180"))
     # JSON array of customer-facing files the model is allowed to request.
     PRESAVED_FILES_JSON = os.getenv("PRESAVED_FILES_JSON", "[]")
+    # Separate catalog for Quesos Memo's so the existing deployment variable remains reusable.
+    catalogo_memos = os.getenv("catalogo_memos", "[]")
     
     @classmethod
     def validate(cls):

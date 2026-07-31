@@ -1,4 +1,4 @@
-"""Regression checks for the hand-maintained Alexandra system prompt."""
+"""Regression checks for the hand-maintained Quesos Memo's system prompt."""
 
 import ast
 import hashlib
@@ -6,7 +6,7 @@ from pathlib import Path
 import unittest
 
 
-EXPECTED_SYSTEM_PROMPT_SHA256 = "eb02129a6a381f8ffe10ba9e77b5512746d5053876568e6f139d2a6ea48c87d7"
+EXPECTED_SYSTEM_PROMPT_SHA256 = "e65c25aa16ff442d3ba8ede54becbe407053c6b3ee2f8e719b6a8834da80869e"
 
 
 def read_system_instruction_literal() -> str:
