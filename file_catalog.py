@@ -19,16 +19,16 @@ class PresavedFile:
     default_caption: Optional[str] = None
 
 
-def load_file_catalog(raw_json: str) -> dict[str, PresavedFile]:
-    """Parse and validate PRESAVED_FILES_JSON, returning files keyed by safe AI id."""
+def load_file_catalog(raw_json: str, variable_name: str = "PRESAVED_FILES_JSON") -> dict[str, PresavedFile]:
+    """Parse and validate a file-catalog variable, returning files keyed by safe AI id."""
     if not raw_json or not raw_json.strip():
         return {}
     try:
         entries = json.loads(raw_json)
     except json.JSONDecodeError as exc:
-        raise ValueError(f"PRESAVED_FILES_JSON is not valid JSON: {exc}") from exc
+        raise ValueError(f"{variable_name} is not valid JSON: {exc}") from exc
     if not isinstance(entries, list):
-        raise ValueError("PRESAVED_FILES_JSON must be a JSON array")
+        raise ValueError(f"{variable_name} must be a JSON array")
 
     result = {}
     for index, entry in enumerate(entries):
