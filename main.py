@@ -10,10 +10,13 @@ from bot import FILE_CATALOG, process_message_logic, transcribe_audio_message
 from config import config
 from database import (
     claim_webhook_event,
+    claim_follow_up,
     get_message_logs,
     get_or_create_customer_state,
     get_phone_by_chatwoot_id,
     mark_webhook_event_processed,
+    invalidate_follow_up,
+    register_follow_up,
     reset_client_history,
     resume_bot_state,
     save_message_log,

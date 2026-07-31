@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import uuid
 
 from supabase import create_client, Client
 from config import config
@@ -104,6 +105,33 @@ def save_message_log(phone_number: str, role: str, content: str):
         }).execute()
     except Exception as e:
         print(f"Error guardando log de mensaje: {e}")
+
+
+def register_follow_up(phone_number: str) -> str:
+    """Replace any pending follow-up and return its one-time token."""
+    token = uuid.uuid4().hex
+    supabase.table("conversation_states").update({"follow_up_token": token}).eq("phone_number", phone_number).execute()
+    return token
+
+
+def invalidate_follow_up(phone_number: str):
+    """Cancel a pending follow-up when the customer writes again."""
+    try:
+        supabase.table("conversation_states").update({"follow_up_token": None}).eq("phone_number", phone_number).execute()
+    except Exception as e:
+        print(f"[FOLLOW UP WARN] No se pudo cancelar el follow up de {phone_number}: {e}")
+
+
+def claim_follow_up(phone_number: str, token: str) -> bool:
+    """Atomically consume a still-current follow-up token."""
+    try:
+        result = supabase.table("conversation_states").update({"follow_up_token": None}).eq(
+            "phone_number", phone_number
+        ).eq("follow_up_token", token).eq("is_paused", False).execute()
+        return bool(result.data)
+    except Exception as e:
+        print(f"[FOLLOW UP WARN] No se pudo validar el follow up de {phone_number}: {e}")
+        return False
 
 
 def get_message_logs(phone_number: str, limit: int = 6):

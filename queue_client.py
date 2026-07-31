@@ -71,6 +71,15 @@ def claim_follow_up(phone_number: str, token: str) -> bool:
         return False
 
 
+def follow_up_delay_seconds(delay_minutes: int, environ=None) -> int:
+    """Resolve follow-up delay, allowing an explicit staging-only fast override."""
+    environ = os.environ if environ is None else environ
+    override = str(environ.get("FOLLOW_UP_TEST_DELAY_SECONDS", "")).strip()
+    if override:
+        return max(1, int(override))
+    return max(1, int(delay_minutes)) * 60
+
+
 def queue_enabled() -> bool:
     return bool(REDIS_URL)
 
