@@ -77,7 +77,7 @@ Never leave a dedicated worker running while also setting `RUN_WORKER_IN_WEB=tru
 
 ### Local/development commands
 
-Run the Railway-style web process, which starts an embedded worker when `REDIS_URL` exists:
+Run the Railway-style web process, which only enqueues when `REDIS_URL` exists:
 
 ```bash
 python run_railway.py
