@@ -12,7 +12,8 @@ def main():
 
     connection = Redis.from_url(REDIS_URL)
     worker = Worker([QUEUE_NAME], connection=connection)
-    print(f"[WORKER] Starting RQ worker for queue={QUEUE_NAME}")
+    commit_sha = os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_COMMIT_SHA") or "unknown"
+    print(f"[WORKER] Starting RQ worker for queue={QUEUE_NAME} commit={commit_sha}")
     worker.work(with_scheduler=True)
 
 
