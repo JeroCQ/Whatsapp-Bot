@@ -11,14 +11,14 @@ def _truthy(value: str) -> bool:
 
 
 def should_run_embedded_worker(environ=None) -> bool:
-    """Only run an RQ worker in the web service when explicitly requested.
+    """Run an RQ worker unless a dedicated worker was explicitly configured.
 
-    A dedicated Railway worker and an embedded worker consume the same Redis
-    queue nondeterministically.  Keeping this opt-in prevents an out-of-date
-    web deployment from processing jobs intended for the dedicated worker.
+    Defaulting to an embedded worker keeps webhook jobs from getting stranded
+    when a Railway service accidentally uses the web start command. Deployments
+    with a verified dedicated worker must set RUN_WORKER_IN_WEB=false.
     """
     environ = os.environ if environ is None else environ
-    return bool(environ.get("REDIS_URL")) and _truthy(environ.get("RUN_WORKER_IN_WEB", "false"))
+    return bool(environ.get("REDIS_URL")) and _truthy(environ.get("RUN_WORKER_IN_WEB", "true"))
 
 
 def main():
