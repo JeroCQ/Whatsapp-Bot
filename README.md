@@ -75,6 +75,44 @@ For a separate worker service, override Railway's start command with `python -m 
 
 Never leave a dedicated worker running while also setting `RUN_WORKER_IN_WEB=true`. RQ assigns each job to whichever worker wins the race; if the two Railway services run different commits or brand variables, customers can receive answers from the wrong bot. Likewise, bots sharing Redis must use different `QUEUE_NAME` values.
 
+### Topología recomendada para producción en Railway
+
+Para una instalación pequeña se puede dejar un solo servicio con el worker embebido.
+No hace falta crear `RUN_WORKER_IN_WEB`: su valor predeterminado es `true`. En esa
+topología se puede eliminar cualquier servicio Railway adicional llamado `worker`, ya
+que el proceso mostrado por `[LAUNCHER] ... starting embedded RQ worker subprocess`
+es quien consume la cola.
+
+Para escalar horizontalmente se recomienda conservar un servicio web y uno o más
+servicios worker separados:
+
+| Servicio | Start command | `QUEUE_NAME` | `RUN_WORKER_IN_WEB` |
+| --- | --- | --- | --- |
+| Web Memo's | el comando normal de `railway.json` | `whatsapp-events-memos` | `false` |
+| Worker Memo's | `python -m workers.runner` | `whatsapp-events-memos` | no se necesita |
+
+En Railway, `RUN_WORKER_IN_WEB=false` se agrega en **Variables** del servicio web; no
+es una variable histórica ni provista automáticamente. El start command del worker se
+configura como override en **Settings → Deploy → Custom Start Command**. Si Railway
+aplica variables compartidas, se debe sobrescribir `QUEUE_NAME` en ambos servicios para
+que coincida exactamente. El worker correcto no inicia Uvicorn: después de `Starting
+Container` debe mostrar `[WORKER] Starting RQ worker`, `*** Listening on ...` y quedarse
+escuchando. Un servicio que además muestra `Uvicorn running on ...` está ejecutando el
+launcher web y no está configurado como worker dedicado.
+
+Antes de desactivar el worker embebido, comprueba estas cuatro condiciones:
+
+1. Web y worker imprimen el mismo `commit`.
+2. Web y worker usan exactamente el mismo `QUEUE_NAME` específico de la marca.
+3. El worker muestra `*** Listening on <QUEUE_NAME>...`.
+4. La ruta `/` del web reporta `queue.workers_seen` mayor o igual a `1`.
+
+Con esa topología se pueden añadir réplicas del servicio worker para absorber más
+conversaciones sin duplicar el servidor web. La capacidad real depende sobre todo de
+los límites de Gemini, Meta, Supabase y del valor de `GEMINI_MAX_CONCURRENT`; tener una
+cola y varios workers permite escalar, pero no garantiza por sí solo una cifra fija de
+conversaciones simultáneas.
+
 ### Local/development commands
 
 Run the Railway-style web process, which only enqueues when `REDIS_URL` exists:
