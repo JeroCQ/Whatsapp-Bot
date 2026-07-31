@@ -24,7 +24,16 @@ from database import (
 )
 from http_client import MEDIA_TIMEOUT, get, post
 from processing_lock import phone_lock
-from queue_client import enqueue, enqueue_in, follow_up_delay_seconds, get_queue_stats, queue_enabled
+from queue_client import (
+    claim_follow_up,
+    enqueue,
+    enqueue_in,
+    follow_up_delay_seconds,
+    get_queue_stats,
+    invalidate_follow_up,
+    queue_enabled,
+    register_follow_up,
+)
 from webhook_utils import chatwoot_event_identity, is_restart_command
 
 app = FastAPI()
@@ -117,8 +126,8 @@ def schedule_follow_up(phone_number: str, message: str, delay_minutes: int):
             print("[FOLLOW UP WARN] REDIS_URL no configurado; no se puede programar el mensaje durablemente")
         return
     try:
-        token = register_follow_up(phone_number)
         delay_seconds = follow_up_delay_seconds(delay_minutes)
+        token = register_follow_up(phone_number, delay_seconds)
         enqueue_in(delay_seconds, send_scheduled_follow_up, phone_number, token, message,
                    job_id=f"follow-up-{phone_number}-{token}")
         print(f"[FOLLOW UP] Programado para {phone_number} en {delay_seconds} segundos")

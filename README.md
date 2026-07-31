@@ -64,8 +64,8 @@ el cliente escribe antes, el mensaje pendiente se cancela; los handoffs tampoco 
 seguimiento.
 
 El follow up usa trabajos programados de RQ: requiere `REDIS_URL` y un worker con
-scheduler (el worker incluido ya usa `with_scheduler=True`). Vuelve a ejecutar
-`scalability.sql` en Supabase para agregar `follow_up_token` antes de desplegar. Sin
+scheduler (el worker incluido ya usa `with_scheduler=True`). El token de cancelación
+también vive en Redis, así que **no requiere modificar el esquema de Supabase**. Sin
 Redis el bot responde normalmente, pero no programa seguimientos no durables.
 
 Una respuesta de simple confirmación (`ok`, `listo`, `bueno`) no cierra el pendiente

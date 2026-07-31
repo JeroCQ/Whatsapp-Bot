@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import uuid
 from datetime import timedelta
 from typing import Any, Callable
 
@@ -14,6 +15,60 @@ FAILURE_TTL = int(os.getenv("QUEUE_FAILURE_TTL_SECONDS", "86400"))
 
 _queue = None
 _SAFE_JOB_ID_RE = re.compile(r"[^A-Za-z0-9_-]+")
+_FOLLOW_UP_TOKEN_PREFIX = "whatsapp-follow-up-token:"
+_CLAIM_TOKEN_SCRIPT = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('DEL', KEYS[1])
+end
+return 0
+"""
+
+
+def follow_up_delay_seconds(delay_minutes: int, environ=None) -> int:
+    """Resolve follow-up delay, allowing an explicit staging-only fast override."""
+    environ = os.environ if environ is None else environ
+    override = str(environ.get("FOLLOW_UP_TEST_DELAY_SECONDS", "")).strip()
+    if override:
+        return max(1, int(override))
+    return max(1, int(delay_minutes)) * 60
+
+
+def _follow_up_key(phone_number: str) -> str:
+    return f"{_FOLLOW_UP_TOKEN_PREFIX}{phone_number}"
+
+
+def register_follow_up(phone_number: str, ttl_seconds: int) -> str:
+    """Store the current reminder token in Redis, replacing an older reminder."""
+    queue = get_queue()
+    if queue is None:
+        raise RuntimeError("REDIS_URL is not configured; follow-up state is unavailable")
+    token = uuid.uuid4().hex
+    # Keep enough time for delayed jobs and temporary worker outages, without
+    # accumulating permanent per-customer state.
+    queue.connection.set(_follow_up_key(phone_number), token, ex=max(3600, int(ttl_seconds) + 86400))
+    return token
+
+
+def invalidate_follow_up(phone_number: str):
+    """Cancel the current reminder without requiring a Supabase schema change."""
+    try:
+        queue = get_queue()
+        if queue is not None:
+            queue.connection.delete(_follow_up_key(phone_number))
+    except Exception as exc:
+        logger.warning("Could not invalidate follow-up for %s: %s", phone_number, exc)
+
+
+def claim_follow_up(phone_number: str, token: str) -> bool:
+    """Atomically consume the reminder only when its Redis token is still current."""
+    try:
+        queue = get_queue()
+        if queue is None:
+            return False
+        return bool(queue.connection.eval(_CLAIM_TOKEN_SCRIPT, 1, _follow_up_key(phone_number), token))
+    except Exception as exc:
+        logger.warning("Could not claim follow-up for %s: %s", phone_number, exc)
+        return False
 
 
 def follow_up_delay_seconds(delay_minutes: int, environ=None) -> int:
