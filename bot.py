@@ -29,6 +29,8 @@ class BotResponse(BaseModel):
     handoff_reason: str
     requested_files: List[str] = Field(default_factory=list)
     send_files_before_response: bool = False
+    follow_up_message: str = ""
+    follow_up_delay_minutes: int = 120
 
 
 @dataclass
@@ -36,6 +38,8 @@ class BotTurn:
     response: str
     requested_files: list[str]
     send_files_before_response: bool = False
+    follow_up_message: str = ""
+    follow_up_delay_minutes: int = 120
 
 
 FILE_CATALOG = load_file_catalog(config.catalogo_memos, "catalogo_memos")
@@ -85,6 +89,8 @@ El usuario te leerá desde WhatsApp, por lo que tus mensajes deben ser atractivo
 3. Usa listas con viñetas o emojis al enumerar productos o características para darle estructura visual.
 4. Usa emojis de manera estratégica y natural (🧀, 🛵, 💸, 🙌, 🍕, 📍), pero sin saturar el mensaje.
 5. ¡CRÍTICO - CATÁLOGO POR DEFECTO!: Si el cliente pregunta "¿qué productos tienen?", pide precios generales, solicita el catálogo, o simplemente quiere saber qué vendemos, tu PRIMERA opción SIEMPRE será mostrar los productos enviando el archivo del catálogo. Solicita el archivo de catálogo disponible en ARCHIVOS PREGUARDADOS usando su ID exacto en `requested_files`. Acompaña el envío con un mensaje cálido invitándolo a revisarlo, y EVITA responder con la lista completa de productos en texto; deja que la imagen hable por sí sola.
+
+6. FOLLOW UP POR FALTA DE RESPUESTA: Cuando tu respuesta deje una venta o pregunta pendiente de contestación por el cliente, escribe en `follow_up_message` un mensaje breve, natural y no repetitivo para retomarla, y usa `follow_up_delay_minutes = 120` (2 horas). Si no corresponde insistir (despedida, reclamo, handoff o conversación ya cerrada), devuelve `follow_up_message` vacío. Este texto y el tiempo pueden ajustarse aquí en el system prompt sin cambiar el código.
 
 Base de Conocimiento de Productos:
 Manejamos la Línea Quesos Memos. Los precios se calculan en base a los gramos de la presentación así:
@@ -210,7 +216,20 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> BotT
         requested_files = list(dict.fromkeys(
             file_id for file_id in ai_data.get("requested_files", []) if file_id in FILE_CATALOG
         ))
-        return BotTurn(response_text, requested_files, bool(ai_data.get("send_files_before_response", False)))
+        follow_up_message = str(ai_data.get("follow_up_message") or "").strip()
+        try:
+            follow_up_delay_minutes = max(1, min(int(ai_data.get("follow_up_delay_minutes", 120)), 10080))
+        except (TypeError, ValueError):
+            follow_up_delay_minutes = 120
+        if trigger_handoff:
+            follow_up_message = ""
+        return BotTurn(
+            response_text,
+            requested_files,
+            bool(ai_data.get("send_files_before_response", False)),
+            follow_up_message,
+            follow_up_delay_minutes,
+        )
 
     except Exception as e:
         import traceback

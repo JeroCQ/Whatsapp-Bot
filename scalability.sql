@@ -19,6 +19,10 @@ CREATE INDEX IF NOT EXISTS idx_conversation_states_chatwoot_conversation_id
 ON public.conversation_states(chatwoot_conversation_id)
 WHERE chatwoot_conversation_id IS NOT NULL;
 
+-- Token used to cancel/replace delayed follow-ups when the customer replies.
+ALTER TABLE public.conversation_states
+ADD COLUMN IF NOT EXISTS follow_up_token character varying;
+
 CREATE UNIQUE INDEX IF NOT EXISTS uq_conversation_states_active_chatwoot_conversation_id
 ON public.conversation_states(chatwoot_conversation_id)
 WHERE chatwoot_conversation_id IS NOT NULL;
