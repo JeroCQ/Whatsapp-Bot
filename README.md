@@ -21,7 +21,7 @@ Existing required variables are still needed:
 For scalable queued processing, also set:
 
 - `REDIS_URL` - enables durable RQ queue processing.
-- `QUEUE_NAME` - optional, defaults to `whatsapp-events`.
+- `QUEUE_NAME` - optional, defaults to `whatsapp-events`. It **must be unique per bot/brand** when multiple bots share a Redis instance (for example, `whatsapp-events-memos`).
 - `QUEUE_JOB_TIMEOUT_SECONDS` - optional, defaults to `180`.
 - `GEMINI_MAX_CONCURRENT` - optional, defaults to `8` per process.
 - `PHONE_LOCK_TTL_SECONDS` - optional, defaults to `180`.
@@ -55,22 +55,25 @@ take effect after restarting/redeploying the service.
 `PRESAVED_FILES_JSON` se conserva sin cambios para que el mismo entorno de Railway
 pueda seguir usándose con el otro proyecto; este bot solo carga `catalogo_memos`.
 
-If Railway logs show `Queue enabled: True`, the web service can see `REDIS_URL`. The Railway launcher now starts an embedded worker automatically in the same container by default, so `queue.workers_seen` should become at least `1` after startup.
+If Railway logs show `Queue enabled: True`, the web service can see `REDIS_URL`. By default, the Railway launcher also starts an embedded worker so queued messages cannot remain unanswered. Use either that embedded worker **or** one verified dedicated worker, never both. Set `RUN_WORKER_IN_WEB=false` only after the dedicated service logs `[WORKER] Starting RQ worker` with the expected queue and commit.
 
 ### Railway deployment checklist
 
 1. Add a Redis service/plugin in Railway.
 2. In the bot web service variables, set `REDIS_URL` from that Redis service.
-3. Deploy the bot web service normally. Railway uses `railway.json`, whose start command runs `python run_railway.py`.
-4. Check the deployment logs. You should see both of these lines:
+3. Deploy the bot web service normally. Railway uses `railway.json`, whose start command runs `python run_railway.py` and starts its embedded worker.
+4. Check the same service logs for both lines:
 
 ```text
 [LAUNCHER] REDIS_URL detected; starting embedded RQ worker subprocess.
-[WORKER] Starting RQ worker for queue=whatsapp-events
+[WORKER] Starting RQ worker for queue=whatsapp-events commit=<same-commit-as-web>
 ```
 
 5. Open the web app root URL (`https://your-app.up.railway.app/`) and check the JSON. `queue.enabled` should be `true`, and `queue.workers_seen` should be at least `1` after the worker is running.
-6. For larger production scale, you can later create a separate worker service using start command `python -m workers.runner` and set `RUN_WORKER_IN_WEB=false` on the web service. The worker service must have the same environment variables as the web service, including `REDIS_URL`, Supabase, WhatsApp, Chatwoot, and Gemini variables.
+
+For a separate worker service, override Railway's start command with `python -m workers.runner`, copy the same variables and commit, and verify its logs contain `[WORKER] Starting RQ worker`. Only then set `RUN_WORKER_IN_WEB=false` on the web service. Logs containing only Uvicorn startup (`Uvicorn running on ...`) mean the supposed worker is actually another web process and will not consume queued jobs.
+
+Never leave a dedicated worker running while also setting `RUN_WORKER_IN_WEB=true`. RQ assigns each job to whichever worker wins the race; if the two Railway services run different commits or brand variables, customers can receive answers from the wrong bot. Likewise, bots sharing Redis must use different `QUEUE_NAME` values.
 
 ### Local/development commands
 
