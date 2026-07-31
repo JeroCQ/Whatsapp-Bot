@@ -55,6 +55,42 @@ take effect after restarting/redeploying the service.
 `PRESAVED_FILES_JSON` se conserva sin cambios para que el mismo entorno de Railway
 pueda seguir usándose con el otro proyecto; este bot solo carga `catalogo_memos`.
 
+### Follow up automático
+
+Gemini prepara un mensaje de seguimiento cuando la respuesta deja una venta pendiente.
+La regla `FOLLOW UP POR FALTA DE RESPUESTA` del system prompt define el texto y
+`follow_up_delay_minutes` (120 minutos por defecto), así que ambos se ajustan allí. Si
+el cliente escribe antes, el mensaje pendiente se cancela; los handoffs tampoco generan
+seguimiento.
+
+El follow up usa trabajos programados de RQ: requiere `REDIS_URL` y un worker con
+scheduler (el worker incluido ya usa `with_scheduler=True`). Vuelve a ejecutar
+`scalability.sql` en Supabase para agregar `follow_up_token` antes de desplegar. Sin
+Redis el bot responde normalmente, pero no programa seguimientos no durables.
+
+Una respuesta de simple confirmación (`ok`, `listo`, `bueno`) no cierra el pendiente
+si anteriormente se solicitaron datos. Gemini debe mencionar en el follow up los datos
+concretos que todavía faltan. Además, cuando `RUN_WORKER_IN_WEB=false`, el launcher
+verifica que exista al menos un worker RQ vivo; si no encuentra ninguno inicia un worker
+embebido de respaldo para evitar que los jobs queden abandonados en Redis.
+
+#### Prueba rápida sin esperar dos horas
+
+En un ambiente de pruebas agrega temporalmente `FOLLOW_UP_TEST_DELAY_SECONDS=10` y
+reinicia el servicio. Esta variable sustituye únicamente la espera del scheduler: el
+mensaje continúa siendo generado con las reglas reales del system prompt.
+
+1. Envía al bot una consulta que deje una pregunta de venta pendiente y no respondas.
+2. Confirma en logs `FOLLOW UP] Programado ... en 10 segundos` y que el mensaje llegue
+   aproximadamente diez segundos después.
+3. Repite la consulta, pero responde antes de diez segundos. El job debe registrar
+   `FOLLOW UP] Cancelado o reemplazado` y no debe enviar el recordatorio.
+4. Elimina `FOLLOW_UP_TEST_DELAY_SECONDS` al terminar. Nunca debe quedar configurada en
+   producción; sin ella se respetan los 120 minutos definidos por el system prompt.
+
+La suite también verifica, sin dormir ni conectarse a Redis, que 120 minutos se
+convierten en 7200 segundos y que el override reduce la espera a segundos.
+
 If Railway logs show `Queue enabled: True`, the web service can see `REDIS_URL`. By default, the Railway launcher also starts an embedded worker so queued messages cannot remain unanswered. Use either that embedded worker **or** one verified dedicated worker, never both. Set `RUN_WORKER_IN_WEB=false` only after the dedicated service logs `[WORKER] Starting RQ worker` with the expected queue and commit.
 
 ### Railway deployment checklist
