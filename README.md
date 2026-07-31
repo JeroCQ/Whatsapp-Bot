@@ -107,6 +107,11 @@ Antes de desactivar el worker embebido, comprueba estas cuatro condiciones:
 3. El worker muestra `*** Listening on <QUEUE_NAME>...`.
 4. La ruta `/` del web reporta `queue.workers_seen` mayor o igual a `1`.
 
+La misma ruta también reporta `queue.web_queue_mode`. En la topología separada debe
+ser `external_worker`; si dice `embedded_worker`, el servicio web todavía está lanzando
+su propio consumidor. Este dato describe la configuración del web, mientras que
+`workers_seen` confirma cuántos workers registra Redis.
+
 Con esa topología se pueden añadir réplicas del servicio worker para absorber más
 conversaciones sin duplicar el servidor web. La capacidad real depende sobre todo de
 los límites de Gemini, Meta, Supabase y del valor de `GEMINI_MAX_CONCURRENT`; tener una

@@ -19,6 +19,15 @@ def queue_enabled() -> bool:
     return bool(REDIS_URL)
 
 
+def web_queue_mode(environ=None) -> str:
+    """Describe whether the web deployment expects an embedded or external worker."""
+    environ = os.environ if environ is None else environ
+    if not environ.get("REDIS_URL"):
+        return "background_tasks"
+    run_in_web = str(environ.get("RUN_WORKER_IN_WEB", "true")).strip().lower()
+    return "external_worker" if run_in_web in {"0", "false", "no", "n", "off"} else "embedded_worker"
+
+
 def sanitize_job_id(raw_job_id: str) -> str:
     """Convert provider message IDs into an RQ-safe job ID."""
     if not raw_job_id:
@@ -71,6 +80,7 @@ def get_queue_stats() -> dict:
         return {
             "enabled": True,
             "queue": QUEUE_NAME,
+            "web_queue_mode": web_queue_mode(),
             "queued_jobs": queue.count,
             "started_jobs": queue.started_job_registry.count,
             "failed_jobs": queue.failed_job_registry.count,
@@ -78,4 +88,4 @@ def get_queue_stats() -> dict:
             "workers_seen": len(workers),
         }
     except Exception as exc:
-        return {"enabled": True, "queue": QUEUE_NAME, "error": str(exc)}
+        return {"enabled": True, "queue": QUEUE_NAME, "web_queue_mode": web_queue_mode(), "error": str(exc)}
