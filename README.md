@@ -28,7 +28,7 @@ For scalable queued processing, also set:
 
 ### AI-controlled presaved files
 
-Set `catalogo_memos` to a JSON array. Each entry gives Gemini a safe ID and a
+Set `catalogo_tanaka` to a JSON array. Each entry gives Gemini a safe ID and a
 description that explains **when** it should send the file. The existing system prompt
 can add more business rules using that ID. Files can use a permanent public HTTPS URL
 (`link`) or a Meta media ID (`media_id`), but not both:
@@ -36,12 +36,12 @@ can add more business rules using that ID. Files can use a permanent public HTTP
 ```json
 [
   {
-    "id": "catalogo_memos_pdf",
-    "description": "Catálogo de Quesos Memo's; enviarlo cuando pidan el catálogo o quieran ver todos los productos.",
+    "id": "catalogo_pdf",
+    "description": "Catálogo de Tanaka Saludable; enviarlo cuando pidan el catálogo o quieran ver todos los productos.",
     "type": "document",
     "link": "https://example.com/catalogo.pdf",
-    "filename": "catalogo-memos.pdf",
-    "caption": "Aquí tiene nuestro catálogo completo, patrón 🧀"
+    "filename": "catalogo-tanaka.pdf",
+    "caption": "Aquí tienes nuestro catálogo completo ☺️"
   }
 ]
 ```
@@ -52,8 +52,8 @@ choose whether the files arrive before or after its text. Unknown IDs are ignore
 the application, so the model cannot send an unapproved file. Changes to this variable
 take effect after restarting/redeploying the service.
 
-`PRESAVED_FILES_JSON` se conserva sin cambios para que el mismo entorno de Railway
-pueda seguir usándose con el otro proyecto; este bot solo carga `catalogo_memos`.
+`catalogo_memos` y `PRESAVED_FILES_JSON` se conservan sin cambios para poder reutilizar
+el código en otros negocios. Esta configuración de Tanaka solo carga `catalogo_tanaka`.
 
 ### Follow up automático
 

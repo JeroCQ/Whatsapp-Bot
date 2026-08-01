@@ -34,6 +34,8 @@ class Settings:
     PRESAVED_FILES_JSON = os.getenv("PRESAVED_FILES_JSON", "[]")
     # Separate catalog for Quesos Memo's so the existing deployment variable remains reusable.
     catalogo_memos = os.getenv("catalogo_memos", "[]")
+    # Tanaka uses its own catalog without overwriting the reusable Memo's configuration.
+    catalogo_tanaka = os.getenv("catalogo_tanaka", "[]")
     
     @classmethod
     def validate(cls):

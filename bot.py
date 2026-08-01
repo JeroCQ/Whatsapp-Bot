@@ -42,7 +42,7 @@ class BotTurn:
     follow_up_delay_minutes: int = 120
 
 
-FILE_CATALOG = load_file_catalog(config.catalogo_memos, "catalogo_memos")
+FILE_CATALOG = load_file_catalog(config.catalogo_tanaka, "catalogo_tanaka")
 
 
 def transcribe_audio_message(audio_bytes: bytes, mime_type: str = "audio/ogg") -> str:
