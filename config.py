@@ -6,7 +6,11 @@ logger = logging.getLogger(__name__)
 
 class Settings:
     SUPABASE_URL = os.getenv("SUPABASE_URL")
-    SUPABASE_KEY = os.getenv("SUPABASE_KEY") 
+    # Database access runs only on the server. Prefer the service-role secret so
+    # message history is not silently hidden by RLS when SUPABASE_KEY contains a
+    # publishable/anon key. Keep the old variable as a deployment-compatible
+    # fallback.
+    SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
 
     WA_VERIFY_TOKEN = os.getenv("WA_VERIFY_TOKEN")
     WA_TOKEN = os.getenv("WA_TOKEN")
