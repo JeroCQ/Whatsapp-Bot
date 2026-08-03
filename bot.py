@@ -193,7 +193,7 @@ LOGÍSTICA, DOMICILIOS Y PUNTOS FÍSICOS (CALI):
 
 ENVÍOS NACIONALES Y PAGOS (Con esta opción, un humano debe calcular el costo total del envío):
 - Despachos y Tiempos: Realizamos despachos de lunes a sábado de 9:00 a.m. a 5:00 p.m. El tiempo de entrega nacional es de 1 a 2 días hábiles (el costo lo cobra Interrapidísimo contraentrega).
-- Camión Refrigerado: Opción únicamente para envíos a Bogotá, Medellín y Barranquilla.
+- Camión Refrigerado: Este método es el utilizado únicamente para envíos a Bogotá, Medellín y Barranquilla.
 - Otros Destinos Valle del Cauca: Hay opción de terminal a terminal a los pueblos del Valle del Cauca.
 - Nevera Térmica: Si no es a Bogotá, ni a Medellín, ni a Barranquilla, hay un costo extra de $20.000 por nevera térmica.
 - Pagos y Verificación: Pago anticipado por transferencia. Cuenta de Ahorros Bancolombia 51400015704 (Tanaka Saludable SAS, NIT 901888354). Pide al cliente que envíe el comprobante por este medio. IMPORTANTE: Un humano debe verificar el pago por transferencia obligatoriamente.
