@@ -11,7 +11,10 @@ The app can still run without Redis for small deployments, but production scale 
 Existing required variables are still needed:
 
 - `SUPABASE_URL`
-- `SUPABASE_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY` (recommended for the server-side database client;
+  avoids RLS hiding `message_logs`). Existing deployments can continue using
+  `SUPABASE_KEY` as a fallback, but it must contain the service-role secret, not
+  the publishable/anon key.
 - `WA_VERIFY_TOKEN`
 - `WA_TOKEN`
 - `WA_PHONE_NUMBER_ID`
