@@ -41,12 +41,14 @@ class TextRequest(BaseModel):
 
 class SaveRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
-    client_name: str = Field(min_length=1)
+    client_name: str | None = None
     draft_si: str = Field(min_length=1)
 
     @field_validator("client_name")
     @classmethod
-    def safe_client(cls, value: str) -> str:
+    def safe_client(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
         return validate_client_name(value)
 
     @field_validator("draft_si")
@@ -313,15 +315,23 @@ def generate_si_changes(body: TextRequest, client_name: str | None = Query(None)
 
 
 @router.post("/format-and-save-si")
-def format_and_save_si(body: SaveRequest, gemini: GeminiAdapter = Depends(get_gemini),
+def format_and_save_si(body: SaveRequest, client_name: str | None = Query(None),
+                       gemini: GeminiAdapter = Depends(get_gemini),
                        github: GitHubAdapter = Depends(get_github)):
+    resolved_client_name = client_name or body.client_name
+    if not resolved_client_name:
+        raise HTTPException(422, "client_name requerido")
+    try:
+        resolved_client_name = validate_client_name(resolved_client_name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
     prompt = ("Formatea el siguiente texto para mejorar exclusivamente su presentación. RESTRICCIÓN ABSOLUTA: "
               "no agregar, resumir ni eliminar contexto. Devuelve solamente el texto formateado.\n<DRAFT_SI>\n" +
               body.draft_si + "\n</DRAFT_SI>")
     formatted = gemini_call(gemini, prompt).strip()
     if not formatted:
         raise HTTPException(502, "Gemini devolvió una respuesta vacía")
-    path = client_path(body.client_name, "system_instruction.txt")
+    path = client_path(resolved_client_name, "system_instruction.txt")
     existing = github.get_file(path)
     if not existing or not existing.get("sha"):
         raise HTTPException(404, "El archivo configurado no existe en GitHub")

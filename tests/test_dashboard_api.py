@@ -57,6 +57,10 @@ def test_successful_endpoints_and_catalog_path():
                            json={"client_name": "client_1", "draft_si": "draft"})
     assert response.json()["commit_sha"] == "new-sha"
 
+    response = client.post("/api/format-and-save-si?client_name=client_1", headers=headers,
+                           json={"draft_si": "draft"})
+    assert response.status_code == 200
+
     response = client.get("/api/current-si?client_name=client_1", headers=headers)
     assert response.json() == {"system_instruction": "current system instruction"}
 
@@ -147,3 +151,12 @@ def test_gemini_retries_fallback_model_on_not_found(monkeypatch):
 
     assert adapter.generate("prompt") == "ok"
     assert calls == ["old-model", "new-model"]
+
+
+def test_format_and_save_requires_client_without_echoing_draft():
+    client, headers = make_client(FakeGemini("formatted"), FakeGitHub())
+    response = client.post("/api/format-and-save-si", headers=headers, json={"draft_si": "sensitive prompt body"})
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "client_name requerido"}
+    assert "sensitive prompt body" not in response.text
