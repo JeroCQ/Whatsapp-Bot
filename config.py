@@ -29,6 +29,23 @@ class Settings:
     CHATWOOT_ACCESS_TOKEN = os.getenv("CHATWOOT_ACCESS_TOKEN") or CHATWOOT_API_TOKEN
 
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+    GEMINI_DASHBOARD_MODEL = os.getenv("GEMINI_DASHBOARD_MODEL", "gemini-2.5-pro")
+
+    GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+    GITHUB_OWNER = os.getenv("GITHUB_OWNER")
+    GITHUB_REPO = os.getenv("GITHUB_REPO")
+    GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main")
+    DASHBOARD_API_KEY = os.getenv("DASHBOARD_API_KEY")
+    DASHBOARD_CORS_ORIGINS = [
+        origin.strip()
+        for origin in os.getenv("DASHBOARD_CORS_ORIGINS", "").split(",")
+        if origin.strip()
+    ]
+    DASHBOARD_REQUESTS_PER_MINUTE = int(os.getenv("DASHBOARD_REQUESTS_PER_MINUTE", "30"))
+    DASHBOARD_MAX_TEXT_CHARS = int(os.getenv("DASHBOARD_MAX_TEXT_CHARS", "100000"))
+    DASHBOARD_MAX_PDF_BYTES = int(os.getenv("DASHBOARD_MAX_PDF_BYTES", str(10 * 1024 * 1024)))
+    DASHBOARD_EXTERNAL_TIMEOUT_SECONDS = float(os.getenv("DASHBOARD_EXTERNAL_TIMEOUT_SECONDS", "30"))
+    DASHBOARD_HISTORY_MAX_PAGE_SIZE = int(os.getenv("DASHBOARD_HISTORY_MAX_PAGE_SIZE", "50"))
 
     REDIS_URL = os.getenv("REDIS_URL")
     QUEUE_NAME = os.getenv("QUEUE_NAME", "whatsapp-events")

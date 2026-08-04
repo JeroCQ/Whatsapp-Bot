@@ -4,6 +4,7 @@ import time
 import requests
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 import chatwoot_api
 from bot import FILE_CATALOG, process_message_logic, transcribe_audio_message
@@ -35,8 +36,17 @@ from queue_client import (
     register_follow_up,
 )
 from webhook_utils import chatwoot_event_identity, is_restart_command
+from dashboard_api import router as dashboard_router
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=config.DASHBOARD_CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "X-Dashboard-API-Key"],
+)
+app.include_router(dashboard_router)
 
 DEPLOYMENT_COMMIT_SHA = os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_COMMIT_SHA") or "unknown"
 print(f"[BOOT] WhatsApp bot code loaded. Commit: {DEPLOYMENT_COMMIT_SHA}. Scalable queue build: 2026-07-24.2")
