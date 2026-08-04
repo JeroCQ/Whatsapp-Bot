@@ -4,6 +4,19 @@ import logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+GEMINI_MODEL_ALIASES = {
+    # The Gemini Developer API v1beta endpoint does not accept these "latest"
+    # aliases for generateContent even though they are common in UI examples.
+    "gemini-1.5-flash-latest": "gemini-1.5-flash",
+    "gemini-1.5-pro-latest": "gemini-1.5-pro",
+}
+
+
+def normalize_gemini_model(model_name: str | None) -> str:
+    selected = (model_name or "gemini-2.5-flash").strip()
+    return GEMINI_MODEL_ALIASES.get(selected, selected)
+
+
 class Settings:
     SUPABASE_URL = os.getenv("SUPABASE_URL")
     # Database access runs only on the server. Prefer the service-role secret so
@@ -29,7 +42,7 @@ class Settings:
     CHATWOOT_ACCESS_TOKEN = os.getenv("CHATWOOT_ACCESS_TOKEN") or CHATWOOT_API_TOKEN
 
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-    GEMINI_DASHBOARD_MODEL = os.getenv("GEMINI_DASHBOARD_MODEL", "gemini-2.5-pro")
+    GEMINI_DASHBOARD_MODEL = normalize_gemini_model(os.getenv("GEMINI_DASHBOARD_MODEL"))
 
     GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
     # Railway injects repository metadata for deployments connected to GitHub.

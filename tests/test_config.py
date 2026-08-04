@@ -60,3 +60,12 @@ class SupabaseKeyConfigTests(TestCase):
             self.assertEqual(config.GITHUB_OWNER, "manual-owner")
             self.assertEqual(config.GITHUB_REPO, "manual-repo")
             self.assertEqual(config.GITHUB_BRANCH, "manual-branch")
+
+    def test_normalizes_unsupported_gemini_latest_alias(self):
+        env = {**REQUIRED_ENV, "GEMINI_DASHBOARD_MODEL": "gemini-1.5-flash-latest"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(load_config().GEMINI_DASHBOARD_MODEL, "gemini-1.5-flash")
+
+    def test_dashboard_model_defaults_to_flash(self):
+        with mock.patch.dict(os.environ, REQUIRED_ENV, clear=True):
+            self.assertEqual(load_config().GEMINI_DASHBOARD_MODEL, "gemini-2.5-flash")

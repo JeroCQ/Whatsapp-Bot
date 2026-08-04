@@ -33,6 +33,14 @@ Railway's native `RAILWAY_GIT_REPO_OWNER`, `RAILWAY_GIT_REPO_NAME`, and
 `RAILWAY_GIT_BRANCH` variables, with manual `GITHUB_OWNER`, `GITHUB_REPO`, and
 `GITHUB_BRANCH` used only as fallbacks outside Railway.
 
+For dashboard Gemini calls, leave `GEMINI_DASHBOARD_MODEL` unset to use
+`gemini-2.5-flash`, or set it to a concrete model returned by the Gemini
+Developer API. Do not use UI aliases such as `gemini-1.5-flash-latest`; the
+backend normalizes known 1.5 `-latest` aliases to their concrete model IDs, but
+using a current concrete model avoids provider 404s. If both `GOOGLE_API_KEY`
+and `GEMINI_API_KEY` are set in Railway, remove `GOOGLE_API_KEY` unless it is
+intentionally the same key, because the Google SDK warns that it may prefer it.
+
 ## Scalability setup
 
 The app can still run without Redis for small deployments, but production scale should use the queue worker path.
