@@ -15,7 +15,7 @@ from typing import Annotated, Any
 
 import requests
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from config import config
 from http_client import get, put
@@ -42,7 +42,7 @@ class TextRequest(BaseModel):
 class SaveRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
     client_name: str | None = None
-    draft_si: str = Field(min_length=1)
+    draft_si: str = Field(min_length=1, validation_alias=AliasChoices("draft_si", "new_si", "system_instruction"))
 
     @field_validator("client_name")
     @classmethod

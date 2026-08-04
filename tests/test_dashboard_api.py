@@ -61,6 +61,10 @@ def test_successful_endpoints_and_catalog_path():
                            json={"draft_si": "draft"})
     assert response.status_code == 200
 
+    response = client.post("/api/format-and-save-si?client_name=client_1", headers=headers,
+                           json={"new_si": "draft"})
+    assert response.status_code == 200
+
     response = client.get("/api/current-si?client_name=client_1", headers=headers)
     assert response.json() == {"system_instruction": "current system instruction"}
 
@@ -160,3 +164,11 @@ def test_format_and_save_requires_client_without_echoing_draft():
     assert response.status_code == 422
     assert response.json() == {"detail": "client_name requerido"}
     assert "sensitive prompt body" not in response.text
+
+
+def test_format_and_save_accepts_system_instruction_alias():
+    client, headers = make_client(FakeGemini("formatted"), FakeGitHub())
+    response = client.post("/api/format-and-save-si?client_name=client_1", headers=headers,
+                           json={"system_instruction": "draft"})
+
+    assert response.status_code == 200
