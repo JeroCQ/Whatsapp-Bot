@@ -5,6 +5,7 @@ import requests
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 import chatwoot_api
 from bot import FILE_CATALOG, process_message_logic, transcribe_audio_message
@@ -47,6 +48,7 @@ app.add_middleware(
     allow_headers=["Content-Type", "X-Dashboard-API-Key"],
 )
 app.include_router(dashboard_router)
+app.mount("/public", StaticFiles(directory="public"), name="public")
 
 DEPLOYMENT_COMMIT_SHA = os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_COMMIT_SHA") or "unknown"
 print(f"[BOOT] WhatsApp bot code loaded. Commit: {DEPLOYMENT_COMMIT_SHA}. Scalable queue build: 2026-07-24.2")

@@ -2,6 +2,38 @@
 
 FastAPI WhatsApp sales bot with Chatwoot handoff and Gemini responses.
 
+## Dashboard administrativo de Tanaka
+
+The repository contains the initial dashboard-managed Tanaka files at:
+
+- `src/clients/tanaka/system_instruction.txt`
+- `public/catalogos/tanaka_catalogo.pdf`
+
+The PDF committed to the repository is intentionally a valid placeholder. Replace it
+from the dashboard with the real catalog before sharing it with customers. Railway
+serves the committed catalog at
+`https://powerful-stillness-production-ffd8.up.railway.app/public/catalogos/tanaka_catalogo.pdf`.
+Set the existing Railway variable `catalogo_tanaka` to use that URL for the
+`catalogo_pdf` entry.
+
+The secure Lovable proxy is in `supabase/functions/dashboard-api/index.ts`, and its
+admin allow-list migration is in
+`supabase/migrations/20260804000000_dashboard_admins.sql`. Deploy both to the Supabase
+project connected to Lovable, then configure these Edge Function secrets:
+
+- `DASHBOARD_BACKEND_URL=https://powerful-stillness-production-ffd8.up.railway.app`
+- `DASHBOARD_API_KEY` with exactly the same value used by Railway
+- `DASHBOARD_FRONTEND_ORIGIN` with the published Lovable origin (no trailing slash)
+
+After the migration, add an administrator from the Supabase SQL editor, replacing the
+email with the exact email used to log in to Lovable:
+
+```sql
+insert into public.dashboard_admins (user_id)
+select id from auth.users where email = 'ADMIN_EMAIL_HERE'
+on conflict (user_id) do nothing;
+```
+
 ## Scalability setup
 
 The app can still run without Redis for small deployments, but production scale should use the queue worker path.
