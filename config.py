@@ -4,6 +4,32 @@ import logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+GEMINI_DASHBOARD_DEFAULT_MODEL = "gemini-3.6-flash"
+GEMINI_MODEL_ALIASES = {
+    # Older aliases and 2.5 IDs can return 404 for new Gemini Developer API
+    # projects. Normalize dashboard calls to the current concrete Flash model.
+    "gemini-1.5-flash-latest": GEMINI_DASHBOARD_DEFAULT_MODEL,
+    "gemini-1.5-pro-latest": GEMINI_DASHBOARD_DEFAULT_MODEL,
+    "gemini-2.5-flash": GEMINI_DASHBOARD_DEFAULT_MODEL,
+    "gemini-2.5-pro": GEMINI_DASHBOARD_DEFAULT_MODEL,
+}
+
+
+def normalize_gemini_model(model_name: str | None) -> str:
+    selected = (model_name or GEMINI_DASHBOARD_DEFAULT_MODEL).strip()
+    return GEMINI_MODEL_ALIASES.get(selected, selected)
+
+
+def parse_gemini_model_list(raw_models: str | None, primary_model: str) -> list[str]:
+    configured = [normalize_gemini_model(item) for item in (raw_models or "").split(",") if item.strip()]
+    candidates = [primary_model, *configured, GEMINI_DASHBOARD_DEFAULT_MODEL, "gemini-3.5-flash", "gemini-3.1-flash-lite"]
+    unique = []
+    for model in candidates:
+        if model and model not in unique:
+            unique.append(model)
+    return unique
+
+
 class Settings:
     SUPABASE_URL = os.getenv("SUPABASE_URL")
     # Database access runs only on the server. Prefer the service-role secret so
@@ -29,6 +55,27 @@ class Settings:
     CHATWOOT_ACCESS_TOKEN = os.getenv("CHATWOOT_ACCESS_TOKEN") or CHATWOOT_API_TOKEN
 
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+    GEMINI_DASHBOARD_MODEL = normalize_gemini_model(os.getenv("GEMINI_DASHBOARD_MODEL"))
+    GEMINI_DASHBOARD_MODELS = parse_gemini_model_list(os.getenv("GEMINI_DASHBOARD_FALLBACK_MODELS"), GEMINI_DASHBOARD_MODEL)
+
+    GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+    # Railway injects repository metadata for deployments connected to GitHub.
+    # Keep the manual GITHUB_* variables as optional fallbacks for local runs or
+    # non-Railway deployments.
+    GITHUB_OWNER = os.getenv("RAILWAY_GIT_REPO_OWNER") or os.getenv("GITHUB_OWNER")
+    GITHUB_REPO = os.getenv("RAILWAY_GIT_REPO_NAME") or os.getenv("GITHUB_REPO")
+    GITHUB_BRANCH = os.getenv("RAILWAY_GIT_BRANCH") or os.getenv("GITHUB_BRANCH", "main")
+    DASHBOARD_API_KEY = os.getenv("DASHBOARD_API_KEY")
+    DASHBOARD_CORS_ORIGINS = [
+        origin.strip()
+        for origin in os.getenv("DASHBOARD_CORS_ORIGINS", "").split(",")
+        if origin.strip()
+    ]
+    DASHBOARD_REQUESTS_PER_MINUTE = int(os.getenv("DASHBOARD_REQUESTS_PER_MINUTE", "30"))
+    DASHBOARD_MAX_TEXT_CHARS = int(os.getenv("DASHBOARD_MAX_TEXT_CHARS", "100000"))
+    DASHBOARD_MAX_PDF_BYTES = int(os.getenv("DASHBOARD_MAX_PDF_BYTES", str(10 * 1024 * 1024)))
+    DASHBOARD_EXTERNAL_TIMEOUT_SECONDS = float(os.getenv("DASHBOARD_EXTERNAL_TIMEOUT_SECONDS", "30"))
+    DASHBOARD_HISTORY_MAX_PAGE_SIZE = int(os.getenv("DASHBOARD_HISTORY_MAX_PAGE_SIZE", "50"))
 
     REDIS_URL = os.getenv("REDIS_URL")
     QUEUE_NAME = os.getenv("QUEUE_NAME", "whatsapp-events")
