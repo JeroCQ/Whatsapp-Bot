@@ -14,7 +14,7 @@ class FakeGemini:
     def __init__(self, answer):
         self.answer = answer
 
-    def generate(self, prompt, *, json_schema=None):
+    def generate(self, prompt, *, json_schema=None, system_instruction=None):
         return self.answer
 
 
@@ -46,10 +46,11 @@ def make_client(gemini=None, github=None):
 
 def test_successful_endpoints_and_catalog_path():
     github = FakeGitHub()
-    client, headers = make_client(FakeGemini('[{"explicacion":"e","texto_original_exacto":"old","texto_nuevo":"new"}]'), github)
+    client, headers = make_client(FakeGemini('[{"id":"chg-1","explicacion":"e","texto_original":"old","texto_nuevo":"new"}]'), github)
     response = client.post("/api/generate-si-changes", headers=headers,
                            json={"current_si": "the old text", "user_request": "change it"})
     assert response.status_code == 200
+    assert response.json() == [{"id": "chg-1", "explicacion": "e", "texto_original": "old", "texto_nuevo": "new"}]
 
     client, headers = make_client(FakeGemini("formatted"), github)
     response = client.post("/api/format-and-save-si", headers=headers,
@@ -72,9 +73,9 @@ def test_invalid_gemini_json_and_original_validation():
     client, headers = make_client(FakeGemini("not json"))
     payload = {"current_si": "one", "user_request": "change"}
     assert client.post("/api/generate-si-changes", headers=headers, json=payload).status_code == 502
-    client, headers = make_client(FakeGemini('[{"explicacion":"e","texto_original_exacto":"missing","texto_nuevo":"x"}]'))
+    client, headers = make_client(FakeGemini('[{"id":"chg-1","explicacion":"e","texto_original":"missing","texto_nuevo":"x"}]'))
     assert client.post("/api/generate-si-changes", headers=headers, json=payload).status_code == 422
-    client, headers = make_client(FakeGemini('[{"explicacion":"e","texto_original_exacto":"one","texto_nuevo":"x"}]'))
+    client, headers = make_client(FakeGemini('[{"id":"chg-1","explicacion":"e","texto_original":"one","texto_nuevo":"x"}]'))
     assert client.post("/api/generate-si-changes", headers=headers,
                        json={"current_si": "one one", "user_request": "change"}).status_code == 422
 
@@ -110,3 +111,19 @@ def test_oversized_pdf(monkeypatch):
     response = client.post("/api/upload-catalog", headers=headers, data={"client_name": "ok"},
                            files={"file": ("x.pdf", b"%PDF-123", "application/pdf")})
     assert response.status_code == 413
+
+
+def test_gemini_provider_error_includes_real_message():
+    class RejectingGemini:
+        def generate(self, prompt, *, json_schema=None, system_instruction=None):
+            raise api.GeminiProviderError(400, "INVALID_ARGUMENT", "response_schema.items.properties[text] is invalid")
+
+    client, headers = make_client(RejectingGemini())
+    response = client.post("/api/generate-si-changes", headers=headers,
+                           json={"current_si": "literal", "user_request": "change"})
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": "Gemini rechazó la solicitud: response_schema.items.properties[text] is invalid"
+    }
+    assert "Gemini no pudo procesar la solicitud" not in response.text
