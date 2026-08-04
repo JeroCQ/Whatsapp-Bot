@@ -250,11 +250,12 @@ def admin_auth(request: Request, x_dashboard_api_key: Annotated[str | None, Head
 router = APIRouter(prefix="/api", dependencies=[Depends(admin_auth)])
 
 
-def gemini_call(adapter: GeminiAdapter, prompt: str, *, schema: Any = None, system_instruction: str | None = None) -> str:
+def gemini_call(adapter: GeminiAdapter, prompt: str, *, schema: Any = None, system_instruction: str | None = None,
+                timeout_seconds: float | None = None) -> str:
     pool = ThreadPoolExecutor(max_workers=1)
     try:
         return pool.submit(adapter.generate, prompt, json_schema=schema, system_instruction=system_instruction).result(
-            timeout=config.DASHBOARD_EXTERNAL_TIMEOUT_SECONDS
+            timeout=timeout_seconds or config.DASHBOARD_EXTERNAL_TIMEOUT_SECONDS
         )
     except FutureTimeout:
         raise HTTPException(504, "Gemini excedió el tiempo límite")
@@ -328,7 +329,7 @@ def format_and_save_si(body: SaveRequest, client_name: str | None = Query(None),
     prompt = ("Formatea el siguiente texto para mejorar exclusivamente su presentación. RESTRICCIÓN ABSOLUTA: "
               "no agregar, resumir ni eliminar contexto. Devuelve solamente el texto formateado.\n<DRAFT_SI>\n" +
               body.draft_si + "\n</DRAFT_SI>")
-    formatted = gemini_call(gemini, prompt).strip()
+    formatted = gemini_call(gemini, prompt, timeout_seconds=config.DASHBOARD_FORMAT_TIMEOUT_SECONDS).strip()
     if not formatted:
         raise HTTPException(502, "Gemini devolvió una respuesta vacía")
     path = client_path(resolved_client_name, "system_instruction.txt")

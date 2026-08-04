@@ -81,3 +81,8 @@ class SupabaseKeyConfigTests(TestCase):
                 load_config().GEMINI_DASHBOARD_MODELS,
                 ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite"],
             )
+
+
+    def test_dashboard_format_timeout_default(self):
+        with mock.patch.dict(os.environ, REQUIRED_ENV, clear=True):
+            self.assertEqual(load_config().DASHBOARD_FORMAT_TIMEOUT_SECONDS, 90)

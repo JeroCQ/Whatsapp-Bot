@@ -41,7 +41,9 @@ IDs to `gemini-3.6-flash` and retries fallback models from
 `GEMINI_DASHBOARD_FALLBACK_MODELS` before returning a provider error. If both
 `GOOGLE_API_KEY` and `GEMINI_API_KEY` are set in Railway, remove
 `GOOGLE_API_KEY` unless it is intentionally the same key, because the Google SDK
-warns that it may prefer it.
+warns that it may prefer it. Full-system-instruction formatting can take longer
+than proposal generation; use `DASHBOARD_FORMAT_TIMEOUT_SECONDS` (default `90`)
+to control the save endpoint timeout separately from other dashboard calls.
 
 ## Scalability setup
 
