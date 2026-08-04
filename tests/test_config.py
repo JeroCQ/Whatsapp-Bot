@@ -64,8 +64,20 @@ class SupabaseKeyConfigTests(TestCase):
     def test_normalizes_unsupported_gemini_latest_alias(self):
         env = {**REQUIRED_ENV, "GEMINI_DASHBOARD_MODEL": "gemini-1.5-flash-latest"}
         with mock.patch.dict(os.environ, env, clear=True):
-            self.assertEqual(load_config().GEMINI_DASHBOARD_MODEL, "gemini-1.5-flash")
+            self.assertEqual(load_config().GEMINI_DASHBOARD_MODEL, "gemini-3.6-flash")
 
     def test_dashboard_model_defaults_to_flash(self):
         with mock.patch.dict(os.environ, REQUIRED_ENV, clear=True):
-            self.assertEqual(load_config().GEMINI_DASHBOARD_MODEL, "gemini-2.5-flash")
+            self.assertEqual(load_config().GEMINI_DASHBOARD_MODEL, "gemini-3.6-flash")
+
+    def test_dashboard_models_include_unique_fallbacks(self):
+        env = {
+            **REQUIRED_ENV,
+            "GEMINI_DASHBOARD_MODEL": "gemini-2.5-flash",
+            "GEMINI_DASHBOARD_FALLBACK_MODELS": "gemini-3.5-flash,gemini-3.6-flash",
+        }
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(
+                load_config().GEMINI_DASHBOARD_MODELS,
+                ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite"],
+            )

@@ -34,12 +34,14 @@ Railway's native `RAILWAY_GIT_REPO_OWNER`, `RAILWAY_GIT_REPO_NAME`, and
 `GITHUB_BRANCH` used only as fallbacks outside Railway.
 
 For dashboard Gemini calls, leave `GEMINI_DASHBOARD_MODEL` unset to use
-`gemini-2.5-flash`, or set it to a concrete model returned by the Gemini
-Developer API. Do not use UI aliases such as `gemini-1.5-flash-latest`; the
-backend normalizes known 1.5 `-latest` aliases to their concrete model IDs, but
-using a current concrete model avoids provider 404s. If both `GOOGLE_API_KEY`
-and `GEMINI_API_KEY` are set in Railway, remove `GOOGLE_API_KEY` unless it is
-intentionally the same key, because the Google SDK warns that it may prefer it.
+`gemini-3.6-flash`, or set it to a concrete model returned by the Gemini
+Developer API. Do not use old aliases such as `gemini-1.5-flash-latest`, and do
+not rely on 2.5 model IDs for new API projects; the backend normalizes known old
+IDs to `gemini-3.6-flash` and retries fallback models from
+`GEMINI_DASHBOARD_FALLBACK_MODELS` before returning a provider error. If both
+`GOOGLE_API_KEY` and `GEMINI_API_KEY` are set in Railway, remove
+`GOOGLE_API_KEY` unless it is intentionally the same key, because the Google SDK
+warns that it may prefer it.
 
 ## Scalability setup
 

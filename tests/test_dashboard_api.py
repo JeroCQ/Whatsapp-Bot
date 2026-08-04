@@ -127,3 +127,23 @@ def test_gemini_provider_error_includes_real_message():
         "detail": "Gemini rechazó la solicitud: response_schema.items.properties[text] is invalid"
     }
     assert "Gemini no pudo procesar la solicitud" not in response.text
+
+
+def test_gemini_retries_fallback_model_on_not_found(monkeypatch):
+    from google.genai.errors import APIError
+
+    calls = []
+
+    class FakeModels:
+        def generate_content(self, *, model, contents, config):
+            calls.append(model)
+            if model == "old-model":
+                raise APIError(404, {"error": {"code": 404, "status": "NOT_FOUND", "message": "old model unavailable"}})
+            return type("Response", (), {"text": "ok"})()
+
+    adapter = object.__new__(api.GeminiAdapter)
+    adapter.client = type("Client", (), {"models": FakeModels()})()
+    monkeypatch.setattr(api.config, "GEMINI_DASHBOARD_MODELS", ["old-model", "new-model"])
+
+    assert adapter.generate("prompt") == "ok"
+    assert calls == ["old-model", "new-model"]

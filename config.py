@@ -4,17 +4,30 @@ import logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+GEMINI_DASHBOARD_DEFAULT_MODEL = "gemini-3.6-flash"
 GEMINI_MODEL_ALIASES = {
-    # The Gemini Developer API v1beta endpoint does not accept these "latest"
-    # aliases for generateContent even though they are common in UI examples.
-    "gemini-1.5-flash-latest": "gemini-1.5-flash",
-    "gemini-1.5-pro-latest": "gemini-1.5-pro",
+    # Older aliases and 2.5 IDs can return 404 for new Gemini Developer API
+    # projects. Normalize dashboard calls to the current concrete Flash model.
+    "gemini-1.5-flash-latest": GEMINI_DASHBOARD_DEFAULT_MODEL,
+    "gemini-1.5-pro-latest": GEMINI_DASHBOARD_DEFAULT_MODEL,
+    "gemini-2.5-flash": GEMINI_DASHBOARD_DEFAULT_MODEL,
+    "gemini-2.5-pro": GEMINI_DASHBOARD_DEFAULT_MODEL,
 }
 
 
 def normalize_gemini_model(model_name: str | None) -> str:
-    selected = (model_name or "gemini-2.5-flash").strip()
+    selected = (model_name or GEMINI_DASHBOARD_DEFAULT_MODEL).strip()
     return GEMINI_MODEL_ALIASES.get(selected, selected)
+
+
+def parse_gemini_model_list(raw_models: str | None, primary_model: str) -> list[str]:
+    configured = [normalize_gemini_model(item) for item in (raw_models or "").split(",") if item.strip()]
+    candidates = [primary_model, *configured, GEMINI_DASHBOARD_DEFAULT_MODEL, "gemini-3.5-flash", "gemini-3.1-flash-lite"]
+    unique = []
+    for model in candidates:
+        if model and model not in unique:
+            unique.append(model)
+    return unique
 
 
 class Settings:
@@ -43,6 +56,7 @@ class Settings:
 
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
     GEMINI_DASHBOARD_MODEL = normalize_gemini_model(os.getenv("GEMINI_DASHBOARD_MODEL"))
+    GEMINI_DASHBOARD_MODELS = parse_gemini_model_list(os.getenv("GEMINI_DASHBOARD_FALLBACK_MODELS"), GEMINI_DASHBOARD_MODEL)
 
     GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
     # Railway injects repository metadata for deployments connected to GitHub.

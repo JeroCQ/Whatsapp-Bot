@@ -124,24 +124,32 @@ class GeminiAdapter:
                     required=["id", "explicacion", "texto_original", "texto_nuevo"],
                 ),
             )
-        try:
-            response = self.client.models.generate_content(
-                model=config.GEMINI_DASHBOARD_MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(**kwargs),
-            )
-        except errors.APIError as exc:
-            status_code = getattr(exc, "code", None)
-            status = getattr(exc, "status", None)
-            message = getattr(exc, "message", None)
-            logger.error(
-                "Gemini API error while generating dashboard content: status=%s code=%s message=%s",
-                status,
-                status_code,
-                message,
-            )
-            raise GeminiProviderError(status_code, status, message) from exc
-        return response.text or ""
+        last_error = None
+        for model_name in config.GEMINI_DASHBOARD_MODELS:
+            try:
+                response = self.client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(**kwargs),
+                )
+                return response.text or ""
+            except errors.APIError as exc:
+                status_code = getattr(exc, "code", None)
+                status = getattr(exc, "status", None)
+                message = getattr(exc, "message", None)
+                logger.error(
+                    "Gemini API error while generating dashboard content: model=%s status=%s code=%s message=%s",
+                    model_name,
+                    status,
+                    status_code,
+                    message,
+                )
+                last_error = GeminiProviderError(status_code, status, message)
+                if status_code != 404:
+                    raise last_error from exc
+        if last_error:
+            raise last_error
+        raise GeminiProviderError(None, None, "No hay modelos de Gemini configurados")
 
 
 class GitHubAdapter:
