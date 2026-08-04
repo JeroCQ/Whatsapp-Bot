@@ -16,23 +16,20 @@ serves the committed catalog at
 Set the existing Railway variable `catalogo_tanaka` to use that URL for the
 `catalogo_pdf` entry.
 
-The secure Lovable proxy is in `supabase/functions/dashboard-api/index.ts`, and its
-admin allow-list migration is in
-`supabase/migrations/20260804000000_dashboard_admins.sql`. Deploy both to the Supabase
-project connected to Lovable, then configure these Edge Function secrets:
+The password-only Lovable proxy is in `supabase/functions/dashboard-api/index.ts`.
+Deploy it to the Supabase project connected to Lovable, then configure these Edge
+Function secrets (the passwords must never be variables prefixed with `VITE_`):
 
 - `DASHBOARD_BACKEND_URL=https://powerful-stillness-production-ffd8.up.railway.app`
 - `DASHBOARD_API_KEY` with exactly the same value used by Railway
 - `DASHBOARD_FRONTEND_ORIGIN` with the published Lovable origin (no trailing slash)
+- `TANAKA_DASHBOARD_PASSWORD` with Tanaka's dashboard password
+- `MEMOS_DASHBOARD_PASSWORD` with Memo's dashboard password
 
-After the migration, add an administrator from the Supabase SQL editor, replacing the
-email with the exact email used to log in to Lovable:
-
-```sql
-insert into public.dashboard_admins (user_id)
-select id from auth.users where email = 'ADMIN_EMAIL_HERE'
-on conflict (user_id) do nothing;
-```
+The frontend sends the password only to this Edge Function in the
+`X-Dashboard-Password` header. The proxy identifies the associated `client_name` and
+prevents either password from reading or updating the other client's files. It keeps
+the Railway `DASHBOARD_API_KEY` server-side.
 
 ## Scalability setup
 
