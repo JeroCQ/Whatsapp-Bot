@@ -2,6 +2,37 @@
 
 FastAPI WhatsApp sales bot with Chatwoot handoff and Gemini responses.
 
+## Dashboard administrativo de Tanaka
+
+The repository contains the initial dashboard-managed Tanaka files at:
+
+- `src/clients/tanaka/system_instruction.txt`
+- `public/catalogos/tanaka_catalogo.pdf`
+
+The PDF committed to the repository is intentionally a valid placeholder. Replace it
+from the dashboard with the real catalog before sharing it with customers. Railway
+serves the committed catalog at
+`https://powerful-stillness-production-ffd8.up.railway.app/public/catalogos/tanaka_catalogo.pdf`.
+Set the existing Railway variable `catalogo_tanaka` to use that URL for the
+`catalogo_pdf` entry.
+
+The password-only dashboard proxy now lives in Lovable/TanStack Start server routes,
+not in this FastAPI service. Configure the proxy with server-only secrets (never
+variables prefixed with `VITE_`):
+
+- `DASHBOARD_BACKEND_URL=https://powerful-stillness-production-ffd8.up.railway.app`
+- `DASHBOARD_API_KEY` with exactly the same value used by Railway
+- `TANAKA_DASHBOARD_PASSWORD` with Tanaka's dashboard password
+- `MEMOS_DASHBOARD_PASSWORD` with Memo's dashboard password
+
+The Lovable server route sends `X-Dashboard-API-Key` to Railway, injects the
+allowed `client_name`, and forwards browser traffic to `/api/current-si`,
+`/api/generate-si-changes`, `/api/format-and-save-si`, `/api/si-history`, and
+`/api/upload-catalog`. The backend stores GitHub metadata automatically from
+Railway's native `RAILWAY_GIT_REPO_OWNER`, `RAILWAY_GIT_REPO_NAME`, and
+`RAILWAY_GIT_BRANCH` variables, with manual `GITHUB_OWNER`, `GITHUB_REPO`, and
+`GITHUB_BRANCH` used only as fallbacks outside Railway.
+
 ## Scalability setup
 
 The app can still run without Redis for small deployments, but production scale should use the queue worker path.
