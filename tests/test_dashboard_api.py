@@ -23,7 +23,8 @@ class FakeGitHub:
         self.updated = None
 
     def get_file(self, path):
-        return {"sha": "old-sha"}
+        import base64
+        return {"sha": "old-sha", "content": base64.b64encode(b"current system instruction").decode("ascii")}
 
     def update_file(self, path, content, sha, message):
         self.updated = (path, content, sha, message)
@@ -43,7 +44,7 @@ def make_client(gemini=None, github=None):
     return TestClient(app), {"X-Dashboard-API-Key": "dashboard-secret"}
 
 
-def test_four_successful_endpoints_and_catalog_path():
+def test_successful_endpoints_and_catalog_path():
     github = FakeGitHub()
     client, headers = make_client(FakeGemini('[{"explicacion":"e","texto_original_exacto":"old","texto_nuevo":"new"}]'), github)
     response = client.post("/api/generate-si-changes", headers=headers,
@@ -54,6 +55,9 @@ def test_four_successful_endpoints_and_catalog_path():
     response = client.post("/api/format-and-save-si", headers=headers,
                            json={"client_name": "client_1", "draft_si": "draft"})
     assert response.json()["commit_sha"] == "new-sha"
+
+    response = client.get("/api/current-si?client_name=client_1", headers=headers)
+    assert response.json() == {"system_instruction": "current system instruction"}
 
     response = client.get("/api/si-history?client_name=client_1", headers=headers)
     assert response.json() == [{"date": "2026-08-04T00:00:00Z", "message": "Update", "sha": "abc"}]
@@ -77,7 +81,8 @@ def test_invalid_gemini_json_and_original_validation():
 
 def test_auth_traversal_and_bad_pdfs():
     client, headers = make_client(FakeGemini("x"), FakeGitHub())
-    assert client.get("/api/si-history?client_name=ok").status_code == 401
+    assert client.get("/api/current-si?client_name=ok").status_code == 401
+    assert client.get("/api/current-si?client_name=../secret", headers=headers).status_code == 422
     assert client.get("/api/si-history?client_name=../secret", headers=headers).status_code == 422
     assert client.post("/api/upload-catalog", headers=headers, data={"client_name": "ok"},
                        files={"file": ("x.txt", b"hello", "text/plain")}).status_code == 422

@@ -77,6 +77,17 @@ def client_path(client_name: str, filename: str) -> str:
     return str(path)
 
 
+def decode_github_file_content(file_info: dict) -> str:
+    encoded = file_info.get("content")
+    if not isinstance(encoded, str):
+        raise HTTPException(502, "GitHub devolvió el archivo sin contenido legible")
+    try:
+        raw = base64.b64decode(encoded.replace("\n", ""), validate=True)
+        return raw.decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(502, "GitHub devolvió contenido inválido")
+
+
 class GeminiAdapter:
     def __init__(self) -> None:
         from google import genai
@@ -253,6 +264,18 @@ def format_and_save_si(body: SaveRequest, gemini: GeminiAdapter = Depends(get_ge
     result = github.update_file(path, formatted.encode("utf-8"), existing["sha"], f"Update SI via Dashboard - {stamp}")
     commit = result.get("commit") or {}
     return {"success": True, "path": path, "commit_sha": commit.get("sha"), "commit_url": commit.get("html_url")}
+
+
+@router.get("/current-si")
+def current_si(client_name: str = Query(min_length=1), github: GitHubAdapter = Depends(get_github)):
+    try:
+        path = client_path(client_name, "system_instruction.txt")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    existing = github.get_file(path)
+    if not existing:
+        raise HTTPException(404, "El archivo configurado no existe en GitHub")
+    return {"system_instruction": decode_github_file_content(existing)}
 
 
 @router.get("/si-history")

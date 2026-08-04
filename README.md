@@ -16,20 +16,22 @@ serves the committed catalog at
 Set the existing Railway variable `catalogo_tanaka` to use that URL for the
 `catalogo_pdf` entry.
 
-The password-only Lovable proxy is in `supabase/functions/dashboard-api/index.ts`.
-Deploy it to the Supabase project connected to Lovable, then configure these Edge
-Function secrets (the passwords must never be variables prefixed with `VITE_`):
+The password-only dashboard proxy now lives in Lovable/TanStack Start server routes,
+not in this FastAPI service. Configure the proxy with server-only secrets (never
+variables prefixed with `VITE_`):
 
 - `DASHBOARD_BACKEND_URL=https://powerful-stillness-production-ffd8.up.railway.app`
 - `DASHBOARD_API_KEY` with exactly the same value used by Railway
-- `DASHBOARD_FRONTEND_ORIGIN` with the published Lovable origin (no trailing slash)
 - `TANAKA_DASHBOARD_PASSWORD` with Tanaka's dashboard password
 - `MEMOS_DASHBOARD_PASSWORD` with Memo's dashboard password
 
-The frontend sends the password only to this Edge Function in the
-`X-Dashboard-Password` header. The proxy identifies the associated `client_name` and
-prevents either password from reading or updating the other client's files. It keeps
-the Railway `DASHBOARD_API_KEY` server-side.
+The Lovable server route sends `X-Dashboard-API-Key` to Railway, injects the
+allowed `client_name`, and forwards browser traffic to `/api/current-si`,
+`/api/generate-si-changes`, `/api/format-and-save-si`, `/api/si-history`, and
+`/api/upload-catalog`. The backend stores GitHub metadata automatically from
+Railway's native `RAILWAY_GIT_REPO_OWNER`, `RAILWAY_GIT_REPO_NAME`, and
+`RAILWAY_GIT_BRANCH` variables, with manual `GITHUB_OWNER`, `GITHUB_REPO`, and
+`GITHUB_BRANCH` used only as fallbacks outside Railway.
 
 ## Scalability setup
 

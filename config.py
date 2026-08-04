@@ -32,9 +32,12 @@ class Settings:
     GEMINI_DASHBOARD_MODEL = os.getenv("GEMINI_DASHBOARD_MODEL", "gemini-2.5-pro")
 
     GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-    GITHUB_OWNER = os.getenv("GITHUB_OWNER")
-    GITHUB_REPO = os.getenv("GITHUB_REPO")
-    GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main")
+    # Railway injects repository metadata for deployments connected to GitHub.
+    # Keep the manual GITHUB_* variables as optional fallbacks for local runs or
+    # non-Railway deployments.
+    GITHUB_OWNER = os.getenv("RAILWAY_GIT_REPO_OWNER") or os.getenv("GITHUB_OWNER")
+    GITHUB_REPO = os.getenv("RAILWAY_GIT_REPO_NAME") or os.getenv("GITHUB_REPO")
+    GITHUB_BRANCH = os.getenv("RAILWAY_GIT_BRANCH") or os.getenv("GITHUB_BRANCH", "main")
     DASHBOARD_API_KEY = os.getenv("DASHBOARD_API_KEY")
     DASHBOARD_CORS_ORIGINS = [
         origin.strip()
