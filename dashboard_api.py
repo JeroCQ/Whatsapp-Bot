@@ -40,7 +40,7 @@ class TextRequest(BaseModel):
 
 
 class SaveRequest(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    model_config = ConfigDict(str_strip_whitespace=True, extra="ignore")
     client_name: str | None = None
     draft_si: str = Field(min_length=1, validation_alias=AliasChoices("draft_si", "new_si", "system_instruction"))
 
