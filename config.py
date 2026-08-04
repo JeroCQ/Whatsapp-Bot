@@ -4,6 +4,19 @@ import logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+GEMINI_MODEL_ALIASES = {
+    # The Gemini Developer API v1beta endpoint does not accept these "latest"
+    # aliases for generateContent even though they are common in UI examples.
+    "gemini-1.5-flash-latest": "gemini-1.5-flash",
+    "gemini-1.5-pro-latest": "gemini-1.5-pro",
+}
+
+
+def normalize_gemini_model(model_name: str | None) -> str:
+    selected = (model_name or "gemini-2.5-flash").strip()
+    return GEMINI_MODEL_ALIASES.get(selected, selected)
+
+
 class Settings:
     SUPABASE_URL = os.getenv("SUPABASE_URL")
     # Database access runs only on the server. Prefer the service-role secret so
@@ -29,6 +42,26 @@ class Settings:
     CHATWOOT_ACCESS_TOKEN = os.getenv("CHATWOOT_ACCESS_TOKEN") or CHATWOOT_API_TOKEN
 
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+    GEMINI_DASHBOARD_MODEL = normalize_gemini_model(os.getenv("GEMINI_DASHBOARD_MODEL"))
+
+    GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+    # Railway injects repository metadata for deployments connected to GitHub.
+    # Keep the manual GITHUB_* variables as optional fallbacks for local runs or
+    # non-Railway deployments.
+    GITHUB_OWNER = os.getenv("RAILWAY_GIT_REPO_OWNER") or os.getenv("GITHUB_OWNER")
+    GITHUB_REPO = os.getenv("RAILWAY_GIT_REPO_NAME") or os.getenv("GITHUB_REPO")
+    GITHUB_BRANCH = os.getenv("RAILWAY_GIT_BRANCH") or os.getenv("GITHUB_BRANCH", "main")
+    DASHBOARD_API_KEY = os.getenv("DASHBOARD_API_KEY")
+    DASHBOARD_CORS_ORIGINS = [
+        origin.strip()
+        for origin in os.getenv("DASHBOARD_CORS_ORIGINS", "").split(",")
+        if origin.strip()
+    ]
+    DASHBOARD_REQUESTS_PER_MINUTE = int(os.getenv("DASHBOARD_REQUESTS_PER_MINUTE", "30"))
+    DASHBOARD_MAX_TEXT_CHARS = int(os.getenv("DASHBOARD_MAX_TEXT_CHARS", "100000"))
+    DASHBOARD_MAX_PDF_BYTES = int(os.getenv("DASHBOARD_MAX_PDF_BYTES", str(10 * 1024 * 1024)))
+    DASHBOARD_EXTERNAL_TIMEOUT_SECONDS = float(os.getenv("DASHBOARD_EXTERNAL_TIMEOUT_SECONDS", "30"))
+    DASHBOARD_HISTORY_MAX_PAGE_SIZE = int(os.getenv("DASHBOARD_HISTORY_MAX_PAGE_SIZE", "50"))
 
     REDIS_URL = os.getenv("REDIS_URL")
     QUEUE_NAME = os.getenv("QUEUE_NAME", "whatsapp-events")
