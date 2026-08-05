@@ -258,7 +258,26 @@ class CatalogStorageAdapter:
         detail = f"El almacenamiento rechazó el catálogo: {provider_body or response.status_code}"
         if response.status_code == 413 or '"statusCode":"413"' in provider_body or 'EntityTooLarge' in provider_body:
             raise HTTPException(413, detail)
+        if response.status_code == 409 or "already exists" in provider_body.lower():
+            raise HTTPException(409, detail)
         raise HTTPException(502, detail)
+
+    def delete_existing(self, client_name: str) -> None:
+        key = self.key(client_name)
+        url = f"{self.base_url}/storage/v1/object/{self.bucket}/{key}"
+        try:
+            response = requests.delete(url, headers=self.headers, timeout=(5, config.DASHBOARD_EXTERNAL_TIMEOUT_SECONDS))
+        except requests.RequestException as exc:
+            logger.error("Catalog delete transport error before retry: client=%s error=%s", client_name, exc)
+            raise HTTPException(502, "No fue posible reemplazar el catálogo existente")
+        if response.status_code not in (200, 204, 404):
+            logger.error(
+                "Catalog delete provider error before retry: client=%s status=%s body=%s",
+                client_name,
+                response.status_code,
+                response.text[:500],
+            )
+            raise HTTPException(502, "El almacenamiento no permitió reemplazar el catálogo existente")
 
     def create_tus_upload(self, client_name: str, size_bytes: int) -> str:
         key = self.key(client_name)
@@ -283,7 +302,7 @@ class CatalogStorageAdapter:
             raise HTTPException(502, "El almacenamiento no devolvió URL de carga resumable")
         return urljoin(url, upload_url)
 
-    def upload_pdf(self, client_name: str, file_obj, size_bytes: int) -> dict:
+    def upload_pdf_once(self, client_name: str, file_obj, size_bytes: int) -> dict:
         chunk_size = 6 * 1024 * 1024
         upload_url = self.create_tus_upload(client_name, size_bytes)
         offset = 0
@@ -311,6 +330,17 @@ class CatalogStorageAdapter:
             logger.error("Catalog upload incomplete: client=%s size_bytes=%s uploaded_bytes=%s", client_name, size_bytes, offset)
             raise HTTPException(502, "El almacenamiento no confirmó la carga completa")
         return {"public_url": self.public_url(client_name), "updated_at": datetime.now(timezone.utc).isoformat(), "size_bytes": size_bytes}
+
+    def upload_pdf(self, client_name: str, file_obj, size_bytes: int) -> dict:
+        try:
+            return self.upload_pdf_once(client_name, file_obj, size_bytes)
+        except HTTPException as exc:
+            if exc.status_code != 409:
+                raise
+            logger.warning("Catalog path already exists during upload; deleting and retrying once: client=%s size_bytes=%s", client_name, size_bytes)
+            self.delete_existing(client_name)
+            file_obj.seek(0)
+            return self.upload_pdf_once(client_name, file_obj, size_bytes)
 
     def metadata(self, client_name: str) -> dict:
         public_url = self.public_url(client_name)

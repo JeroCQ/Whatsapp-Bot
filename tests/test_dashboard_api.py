@@ -237,3 +237,17 @@ def test_catalog_storage_uses_resumable_endpoint_and_direct_storage_hostname():
     adapter.base_url = "https://tbvcvqddpppqlwuehdaf.supabase.co"
     adapter.bucket = "catalogos"
     assert adapter.storage_hostname() == "https://tbvcvqddpppqlwuehdaf.storage.supabase.co"
+
+
+def test_catalog_storage_maps_already_exists_to_409():
+    class Response:
+        status_code = 409
+        text = "The resource already exists"
+
+    adapter = object.__new__(api.CatalogStorageAdapter)
+    try:
+        adapter.check_upload_response(Response(), "tanaka", 10)
+        assert False
+    except Exception as exc:
+        assert exc.status_code == 409
+        assert "already exists" in exc.detail
