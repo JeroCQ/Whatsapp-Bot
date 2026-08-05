@@ -45,6 +45,18 @@ warns that it may prefer it. Full-system-instruction formatting can take longer
 than proposal generation; use `DASHBOARD_FORMAT_TIMEOUT_SECONDS` (default `90`)
 to control the save endpoint timeout separately from other dashboard calls.
 
+Catalog PDFs are stored outside GitHub in Supabase Storage because real catalogs can
+be tens of megabytes. Create a public Supabase Storage bucket named `catalogos`
+(or set `CATALOG_STORAGE_BUCKET`) and let the dashboard upload to the fixed key
+`{client_name}.pdf`, for example `tanaka.pdf`. The API returns the stable public
+URL from `/api/upload-catalog` and `/api/current-catalog`; the bot also resolves
+`catalogo_pdf` to that same deterministic URL, so the old Railway `catalogo_tanaka`
+link is no longer the source of truth. Keep `catalogo_tanaka` only to declare the
+file id/description/caption for Gemini; its `link` field may remain as any valid
+HTTPS placeholder because the bot overrides the `catalogo_pdf` link at runtime with
+the deterministic Storage URL. `DASHBOARD_MAX_CATALOG_MB` defaults to `100`, and
+files above that return `413`.
+
 ## Scalability setup
 
 The app can still run without Redis for small deployments, but production scale should use the queue worker path.

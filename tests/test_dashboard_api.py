@@ -34,25 +34,48 @@ class FakeGitHub:
         return [{"sha": "abc", "commit": {"author": {"date": "2026-08-04T00:00:00Z"}, "message": "Update"}}]
 
 
-def make_client(gemini=None, github=None):
+class FakeStorage:
+    def __init__(self):
+        self.uploaded = None
+
+    def upload_pdf(self, client_name, file_obj, size_bytes):
+        self.uploaded = (client_name, file_obj.read(), size_bytes)
+        return {
+            "public_url": f"https://storage.test/catalogos/{client_name}.pdf",
+            "updated_at": "2026-08-04T00:00:00+00:00",
+            "size_bytes": size_bytes,
+        }
+
+    def metadata(self, client_name):
+        return {
+            "public_url": f"https://storage.test/catalogos/{client_name}.pdf",
+            "updated_at": "Tue, 04 Aug 2026 00:00:00 GMT",
+            "size_bytes": 123,
+        }
+
+
+def make_client(gemini=None, github=None, storage=None):
     app = FastAPI()
     app.include_router(api.router)
     if gemini:
         app.dependency_overrides[api.get_gemini] = lambda: gemini
     if github:
         app.dependency_overrides[api.get_github] = lambda: github
+    if storage:
+        app.dependency_overrides[api.get_catalog_storage] = lambda: storage
     return TestClient(app), {"X-Dashboard-API-Key": "dashboard-secret"}
 
 
 def test_successful_endpoints_and_catalog_path():
     github = FakeGitHub()
-    client, headers = make_client(FakeGemini('[{"id":"chg-1","explicacion":"e","texto_original":"old","texto_nuevo":"new"}]'), github)
+    storage = FakeStorage()
+    client, headers = make_client(FakeGemini('[{"id":"chg-1","explicacion":"e","texto_original":"old","texto_nuevo":"new"}]'), github, storage)
     response = client.post("/api/generate-si-changes", headers=headers,
                            json={"current_si": "the old text", "user_request": "change it"})
     assert response.status_code == 200
     assert response.json() == [{"id": "chg-1", "explicacion": "e", "texto_original": "old", "texto_nuevo": "new"}]
 
-    client, headers = make_client(FakeGemini("formatted"), github)
+    client, headers = make_client(FakeGemini("formatted"), github, storage)
     response = client.post("/api/format-and-save-si", headers=headers,
                            json={"client_name": "client_1", "draft_si": "draft"})
     assert response.json()["commit_sha"] == "new-sha"
@@ -75,10 +98,18 @@ def test_successful_endpoints_and_catalog_path():
     response = client.get("/api/si-history?client_name=client_1", headers=headers)
     assert response.json() == [{"date": "2026-08-04T00:00:00Z", "message": "Update", "sha": "abc"}]
 
-    response = client.post("/api/upload-catalog", headers=headers, data={"client_name": "client_1"},
+    response = client.get("/api/current-catalog?client_name=client_1", headers=headers)
+    assert response.json() == {
+        "public_url": "https://storage.test/catalogos/client_1.pdf",
+        "updated_at": "Tue, 04 Aug 2026 00:00:00 GMT",
+        "size_bytes": 123,
+    }
+
+    response = client.post("/api/upload-catalog?client_name=client_1", headers=headers,
                            files={"file": ("ignored.pdf", b"%PDF-1.7\nbody", "application/pdf")})
     assert response.status_code == 200
-    assert github.updated[0] == "public/catalogos/client_1_catalogo.pdf"
+    assert response.json()["public_url"] == "https://storage.test/catalogos/client_1.pdf"
+    assert storage.uploaded == ("client_1", b"%PDF-1.7\nbody", 13)
 
 
 def test_invalid_gemini_json_and_original_validation():
@@ -93,14 +124,14 @@ def test_invalid_gemini_json_and_original_validation():
 
 
 def test_auth_traversal_and_bad_pdfs():
-    client, headers = make_client(FakeGemini("x"), FakeGitHub())
+    client, headers = make_client(FakeGemini("x"), FakeGitHub(), FakeStorage())
     assert client.get("/api/current-si?client_name=ok").status_code == 401
     assert client.get("/api/current-si?client_name=../secret", headers=headers).status_code == 422
     assert client.get("/api/si-history?client_name=../secret", headers=headers).status_code == 422
-    assert client.post("/api/upload-catalog", headers=headers, data={"client_name": "ok"},
-                       files={"file": ("x.txt", b"hello", "text/plain")}).status_code == 422
-    assert client.post("/api/upload-catalog", headers=headers, data={"client_name": "ok"},
-                       files={"file": ("x.pdf", b"", "application/pdf")}).status_code == 422
+    assert client.post("/api/upload-catalog?client_name=ok", headers=headers,
+                       files={"file": ("x.txt", b"hello", "text/plain")}).status_code == 400
+    assert client.post("/api/upload-catalog?client_name=ok", headers=headers,
+                       files={"file": ("x.pdf", b"", "application/pdf")}).status_code == 400
 
 
 def test_sha_conflict_is_sanitized(monkeypatch):
@@ -118,9 +149,9 @@ def test_sha_conflict_is_sanitized(monkeypatch):
 
 
 def test_oversized_pdf(monkeypatch):
-    monkeypatch.setattr(api.config, "DASHBOARD_MAX_PDF_BYTES", 5)
-    client, headers = make_client(FakeGemini("x"), FakeGitHub())
-    response = client.post("/api/upload-catalog", headers=headers, data={"client_name": "ok"},
+    monkeypatch.setattr(api.config, "DASHBOARD_MAX_CATALOG_MB", 0)
+    client, headers = make_client(FakeGemini("x"), FakeGitHub(), FakeStorage())
+    response = client.post("/api/upload-catalog?client_name=ok", headers=headers,
                            files={"file": ("x.pdf", b"%PDF-123", "application/pdf")})
     assert response.status_code == 413
 

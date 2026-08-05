@@ -3,7 +3,7 @@
 import json
 import time
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import List
 from pydantic import BaseModel, Field
@@ -44,6 +44,12 @@ class BotTurn:
 
 
 FILE_CATALOG = load_file_catalog(config.catalogo_tanaka, "catalogo_tanaka")
+if "catalogo_pdf" in FILE_CATALOG:
+    FILE_CATALOG["catalogo_pdf"] = replace(
+        FILE_CATALOG["catalogo_pdf"],
+        link=config.catalog_public_url("tanaka"),
+        media_id=None,
+    )
 
 
 def transcribe_audio_message(audio_bytes: bytes, mime_type: str = "audio/ogg") -> str:

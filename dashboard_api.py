@@ -210,8 +210,74 @@ class GitHubAdapter:
             raise HTTPException(502, "No fue posible comunicarse con GitHub")
 
 
+
+
+class CatalogStorageAdapter:
+    def __init__(self) -> None:
+        self.base_url = (config.SUPABASE_URL or "").rstrip("/")
+        self.bucket = config.CATALOG_STORAGE_BUCKET
+        self.headers = {
+            "Authorization": f"Bearer {config.SUPABASE_KEY}",
+            "apikey": config.SUPABASE_KEY or "",
+        }
+
+    def key(self, client_name: str) -> str:
+        validate_client_name(client_name)
+        return config.catalog_storage_key(client_name)
+
+    def public_url(self, client_name: str) -> str:
+        validate_client_name(client_name)
+        return config.catalog_public_url(client_name)
+
+    def upload_pdf(self, client_name: str, file_obj, size_bytes: int) -> dict:
+        key = self.key(client_name)
+        url = f"{self.base_url}/storage/v1/object/{self.bucket}/{key}"
+        headers = {**self.headers, "Content-Type": "application/pdf", "x-upsert": "true"}
+        try:
+            response = put(
+                url,
+                headers=headers,
+                data=file_obj,
+                timeout=(5, config.DASHBOARD_STORAGE_TIMEOUT_SECONDS),
+            )
+        except requests.Timeout:
+            logger.error("Catalog upload timed out: client=%s size_bytes=%s", client_name, size_bytes)
+            raise HTTPException(504, "El almacenamiento excedió el tiempo límite")
+        except requests.RequestException as exc:
+            logger.error("Catalog upload transport error: client=%s size_bytes=%s error=%s", client_name, size_bytes, exc)
+            raise HTTPException(502, "No fue posible comunicarse con el almacenamiento")
+        if response.status_code >= 400:
+            provider_body = response.text[:500]
+            logger.error(
+                "Catalog upload provider error: client=%s size_bytes=%s status=%s body=%s",
+                client_name,
+                size_bytes,
+                response.status_code,
+                provider_body,
+            )
+            raise HTTPException(502, f"El almacenamiento rechazó el catálogo: {provider_body or response.status_code}")
+        return {"public_url": self.public_url(client_name), "updated_at": datetime.now(timezone.utc).isoformat(), "size_bytes": size_bytes}
+
+    def metadata(self, client_name: str) -> dict:
+        public_url = self.public_url(client_name)
+        try:
+            response = requests.head(public_url, timeout=(5, config.DASHBOARD_EXTERNAL_TIMEOUT_SECONDS), allow_redirects=True)
+        except requests.RequestException:
+            raise HTTPException(502, "No fue posible consultar el catálogo")
+        if response.status_code == 404:
+            raise HTTPException(404, "El catálogo no existe en el almacenamiento")
+        if response.status_code >= 400:
+            raise HTTPException(502, "El almacenamiento rechazó la consulta del catálogo")
+        size = response.headers.get("content-length")
+        return {
+            "public_url": public_url,
+            "updated_at": response.headers.get("last-modified"),
+            "size_bytes": int(size) if size and size.isdigit() else None,
+        }
+
 _gemini: GeminiAdapter | None = None
 _github: GitHubAdapter | None = None
+_catalog_storage: CatalogStorageAdapter | None = None
 
 
 def get_gemini() -> GeminiAdapter:
@@ -226,6 +292,13 @@ def get_github() -> GitHubAdapter:
     if _github is None:
         _github = GitHubAdapter()
     return _github
+
+
+def get_catalog_storage() -> CatalogStorageAdapter:
+    global _catalog_storage
+    if _catalog_storage is None:
+        _catalog_storage = CatalogStorageAdapter()
+    return _catalog_storage
 
 
 _requests: dict[str, deque] = defaultdict(deque)
@@ -367,24 +440,43 @@ def si_history(client_name: str = Query(min_length=1), page: int = Query(1, ge=1
              "message": item.get("commit", {}).get("message"), "sha": item.get("sha")} for item in commits]
 
 
-@router.post("/upload-catalog")
-def upload_catalog(client_name: Annotated[str, Form()], file: Annotated[UploadFile, File()],
-                   github: GitHubAdapter = Depends(get_github)):
+def uploaded_file_size(file: UploadFile) -> int:
+    current = file.file.tell()
+    file.file.seek(0, 2)
+    size = file.file.tell()
+    file.file.seek(current)
+    return size
+
+
+@router.get("/current-catalog")
+def current_catalog(client_name: str = Query(min_length=1), storage: CatalogStorageAdapter = Depends(get_catalog_storage)):
     try:
         validate_client_name(client_name)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
+    return storage.metadata(client_name)
+
+
+@router.post("/upload-catalog")
+def upload_catalog(file: Annotated[UploadFile, File()], client_name: str | None = Query(None),
+                   client_name_form: Annotated[str | None, Form(alias="client_name")] = None,
+                   storage: CatalogStorageAdapter = Depends(get_catalog_storage)):
+    resolved_client_name = client_name or client_name_form
+    if not resolved_client_name:
+        raise HTTPException(422, "client_name requerido")
+    try:
+        resolved_client_name = validate_client_name(resolved_client_name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
     if file.content_type != "application/pdf" or not (file.filename or "").lower().endswith(".pdf"):
-        raise HTTPException(422, "El archivo debe ser un PDF")
-    content = file.file.read(config.DASHBOARD_MAX_PDF_BYTES + 1)
-    if not content or not content.startswith(b"%PDF-"):
-        raise HTTPException(422, "El PDF está vacío o tiene una cabecera inválida")
-    if len(content) > config.DASHBOARD_MAX_PDF_BYTES:
-        raise HTTPException(413, "El PDF excede el tamaño máximo")
-    path = f"public/catalogos/{client_name}_catalogo.pdf"
-    existing = github.get_file(path)
-    if not existing or not existing.get("sha"):
-        raise HTTPException(404, "El catálogo configurado no existe en GitHub")
-    result = github.update_file(path, content, existing["sha"], f"Update catalog via Dashboard - {client_name}")
-    commit = result.get("commit") or {}
-    return {"success": True, "path": path, "commit_sha": commit.get("sha"), "commit_url": commit.get("html_url")}
+        raise HTTPException(400, "El archivo debe ser un PDF")
+    size_bytes = uploaded_file_size(file)
+    max_bytes = config.DASHBOARD_MAX_CATALOG_MB * 1024 * 1024
+    if size_bytes > max_bytes:
+        raise HTTPException(413, f"El PDF excede el tamaño máximo de {config.DASHBOARD_MAX_CATALOG_MB} MB")
+    header = file.file.read(5)
+    if not header or header != b"%PDF-":
+        raise HTTPException(400, "El PDF está vacío o tiene una cabecera inválida")
+    file.file.seek(0)
+    result = storage.upload_pdf(resolved_client_name, file.file, size_bytes)
+    return {"ok": True, **result}

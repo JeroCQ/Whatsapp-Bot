@@ -73,10 +73,13 @@ class Settings:
     ]
     DASHBOARD_REQUESTS_PER_MINUTE = int(os.getenv("DASHBOARD_REQUESTS_PER_MINUTE", "30"))
     DASHBOARD_MAX_TEXT_CHARS = int(os.getenv("DASHBOARD_MAX_TEXT_CHARS", "100000"))
-    DASHBOARD_MAX_PDF_BYTES = int(os.getenv("DASHBOARD_MAX_PDF_BYTES", str(10 * 1024 * 1024)))
+    DASHBOARD_MAX_PDF_BYTES = int(os.getenv("DASHBOARD_MAX_PDF_BYTES", str(100 * 1024 * 1024)))
+    DASHBOARD_MAX_CATALOG_MB = int(os.getenv("DASHBOARD_MAX_CATALOG_MB", "100"))
     DASHBOARD_EXTERNAL_TIMEOUT_SECONDS = float(os.getenv("DASHBOARD_EXTERNAL_TIMEOUT_SECONDS", "30"))
     DASHBOARD_FORMAT_TIMEOUT_SECONDS = float(os.getenv("DASHBOARD_FORMAT_TIMEOUT_SECONDS", "90"))
+    DASHBOARD_STORAGE_TIMEOUT_SECONDS = float(os.getenv("DASHBOARD_STORAGE_TIMEOUT_SECONDS", "180"))
     DASHBOARD_HISTORY_MAX_PAGE_SIZE = int(os.getenv("DASHBOARD_HISTORY_MAX_PAGE_SIZE", "50"))
+    CATALOG_STORAGE_BUCKET = os.getenv("CATALOG_STORAGE_BUCKET", "catalogos")
 
     REDIS_URL = os.getenv("REDIS_URL")
     QUEUE_NAME = os.getenv("QUEUE_NAME", "whatsapp-events")
@@ -88,6 +91,15 @@ class Settings:
     catalogo_memos = os.getenv("catalogo_memos", "[]")
     # Tanaka uses its own catalog without overwriting the reusable Memo's configuration.
     catalogo_tanaka = os.getenv("catalogo_tanaka", "[]")
+
+    @classmethod
+    def catalog_storage_key(cls, client_name: str) -> str:
+        return f"{client_name}.pdf"
+
+    @classmethod
+    def catalog_public_url(cls, client_name: str) -> str:
+        base_url = (cls.SUPABASE_URL or "").rstrip("/")
+        return f"{base_url}/storage/v1/object/public/{cls.CATALOG_STORAGE_BUCKET}/{cls.catalog_storage_key(client_name)}"
     
     @classmethod
     def validate(cls):
