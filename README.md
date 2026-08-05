@@ -2,6 +2,58 @@
 
 FastAPI WhatsApp sales bot with Chatwoot handoff and Gemini responses.
 
+## Dashboard administrativo de Tanaka
+
+The repository contains the initial dashboard-managed Tanaka system instruction at
+`src/clients/tanaka/system_instruction.txt`. Real catalog PDFs are not committed to
+the repository; the dashboard stores them in Supabase Storage and the bot resolves
+`catalogo_pdf` to that Storage URL at runtime.
+
+The password-only dashboard proxy now lives in Lovable/TanStack Start server routes,
+not in this FastAPI service. Configure the proxy with server-only secrets (never
+variables prefixed with `VITE_`):
+
+- `DASHBOARD_BACKEND_URL=https://powerful-stillness-production-ffd8.up.railway.app`
+- `DASHBOARD_API_KEY` with exactly the same value used by Railway
+- `TANAKA_DASHBOARD_PASSWORD` with Tanaka's dashboard password
+- `MEMOS_DASHBOARD_PASSWORD` with Memo's dashboard password
+
+The Lovable server route sends `X-Dashboard-API-Key` to Railway, injects the
+allowed `client_name`, and forwards browser traffic to `/api/current-si`,
+`/api/generate-si-changes`, `/api/format-and-save-si`, `/api/si-history`, and
+`/api/upload-catalog`. The backend stores GitHub metadata automatically from
+Railway's native `RAILWAY_GIT_REPO_OWNER`, `RAILWAY_GIT_REPO_NAME`, and
+`RAILWAY_GIT_BRANCH` variables, with manual `GITHUB_OWNER`, `GITHUB_REPO`, and
+`GITHUB_BRANCH` used only as fallbacks outside Railway.
+
+For dashboard Gemini calls, leave `GEMINI_DASHBOARD_MODEL` unset to use
+`gemini-3.6-flash`, or set it to a concrete model returned by the Gemini
+Developer API. Do not use old aliases such as `gemini-1.5-flash-latest`, and do
+not rely on 2.5 model IDs for new API projects; the backend normalizes known old
+IDs to `gemini-3.6-flash` and retries fallback models from
+`GEMINI_DASHBOARD_FALLBACK_MODELS` before returning a provider error. If both
+`GOOGLE_API_KEY` and `GEMINI_API_KEY` are set in Railway, remove
+`GOOGLE_API_KEY` unless it is intentionally the same key, because the Google SDK
+warns that it may prefer it. Full-system-instruction formatting can take longer
+than proposal generation; use `DASHBOARD_FORMAT_TIMEOUT_SECONDS` (default `90`)
+to control the save endpoint timeout separately from other dashboard calls.
+
+Catalog PDFs are stored outside GitHub in Supabase Storage because real catalogs can
+be tens of megabytes. Create a public Supabase Storage bucket named `catalogos`
+(or set `CATALOG_STORAGE_BUCKET`) and let the dashboard upload to the fixed key
+`{client_name}.pdf`, for example `tanaka.pdf`. The API uses Supabase resumable/TUS
+uploads through the direct `*.storage.supabase.co` hostname so files larger than
+the standard upload limit can succeed. The API returns the stable public URL from
+`/api/upload-catalog` and `/api/current-catalog`; the bot also resolves
+`catalogo_pdf` to that same deterministic URL, so the old Railway `catalogo_tanaka`
+link is no longer the source of truth. Keep `catalogo_tanaka` only to declare the
+file id/description/caption for Gemini; its `link` field may remain as any valid
+HTTPS placeholder because the bot overrides the `catalogo_pdf` link at runtime with
+the deterministic Storage URL. `DASHBOARD_MAX_CATALOG_MB` defaults to `100`, and
+files above that return `413`. On Supabase Free projects, also raise the Storage
+file-size setting or upgrade as needed because Supabase can enforce a project-level
+50 MB limit before the app limit is reached.
+
 ## Scalability setup
 
 The app can still run without Redis for small deployments, but production scale should use the queue worker path.
