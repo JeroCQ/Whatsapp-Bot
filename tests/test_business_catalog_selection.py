@@ -27,5 +27,14 @@ class BusinessCatalogSelectionTests(unittest.TestCase):
         )
 
 
+class DashboardCatalogUrlTests(unittest.TestCase):
+    def test_bot_overrides_catalog_pdf_link_with_storage_url(self):
+        source = Path("bot.py").read_text(encoding="utf-8")
+
+        self.assertIn('FILE_CATALOG["catalogo_pdf"] = replace(', source)
+        self.assertIn('link=config.catalog_public_url("tanaka")', source)
+        self.assertIn('media_id=None', source)
+
+
 if __name__ == "__main__":
     unittest.main()
