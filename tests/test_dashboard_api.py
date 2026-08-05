@@ -216,3 +216,24 @@ def test_format_and_save_ignores_lovable_metadata_without_echoing_prompt():
 
     assert response.status_code == 200
     assert "sensitive prompt body" not in response.text
+
+
+def test_catalog_storage_maps_provider_entity_too_large_to_413():
+    class Response:
+        status_code = 400
+        text = '{"statusCode":"413","error":"Payload too large","code":"EntityTooLarge"}'
+
+    adapter = object.__new__(api.CatalogStorageAdapter)
+    try:
+        adapter.check_upload_response(Response(), "tanaka", 65036357)
+        assert False
+    except Exception as exc:
+        assert exc.status_code == 413
+        assert "Payload too large" in exc.detail
+
+
+def test_catalog_storage_uses_resumable_endpoint_and_direct_storage_hostname():
+    adapter = object.__new__(api.CatalogStorageAdapter)
+    adapter.base_url = "https://tbvcvqddpppqlwuehdaf.supabase.co"
+    adapter.bucket = "catalogos"
+    assert adapter.storage_hostname() == "https://tbvcvqddpppqlwuehdaf.storage.supabase.co"

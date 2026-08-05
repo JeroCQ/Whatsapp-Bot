@@ -11,6 +11,7 @@ from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
+from urllib.parse import urljoin, urlparse
 from typing import Annotated, Any
 
 import requests
@@ -229,33 +230,86 @@ class CatalogStorageAdapter:
         validate_client_name(client_name)
         return config.catalog_public_url(client_name)
 
-    def upload_pdf(self, client_name: str, file_obj, size_bytes: int) -> dict:
+    def storage_hostname(self) -> str:
+        parsed = urlparse(self.base_url)
+        if parsed.netloc.endswith(".supabase.co"):
+            project_ref = parsed.netloc.split(".")[0]
+            return f"https://{project_ref}.storage.supabase.co"
+        return self.base_url
+
+    @staticmethod
+    def tus_metadata(**items: str) -> str:
+        return ",".join(
+            f"{key} {base64.b64encode(value.encode('utf-8')).decode('ascii')}"
+            for key, value in items.items()
+        )
+
+    def check_upload_response(self, response: requests.Response, client_name: str, size_bytes: int) -> None:
+        if response.status_code < 400:
+            return
+        provider_body = response.text[:500]
+        logger.error(
+            "Catalog upload provider error: client=%s size_bytes=%s status=%s body=%s",
+            client_name,
+            size_bytes,
+            response.status_code,
+            provider_body,
+        )
+        detail = f"El almacenamiento rechazó el catálogo: {provider_body or response.status_code}"
+        if response.status_code == 413 or '"statusCode":"413"' in provider_body or 'EntityTooLarge' in provider_body:
+            raise HTTPException(413, detail)
+        raise HTTPException(502, detail)
+
+    def create_tus_upload(self, client_name: str, size_bytes: int) -> str:
         key = self.key(client_name)
-        url = f"{self.base_url}/storage/v1/object/{self.bucket}/{key}"
-        headers = {**self.headers, "Content-Type": "application/pdf", "x-upsert": "true"}
+        url = f"{self.storage_hostname()}/storage/v1/upload/resumable"
+        headers = {
+            **self.headers,
+            "Tus-Resumable": "1.0.0",
+            "Upload-Length": str(size_bytes),
+            "Upload-Metadata": self.tus_metadata(
+                bucketName=self.bucket,
+                objectName=key,
+                contentType="application/pdf",
+                cacheControl="3600",
+            ),
+            "x-upsert": "true",
+        }
+        response = requests.post(url, headers=headers, timeout=(5, config.DASHBOARD_STORAGE_TIMEOUT_SECONDS))
+        self.check_upload_response(response, client_name, size_bytes)
+        upload_url = response.headers.get("location")
+        if not upload_url:
+            logger.error("Catalog upload provider error: client=%s size_bytes=%s status=%s body=missing Location", client_name, size_bytes, response.status_code)
+            raise HTTPException(502, "El almacenamiento no devolvió URL de carga resumable")
+        return urljoin(url, upload_url)
+
+    def upload_pdf(self, client_name: str, file_obj, size_bytes: int) -> dict:
+        chunk_size = 6 * 1024 * 1024
+        upload_url = self.create_tus_upload(client_name, size_bytes)
+        offset = 0
         try:
-            response = put(
-                url,
-                headers=headers,
-                data=file_obj,
-                timeout=(5, config.DASHBOARD_STORAGE_TIMEOUT_SECONDS),
-            )
+            while True:
+                chunk = file_obj.read(chunk_size)
+                if not chunk:
+                    break
+                headers = {
+                    **self.headers,
+                    "Tus-Resumable": "1.0.0",
+                    "Upload-Offset": str(offset),
+                    "Content-Type": "application/offset+octet-stream",
+                }
+                response = requests.patch(upload_url, headers=headers, data=chunk, timeout=(5, config.DASHBOARD_STORAGE_TIMEOUT_SECONDS))
+                self.check_upload_response(response, client_name, size_bytes)
+                offset = int(response.headers.get("upload-offset") or offset + len(chunk))
         except requests.Timeout:
-            logger.error("Catalog upload timed out: client=%s size_bytes=%s", client_name, size_bytes)
+            logger.error("Catalog upload timed out: client=%s size_bytes=%s uploaded_bytes=%s", client_name, size_bytes, offset)
             raise HTTPException(504, "El almacenamiento excedió el tiempo límite")
         except requests.RequestException as exc:
-            logger.error("Catalog upload transport error: client=%s size_bytes=%s error=%s", client_name, size_bytes, exc)
+            logger.error("Catalog upload transport error: client=%s size_bytes=%s uploaded_bytes=%s error=%s", client_name, size_bytes, offset, exc)
             raise HTTPException(502, "No fue posible comunicarse con el almacenamiento")
-        if response.status_code >= 400:
-            provider_body = response.text[:500]
-            logger.error(
-                "Catalog upload provider error: client=%s size_bytes=%s status=%s body=%s",
-                client_name,
-                size_bytes,
-                response.status_code,
-                provider_body,
-            )
-            raise HTTPException(502, f"El almacenamiento rechazó el catálogo: {provider_body or response.status_code}")
+        if offset != size_bytes:
+            logger.error("Catalog upload incomplete: client=%s size_bytes=%s uploaded_bytes=%s", client_name, size_bytes, offset)
+            raise HTTPException(502, "El almacenamiento no confirmó la carga completa")
         return {"public_url": self.public_url(client_name), "updated_at": datetime.now(timezone.utc).isoformat(), "size_bytes": size_bytes}
 
     def metadata(self, client_name: str) -> dict:
