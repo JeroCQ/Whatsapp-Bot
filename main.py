@@ -1,3 +1,4 @@
+import hashlib
 import os
 import time
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -202,11 +203,21 @@ def send_presaved_file(to_number: str, file_id: str):
     if not item:
         print(f"[FILE CATALOG] Ignoring unknown file id requested by AI: {file_id}")
         return
-    media_reference = {"id": item.media_id} if item.media_id else {"link": catalog_link_for_whatsapp(file_id, item.link)}
+    resolved_filename = item.filename
+    if item.media_id:
+        media_reference = {"id": item.media_id}
+    else:
+        resolved_link = catalog_link_for_whatsapp(file_id, item.link)
+        media_reference = {"link": resolved_link}
+        if file_id == "catalogo_pdf" and item.media_type == "document":
+            version = dict(parse_qsl(urlsplit(resolved_link).query, keep_blank_values=True)).get("v", "")
+            digest = hashlib.sha256(version.encode("utf-8")).hexdigest()[:12] if version else str(int(time.time()))
+            resolved_filename = f"catalogo-tanaka-{digest}.pdf"
+            print(f"[FILE CATALOG] Sending dashboard catalog link={resolved_link} filename={resolved_filename}")
     if item.default_caption and item.media_type in {"document", "image", "video"}:
         media_reference["caption"] = item.default_caption
-    if item.filename and item.media_type == "document":
-        media_reference["filename"] = item.filename
+    if resolved_filename and item.media_type == "document":
+        media_reference["filename"] = resolved_filename
     payload = {
         "messaging_product": "whatsapp",
         "recipient_type": "individual",

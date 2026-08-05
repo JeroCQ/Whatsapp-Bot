@@ -18,6 +18,6 @@ def test_tanaka_dashboard_instruction_starts_with_current_prompt():
     assert stored == _literal_system_instruction()
 
 
-def test_tanaka_catalog_placeholder_is_a_pdf_at_the_dashboard_path():
+def test_tanaka_catalog_placeholder_was_removed_from_repo_storage():
     catalog = ROOT / "public/catalogos/tanaka_catalogo.pdf"
-    assert catalog.read_bytes().startswith(b"%PDF-")
+    assert not catalog.exists()

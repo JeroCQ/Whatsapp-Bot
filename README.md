@@ -4,17 +4,10 @@ FastAPI WhatsApp sales bot with Chatwoot handoff and Gemini responses.
 
 ## Dashboard administrativo de Tanaka
 
-The repository contains the initial dashboard-managed Tanaka files at:
-
-- `src/clients/tanaka/system_instruction.txt`
-- `public/catalogos/tanaka_catalogo.pdf`
-
-The PDF committed to the repository is intentionally a valid placeholder. Replace it
-from the dashboard with the real catalog before sharing it with customers. Railway
-serves the committed catalog at
-`https://powerful-stillness-production-ffd8.up.railway.app/public/catalogos/tanaka_catalogo.pdf`.
-Set the existing Railway variable `catalogo_tanaka` to use that URL for the
-`catalogo_pdf` entry.
+The repository contains the initial dashboard-managed Tanaka system instruction at
+`src/clients/tanaka/system_instruction.txt`. Real catalog PDFs are not committed to
+the repository; the dashboard stores them in Supabase Storage and the bot resolves
+`catalogo_pdf` to that Storage URL at runtime.
 
 The password-only dashboard proxy now lives in Lovable/TanStack Start server routes,
 not in this FastAPI service. Configure the proxy with server-only secrets (never

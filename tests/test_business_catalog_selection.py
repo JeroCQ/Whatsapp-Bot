@@ -41,6 +41,7 @@ class DashboardCatalogUrlTests(unittest.TestCase):
         self.assertIn("def catalog_link_for_whatsapp", source)
         self.assertIn('query["v"]', source)
         self.assertIn('catalog_link_for_whatsapp(file_id, item.link)', source)
+        self.assertIn('resolved_filename = f"catalogo-tanaka-', source)
 
 
 if __name__ == "__main__":
