@@ -1,5 +1,6 @@
 import os
 import time
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import requests
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
@@ -177,13 +178,31 @@ def send_whatsapp_media(to_number: str, media_id: str, media_type: str, caption:
         print(f"Error enviando WhatsApp de {media_type} a {to_number}: {e}")
 
 
+
+def catalog_link_for_whatsapp(file_id: str, link: str) -> str:
+    """Add a cache-busting query to dashboard-managed catalog links sent through Meta."""
+    if file_id != "catalogo_pdf" or link != config.catalog_public_url("tanaka"):
+        return link
+    try:
+        response = requests.head(link, timeout=MEDIA_TIMEOUT, allow_redirects=True)
+        response.raise_for_status()
+        version = response.headers.get("etag") or response.headers.get("last-modified") or response.headers.get("content-length")
+    except requests.exceptions.RequestException as exc:
+        print(f"[FILE CATALOG] Could not version catalog link for WhatsApp cache busting: {exc}")
+        version = str(int(time.time()))
+    parts = urlsplit(link)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    query["v"] = str(version or int(time.time()))
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+
 def send_presaved_file(to_number: str, file_id: str):
     """Send one allow-listed file selected by Gemini from the configured catalog."""
     item = FILE_CATALOG.get(file_id)
     if not item:
         print(f"[FILE CATALOG] Ignoring unknown file id requested by AI: {file_id}")
         return
-    media_reference = {"id": item.media_id} if item.media_id else {"link": item.link}
+    media_reference = {"id": item.media_id} if item.media_id else {"link": catalog_link_for_whatsapp(file_id, item.link)}
     if item.default_caption and item.media_type in {"document", "image", "video"}:
         media_reference["caption"] = item.default_caption
     if item.filename and item.media_type == "document":

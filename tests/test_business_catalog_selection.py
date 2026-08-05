@@ -35,6 +35,13 @@ class DashboardCatalogUrlTests(unittest.TestCase):
         self.assertIn('link=config.catalog_public_url("tanaka")', source)
         self.assertIn('media_id=None', source)
 
+    def test_main_cache_busts_dashboard_catalog_link_for_meta(self):
+        source = Path("main.py").read_text(encoding="utf-8")
+
+        self.assertIn("def catalog_link_for_whatsapp", source)
+        self.assertIn('query["v"]', source)
+        self.assertIn('catalog_link_for_whatsapp(file_id, item.link)', source)
+
 
 if __name__ == "__main__":
     unittest.main()
