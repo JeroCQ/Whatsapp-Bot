@@ -27,5 +27,21 @@ class BusinessCatalogSelectionTests(unittest.TestCase):
         )
 
 
+class DashboardCatalogUrlTests(unittest.TestCase):
+    def test_bot_overrides_catalog_pdf_link_with_storage_url(self):
+        source = Path("bot.py").read_text(encoding="utf-8")
+
+        self.assertIn('FILE_CATALOG["catalogo_pdf"] = replace(', source)
+        self.assertIn('link=config.catalog_public_url("tanaka")', source)
+        self.assertIn('media_id=None', source)
+
+    def test_main_cache_busts_dashboard_catalog_link_for_meta(self):
+        source = Path("main.py").read_text(encoding="utf-8")
+
+        self.assertIn("def catalog_link_for_whatsapp", source)
+        self.assertIn('query["v"]', source)
+        self.assertIn('catalog_link_for_whatsapp(file_id, item.link)', source)
+
+
 if __name__ == "__main__":
     unittest.main()
