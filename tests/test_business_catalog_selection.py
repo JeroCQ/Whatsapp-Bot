@@ -42,6 +42,8 @@ class DashboardCatalogUrlTests(unittest.TestCase):
         self.assertIn('query["v"]', source)
         self.assertIn('catalog_link_for_whatsapp(file_id, item.link)', source)
         self.assertIn('resolved_filename = f"catalogo-tanaka-', source)
+        self.assertIn("def upload_public_url_to_meta_media", source)
+        self.assertIn("upload_public_url_to_meta_media(resolved_link, resolved_filename", source)
 
 
 if __name__ == "__main__":

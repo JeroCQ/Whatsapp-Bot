@@ -197,6 +197,32 @@ def catalog_link_for_whatsapp(file_id: str, link: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 
+
+def upload_public_url_to_meta_media(file_url: str, filename: str, fallback_mime_type: str = "application/pdf") -> str:
+    """Download a public file and upload it to Meta so WhatsApp receives fresh media bytes."""
+    try:
+        res = get(file_url, timeout=MEDIA_TIMEOUT)
+        res.raise_for_status()
+        mime_type = (res.headers.get("Content-Type") or fallback_mime_type).split(";")[0]
+        url = f"https://graph.facebook.com/v20.0/{config.WA_PHONE_NUMBER_ID}/media"
+        headers = {"Authorization": f"Bearer {config.WA_TOKEN}"}
+        files = {"file": (filename, res.content, mime_type)}
+        data = {"messaging_product": "whatsapp"}
+        response = post(url, headers=headers, files=files, data=data, timeout=MEDIA_TIMEOUT)
+        response.raise_for_status()
+        media_id = response.json().get("id")
+        if media_id:
+            print(f"[FILE CATALOG] Uploaded fresh catalog bytes to Meta media_id={media_id}")
+        else:
+            print(f"[FILE CATALOG] Meta did not return media id for fresh catalog upload: {response.text}")
+        return media_id
+    except requests.exceptions.RequestException as exc:
+        response = getattr(exc, "response", None)
+        detail = response.text if response is not None else str(exc)
+        print(f"[FILE CATALOG] Error uploading fresh catalog bytes to Meta: {detail}")
+        return None
+
+
 def send_presaved_file(to_number: str, file_id: str):
     """Send one allow-listed file selected by Gemini from the configured catalog."""
     item = FILE_CATALOG.get(file_id)
@@ -214,6 +240,9 @@ def send_presaved_file(to_number: str, file_id: str):
             digest = hashlib.sha256(version.encode("utf-8")).hexdigest()[:12] if version else str(int(time.time()))
             resolved_filename = f"catalogo-tanaka-{digest}.pdf"
             print(f"[FILE CATALOG] Sending dashboard catalog link={resolved_link} filename={resolved_filename}")
+            media_id = upload_public_url_to_meta_media(resolved_link, resolved_filename, "application/pdf")
+            if media_id:
+                media_reference = {"id": media_id}
     if item.default_caption and item.media_type in {"document", "image", "video"}:
         media_reference["caption"] = item.default_caption
     if resolved_filename and item.media_type == "document":
