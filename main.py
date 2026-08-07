@@ -1,6 +1,8 @@
+import asyncio
 import hashlib
 import os
 import time
+import traceback
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import requests
@@ -40,6 +42,7 @@ from queue_client import (
 )
 from webhook_utils import chatwoot_event_identity, is_restart_command
 from dashboard_api import router as dashboard_router
+from kommo_api import InvalidKommoPayload, extract_kommo_message, send_message_kommo
 
 app = FastAPI()
 app.add_middleware(
@@ -547,6 +550,34 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
     except Exception as e:
         print(f"Error Webhook Meta: {e}")
         return {"status": "error"}
+
+
+async def process_kommo_message(chat_id: str, contact_id: str, message_text: str):
+    """Ejecuta el nucleo existente sin bloquear el event loop y responde por Kommo."""
+    try:
+        ai_turn = await asyncio.to_thread(process_message_logic, contact_id, message_text)
+        if ai_turn and ai_turn.response:
+            await send_message_kommo(chat_id, ai_turn.response)
+    except Exception:
+        # Background failures must be logged without affecting the acknowledged webhook.
+        print(f"[KOMMO ERROR] Fallo procesando chat_id={chat_id} contact_id={contact_id}")
+        traceback.print_exc()
+
+
+@app.post("/api/webhook/kommo")
+async def kommo_webhook(request: Request, background_tasks: BackgroundTasks):
+    """Recibe la peticion HTTP del Salesbot y confirma aun si esta mal formada."""
+    try:
+        data = await request.json()
+        chat_id, contact_id, message_text = extract_kommo_message(data)
+        background_tasks.add_task(process_kommo_message, chat_id, contact_id, message_text)
+        return {"status": "accepted", "chat_id": chat_id, "contact_id": contact_id}
+    except InvalidKommoPayload as exc:
+        print(f"[KOMMO WEBHOOK] Payload ignorado: {exc}")
+        return {"status": "ignored", "reason": str(exc)}
+    except Exception as exc:
+        print(f"[KOMMO WEBHOOK] No se pudo leer el payload: {exc}")
+        return {"status": "ignored", "reason": "invalid_json"}
 
 
 @app.post("/chatwoot-webhook")
