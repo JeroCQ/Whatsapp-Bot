@@ -77,6 +77,12 @@ async def health_check():
 async def log_deployment_version():
     """Log the Railway commit so deployments can be verified."""
     print(f"[STARTUP] WhatsApp bot running commit: {DEPLOYMENT_COMMIT_SHA}. Queue enabled: {queue_enabled()}")
+    print(
+        "[STARTUP] Kommo adapter: "
+        f"route=/api/webhook/kommo "
+        f"base_url_configured={bool(config.KOMMO_BASE_URL)} "
+        f"private_token_configured={bool(config.KOMMO_PRIVATE_TOKEN)}"
+    )
 
 
 def _attachment_url(attachment: dict) -> str:
@@ -570,6 +576,7 @@ async def kommo_webhook(request: Request, background_tasks: BackgroundTasks):
     try:
         data = await request.json()
         chat_id, contact_id, message_text = extract_kommo_message(data)
+        print(f"[KOMMO WEBHOOK] Mensaje aceptado chat_id={chat_id} contact_id={contact_id}")
         background_tasks.add_task(process_kommo_message, chat_id, contact_id, message_text)
         return {"status": "accepted", "chat_id": chat_id, "contact_id": contact_id}
     except InvalidKommoPayload as exc:
@@ -578,6 +585,17 @@ async def kommo_webhook(request: Request, background_tasks: BackgroundTasks):
     except Exception as exc:
         print(f"[KOMMO WEBHOOK] No se pudo leer el payload: {exc}")
         return {"status": "ignored", "reason": "invalid_json"}
+
+
+@app.get("/api/webhook/kommo")
+async def kommo_webhook_status():
+    """Public, secret-free probe used to verify that Railway deployed the adapter."""
+    return {
+        "status": "ready",
+        "adapter": "kommo",
+        "commit": DEPLOYMENT_COMMIT_SHA,
+        "outbound_configured": bool(config.KOMMO_BASE_URL and config.KOMMO_PRIVATE_TOKEN),
+    }
 
 
 @app.post("/chatwoot-webhook")

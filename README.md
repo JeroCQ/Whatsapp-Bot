@@ -77,6 +77,8 @@ Existing required variables are still needed:
   `KOMMO_REQUEST_TIMEOUT_SECONDS` (defaults to `20`). Configure the Salesbot HTTP
   widget to send JSON to `POST /api/webhook/kommo` with `chat_id`, `contact_id`, and
   either `text` or `message`; equivalent nested `payload`/`data` objects are accepted.
+  Open `GET /api/webhook/kommo` in a browser to confirm the adapter version deployed
+  by Railway without exposing credentials.
 
 For scalable queued processing, also set:
 
