@@ -72,6 +72,13 @@ Existing required variables are still needed:
 - `WA_PHONE_NUMBER_ID`
 - `GEMINI_API_KEY`
 - Chatwoot variables used by handoff: `CHATWOOT_BASE_URL`, `CHATWOOT_API_TOKEN`, `CHATWOOT_ACCOUNT_ID`, `CHATWOOT_INBOX_ID`
+- Kommo adapter: `KOMMO_BASE_URL` (for example, `https://account.kommo.com`) and
+  `KOMMO_PRIVATE_TOKEN` (Bearer token from the Private Integration). Optionally set
+  `KOMMO_REQUEST_TIMEOUT_SECONDS` (defaults to `20`). Configure the Salesbot HTTP
+  widget to send JSON to `POST /api/webhook/kommo` with `chat_id`, `contact_id`, and
+  either `text` or `message`; equivalent nested `payload`/`data` objects are accepted.
+  Open `GET /api/webhook/kommo` in a browser to confirm the adapter version deployed
+  by Railway without exposing credentials.
 
 For scalable queued processing, also set:
 
