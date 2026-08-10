@@ -38,8 +38,11 @@ def extract_kommo_message(data: Any) -> tuple[str, str, str]:
         raise InvalidKommoPayload("El cuerpo debe ser un objeto JSON")
 
     chat_id = _first(data, (
-        ("chat_id",), ("chat", "id"), ("message", "chat_id"),
+        ("talk_id",), ("chat_id",), ("talk", "id"), ("chat", "id"), ("message", "talk_id"),
+        ("message", "chat_id"),
+        ("payload", "talk_id"), ("payload", "talk", "id"),
         ("payload", "chat_id"), ("payload", "chat", "id"),
+        ("data", "talk_id"), ("data", "talk", "id"),
         ("data", "chat_id"), ("data", "chat", "id"),
     ))
     contact_id = _first(data, (
@@ -78,13 +81,15 @@ async def send_message_kommo(chat_id: str, text: str) -> bool:
         logger.error("No se puede enviar a Kommo un chat_id o texto vacio")
         return False
 
-    url = f"{config.KOMMO_BASE_URL.rstrip('/')}/api/v4/chats/{quote(str(chat_id), safe='')}/messages"
+    # Kommo calls the CRM conversation identifier `talk_id`. Keep chat_id in
+    # this adapter's public signature for compatibility with the Salesbot body.
+    url = f"{config.KOMMO_BASE_URL.rstrip('/')}/api/v4/talks/{quote(str(chat_id), safe='')}/send_message"
     headers = {
         "Authorization": f"Bearer {config.KOMMO_PRIVATE_TOKEN}",
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
-    payload = {"message": {"text": text.strip()}}
+    payload = {"text": text.strip()}
     try:
         async with httpx.AsyncClient(timeout=config.KOMMO_REQUEST_TIMEOUT_SECONDS) as client:
             response = await client.post(url, headers=headers, json=payload)

@@ -79,6 +79,9 @@ Existing required variables are still needed:
   either `text` or `message`; equivalent nested `payload`/`data` objects are accepted.
   Open `GET /api/webhook/kommo` in a browser to confirm the adapter version deployed
   by Railway without exposing credentials.
+  For replies, `chat_id` must contain Kommo's numeric conversation ID (`talk_id`),
+  not a lead ID or a test label. The Private Integration also needs the
+  **Sending to external chats** scope.
 
 For scalable queued processing, also set:
 

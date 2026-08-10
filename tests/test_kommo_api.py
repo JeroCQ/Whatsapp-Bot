@@ -27,6 +27,10 @@ class KommoPayloadTests(unittest.TestCase):
         payload = {"payload": {"chat": {"id": "c1"}, "contact": {"id": 7}, "message": {"text": "Hola"}}}
         self.assertEqual(extract_kommo_message(payload), ("c1", "7", "Hola"))
 
+    def test_accepts_kommo_talk_id_name(self):
+        payload = {"talk_id": 12345, "contact_id": 7, "text": "Hola"}
+        self.assertEqual(extract_kommo_message(payload), ("12345", "7", "Hola"))
+
     def test_rejects_incomplete_payload(self):
         with self.assertRaises(InvalidKommoPayload):
             extract_kommo_message({"chat_id": "c1"})
@@ -45,17 +49,17 @@ class KommoSendingTests(unittest.TestCase):
             patch("kommo_api.config.KOMMO_PRIVATE_TOKEN", "private-token"),
             patch("kommo_api.httpx.AsyncClient", return_value=client),
         ):
-            result = asyncio.run(send_message_kommo("chat/1", "Respuesta"))
+            result = asyncio.run(send_message_kommo("12345", "Respuesta"))
 
         self.assertTrue(result)
         client.post.assert_awaited_once_with(
-            "https://account.kommo.com/api/v4/chats/chat%2F1/messages",
+            "https://account.kommo.com/api/v4/talks/12345/send_message",
             headers={
                 "Authorization": "Bearer private-token",
                 "Content-Type": "application/json",
                 "Accept": "application/json",
             },
-            json={"message": {"text": "Respuesta"}},
+            json={"text": "Respuesta"},
         )
 
 
