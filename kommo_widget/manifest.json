@@ -22,7 +22,7 @@
     }
   },
   "salesbot_designer": {
-    "logo": "/widgets/railway_ai_agent/images/logo.png",
+    "logo": "/images/logo.png",
     "railway_agent": {
       "name": "salesbot.handler_name",
       "settings": {

@@ -24,10 +24,17 @@ jobs:
       - name: Build and validate widget ZIP
         run: ./kommo_widget/build.sh
 
+      # Upload the widget files themselves, not the already-built ZIP. GitHub
+      # packages artifacts as ZIP files, so uploading the ZIP here would create
+      # a confusing ZIP-inside-a-ZIP that Kommo rejects (manifest not at root).
       - name: Upload installable Kommo widget
         uses: actions/upload-artifact@v4
         with:
           name: kommo-salesbot-widget
-          path: dist/kommo-salesbot-widget.zip
+          path: |
+            kommo_widget/manifest.json
+            kommo_widget/script.js
+            kommo_widget/i18n
+            kommo_widget/images
           if-no-files-found: error
           retention-days: 30

@@ -19,10 +19,10 @@ de texto verificables del widget:
 4. Abre la ejecución verde correspondiente al commit fusionado. Si no hay una,
    pulsa **Run workflow**, selecciona la rama y confirma **Run workflow**.
 5. Baja hasta **Artifacts** y descarga **kommo-salesbot-widget**.
-6. Windows descargará un contenedor llamado `kommo-salesbot-widget.zip`. Ábrelo una
-   vez y extrae el archivo interior, también llamado `kommo-salesbot-widget.zip`.
-7. El **ZIP interior** es el que debes subir a Kommo. No lo descomprimas ni lo vuelvas
-   a comprimir.
+6. GitHub descargará `kommo-salesbot-widget.zip`. Ese archivo ya es el ZIP instalable:
+   no lo descomprimas ni lo vuelvas a comprimir.
+7. Antes de subirlo, puedes abrirlo sin extraerlo para comprobar que `manifest.json`
+   aparece inmediatamente junto a `script.js`, `i18n/` e `images/`.
 
 ## Subirlo a la integración mostrada en Kommo
 
