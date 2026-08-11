@@ -72,16 +72,19 @@ Existing required variables are still needed:
 - `WA_PHONE_NUMBER_ID`
 - `GEMINI_API_KEY`
 - Chatwoot variables used by handoff: `CHATWOOT_BASE_URL`, `CHATWOOT_API_TOKEN`, `CHATWOOT_ACCOUNT_ID`, `CHATWOOT_INBOX_ID`
-- Kommo adapter: `KOMMO_BASE_URL` (for example, `https://account.kommo.com`) and
-  `KOMMO_PRIVATE_TOKEN` (Bearer token from the Private Integration). Optionally set
-  `KOMMO_REQUEST_TIMEOUT_SECONDS` (defaults to `20`). Configure the Salesbot HTTP
-  widget to send JSON to `POST /api/webhook/kommo` with `chat_id`, `contact_id`, and
-  either `text` or `message`; equivalent nested `payload`/`data` objects are accepted.
+- Kommo adapter: `KOMMO_BASE_URL` (for example, `https://account.kommo.com`),
+  `KOMMO_PRIVATE_TOKEN` (long-lived token), `KOMMO_INTEGRATION_SECRET` (the generated
+  secret key), and `KOMMO_INTEGRATION_ID` (the integration UUID). Optionally set
+  `KOMMO_REQUEST_TIMEOUT_SECONDS` (defaults to `20`). Upload the Salesbot widget from
+  `dist/kommo-salesbot-widget.zip`, add it to the Salesbot flow, and configure its
+  Railway URL as `https://YOUR-DOMAIN/api/webhook/kommo`. The widget sends Kommo's
+  official `widget_request`; the server validates its JWT and replies through its
+  single-use `return_url`.
   Open `GET /api/webhook/kommo` in a browser to confirm the adapter version deployed
   by Railway without exposing credentials.
-  For replies, `chat_id` must contain Kommo's numeric conversation ID (`talk_id`),
-  not a lead ID or a test label. The Private Integration also needs the
-  **Sending to external chats** scope.
+  See `kommo_widget/README.md` for exact ZIP structure, build, upload, and Salesbot
+  installation steps. The legacy direct `talk_id` payload remains available only for
+  diagnostics; normal replies to channels owned by other integrations use Salesbot.
 
 For scalable queued processing, also set:
 

@@ -42,7 +42,15 @@ from queue_client import (
 )
 from webhook_utils import chatwoot_event_identity, is_restart_command
 from dashboard_api import router as dashboard_router
-from kommo_api import InvalidKommoPayload, extract_kommo_message, send_message_kommo
+from kommo_api import (
+    InvalidKommoPayload,
+    InvalidKommoToken,
+    continue_salesbot,
+    extract_kommo_message,
+    extract_widget_request,
+    is_widget_request,
+    send_message_kommo,
+)
 
 app = FastAPI()
 app.add_middleware(
@@ -81,7 +89,8 @@ async def log_deployment_version():
         "[STARTUP] Kommo adapter: "
         f"route=/api/webhook/kommo "
         f"base_url_configured={bool(config.KOMMO_BASE_URL)} "
-        f"private_token_configured={bool(config.KOMMO_PRIVATE_TOKEN)}"
+        f"private_token_configured={bool(config.KOMMO_PRIVATE_TOKEN)} "
+        f"widget_secret_configured={bool(config.KOMMO_INTEGRATION_SECRET)}"
     )
 
 
@@ -570,15 +579,39 @@ async def process_kommo_message(chat_id: str, contact_id: str, message_text: str
         traceback.print_exc()
 
 
+async def process_kommo_widget_message(contact_id: str, message_text: str, return_url: str):
+    """Run the existing agent and resume the official Kommo Salesbot widget."""
+    try:
+        ai_turn = await asyncio.to_thread(process_message_logic, contact_id, message_text)
+        if ai_turn and ai_turn.response:
+            await continue_salesbot(return_url, ai_turn.response)
+    except Exception:
+        print(f"[KOMMO ERROR] Fallo procesando widget contact_id={contact_id}")
+        traceback.print_exc()
+
+
 @app.post("/api/webhook/kommo")
 async def kommo_webhook(request: Request, background_tasks: BackgroundTasks):
     """Recibe la peticion HTTP del Salesbot y confirma aun si esta mal formada."""
     try:
         data = await request.json()
+        if is_widget_request(data):
+            widget = extract_widget_request(data)
+            print(f"[KOMMO WEBHOOK] widget_request aceptado contact_id={widget.contact_id}")
+            background_tasks.add_task(
+                process_kommo_widget_message,
+                widget.contact_id,
+                widget.message_text,
+                widget.return_url,
+            )
+            return {"status": "accepted"}
         chat_id, contact_id, message_text = extract_kommo_message(data)
         print(f"[KOMMO WEBHOOK] Mensaje aceptado chat_id={chat_id} contact_id={contact_id}")
         background_tasks.add_task(process_kommo_message, chat_id, contact_id, message_text)
         return {"status": "accepted", "chat_id": chat_id, "contact_id": contact_id}
+    except InvalidKommoToken as exc:
+        print(f"[KOMMO WEBHOOK] Token rechazado: {exc}")
+        raise HTTPException(status_code=401, detail=str(exc))
     except InvalidKommoPayload as exc:
         print(f"[KOMMO WEBHOOK] Payload ignorado: {exc}")
         return {"status": "ignored", "reason": str(exc)}
@@ -595,6 +628,11 @@ async def kommo_webhook_status():
         "adapter": "kommo",
         "commit": DEPLOYMENT_COMMIT_SHA,
         "outbound_configured": bool(config.KOMMO_BASE_URL and config.KOMMO_PRIVATE_TOKEN),
+        "widget_configured": bool(
+            config.KOMMO_BASE_URL
+            and config.KOMMO_PRIVATE_TOKEN
+            and config.KOMMO_INTEGRATION_SECRET
+        ),
     }
 
 
