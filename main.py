@@ -1,6 +1,8 @@
+import asyncio
 import hashlib
 import os
 import time
+import traceback
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import requests
@@ -40,6 +42,15 @@ from queue_client import (
 )
 from webhook_utils import chatwoot_event_identity, is_restart_command
 from dashboard_api import router as dashboard_router
+from kommo_api import (
+    InvalidKommoPayload,
+    InvalidKommoToken,
+    continue_salesbot,
+    extract_kommo_message,
+    extract_widget_request,
+    is_widget_request,
+    send_message_kommo,
+)
 
 app = FastAPI()
 app.add_middleware(
@@ -74,6 +85,13 @@ async def health_check():
 async def log_deployment_version():
     """Log the Railway commit so deployments can be verified."""
     print(f"[STARTUP] WhatsApp bot running commit: {DEPLOYMENT_COMMIT_SHA}. Queue enabled: {queue_enabled()}")
+    print(
+        "[STARTUP] Kommo adapter: "
+        f"route=/api/webhook/kommo "
+        f"base_url_configured={bool(config.KOMMO_BASE_URL)} "
+        f"private_token_configured={bool(config.KOMMO_PRIVATE_TOKEN)} "
+        f"widget_secret_configured={bool(config.KOMMO_INTEGRATION_SECRET)}"
+    )
 
 
 def _attachment_url(attachment: dict) -> str:
@@ -547,6 +565,75 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
     except Exception as e:
         print(f"Error Webhook Meta: {e}")
         return {"status": "error"}
+
+
+async def process_kommo_message(chat_id: str, contact_id: str, message_text: str):
+    """Ejecuta el nucleo existente sin bloquear el event loop y responde por Kommo."""
+    try:
+        ai_turn = await asyncio.to_thread(process_message_logic, contact_id, message_text)
+        if ai_turn and ai_turn.response:
+            await send_message_kommo(chat_id, ai_turn.response)
+    except Exception:
+        # Background failures must be logged without affecting the acknowledged webhook.
+        print(f"[KOMMO ERROR] Fallo procesando chat_id={chat_id} contact_id={contact_id}")
+        traceback.print_exc()
+
+
+async def process_kommo_widget_message(contact_id: str, message_text: str, return_url: str):
+    """Run the existing agent and resume the official Kommo Salesbot widget."""
+    try:
+        ai_turn = await asyncio.to_thread(process_message_logic, contact_id, message_text)
+        if ai_turn and ai_turn.response:
+            await continue_salesbot(return_url, ai_turn.response)
+    except Exception:
+        print(f"[KOMMO ERROR] Fallo procesando widget contact_id={contact_id}")
+        traceback.print_exc()
+
+
+@app.post("/api/webhook/kommo")
+async def kommo_webhook(request: Request, background_tasks: BackgroundTasks):
+    """Recibe la peticion HTTP del Salesbot y confirma aun si esta mal formada."""
+    try:
+        data = await request.json()
+        if is_widget_request(data):
+            widget = extract_widget_request(data)
+            print(f"[KOMMO WEBHOOK] widget_request aceptado contact_id={widget.contact_id}")
+            background_tasks.add_task(
+                process_kommo_widget_message,
+                widget.contact_id,
+                widget.message_text,
+                widget.return_url,
+            )
+            return {"status": "accepted"}
+        chat_id, contact_id, message_text = extract_kommo_message(data)
+        print(f"[KOMMO WEBHOOK] Mensaje aceptado chat_id={chat_id} contact_id={contact_id}")
+        background_tasks.add_task(process_kommo_message, chat_id, contact_id, message_text)
+        return {"status": "accepted", "chat_id": chat_id, "contact_id": contact_id}
+    except InvalidKommoToken as exc:
+        print(f"[KOMMO WEBHOOK] Token rechazado: {exc}")
+        raise HTTPException(status_code=401, detail=str(exc))
+    except InvalidKommoPayload as exc:
+        print(f"[KOMMO WEBHOOK] Payload ignorado: {exc}")
+        return {"status": "ignored", "reason": str(exc)}
+    except Exception as exc:
+        print(f"[KOMMO WEBHOOK] No se pudo leer el payload: {exc}")
+        return {"status": "ignored", "reason": "invalid_json"}
+
+
+@app.get("/api/webhook/kommo")
+async def kommo_webhook_status():
+    """Public, secret-free probe used to verify that Railway deployed the adapter."""
+    return {
+        "status": "ready",
+        "adapter": "kommo",
+        "commit": DEPLOYMENT_COMMIT_SHA,
+        "outbound_configured": bool(config.KOMMO_BASE_URL and config.KOMMO_PRIVATE_TOKEN),
+        "widget_configured": bool(
+            config.KOMMO_BASE_URL
+            and config.KOMMO_PRIVATE_TOKEN
+            and config.KOMMO_INTEGRATION_SECRET
+        ),
+    }
 
 
 @app.post("/chatwoot-webhook")

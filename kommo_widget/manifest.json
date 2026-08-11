@@ -1,0 +1,38 @@
+{
+  "widget": {
+    "name": "widget.name",
+    "description": "widget.description",
+    "short_description": "widget.short_description",
+    "version": "1.0.0",
+    "interface_version": 2,
+    "init_once": true,
+    "locale": ["es", "en"],
+    "installation": true
+  },
+  "locations": ["salesbot_designer", "settings"],
+  "tour": {
+    "is_tour": false,
+    "tour_description": "widget.tour_description"
+  },
+  "settings": {
+    "installation_note": {
+      "name": "settings.installation_note",
+      "type": "text",
+      "required": false
+    }
+  },
+  "salesbot_designer": {
+    "logo": "/images/logo.png",
+    "railway_agent": {
+      "name": "salesbot.handler_name",
+      "settings": {
+        "webhook_url": {
+          "name": "salesbot.webhook_url",
+          "default_value": "https://YOUR-RAILWAY-DOMAIN/api/webhook/kommo",
+          "type": "url",
+          "manual": true
+        }
+      }
+    }
+  }
+}
