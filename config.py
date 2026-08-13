@@ -47,6 +47,16 @@ class Settings:
     CHATWOOT_ACCOUNT_ID = os.getenv("CHATWOOT_ACCOUNT_ID")
     CHATWOOT_INBOX_ID = os.getenv("CHATWOOT_INBOX_ID")
 
+    # Kommo Private Integration credentials. KOMMO_BASE_URL is normally the
+    # account URL, for example https://mycompany.kommo.com.
+    KOMMO_BASE_URL = os.getenv("KOMMO_BASE_URL")
+    KOMMO_PRIVATE_TOKEN = os.getenv("KOMMO_PRIVATE_TOKEN")
+    # Secret and UUID shown in the Kommo Private Integration. They are used to
+    # authenticate the short-lived JWT attached to Salesbot widget requests.
+    KOMMO_INTEGRATION_SECRET = os.getenv("KOMMO_INTEGRATION_SECRET")
+    KOMMO_INTEGRATION_ID = os.getenv("KOMMO_INTEGRATION_ID")
+    KOMMO_REQUEST_TIMEOUT_SECONDS = float(os.getenv("KOMMO_REQUEST_TIMEOUT_SECONDS", "20"))
+
     # Backwards-compatible aliases for older helper code/deployments.
     # The canonical names used by this codebase are CHATWOOT_BASE_URL and
     # CHATWOOT_API_TOKEN, but these aliases prevent the audio relay from

@@ -1,0 +1,15 @@
+{
+  "widget": {
+    "name": "Agente IA Railway",
+    "short_description": "Conecta Salesbot con el agente de IA en Railway.",
+    "description": "Envía el mensaje entrante al webhook seguro de Railway y publica la respuesta en el chat original mediante Salesbot.",
+    "tour_description": "Añade el bloque al Salesbot e introduce la URL pública del webhook de Railway."
+  },
+  "settings": {
+    "installation_note": "Instalado: configura la URL dentro del bloque del Salesbot"
+  },
+  "salesbot": {
+    "handler_name": "Agente IA Railway",
+    "webhook_url": "URL del webhook de Railway"
+  }
+}
