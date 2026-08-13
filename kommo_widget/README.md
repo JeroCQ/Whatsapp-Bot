@@ -9,20 +9,29 @@ kommo-salesbot-widget.zip
 
 ## Descargar desde GitHub (sin terminal)
 
-El ZIP no se guarda como binario dentro de la rama porque Codex Cloud no permite
-crear un PR que contenga binarios. En su lugar, GitHub lo construye desde los archivos
-de texto verificables del widget:
+El ZIP no se guarda como binario dentro de la rama. GitHub lo construye desde los
+archivos fuente e inyecta las credenciales que Kommo exige en `manifest.json`.
 
-1. Fusiona el PR en GitHub.
-2. Abre la pestaña **Actions** del repositorio.
-3. En la columna izquierda selecciona **Build Kommo widget**.
-4. Abre la ejecución verde correspondiente al commit fusionado. Si no hay una,
+Antes de ejecutar el workflow por primera vez:
+
+1. En Kommo abre **Llaves y alcances** y pulsa **Generar clave secreta**.
+2. En GitHub abre **Settings → Secrets and variables → Actions**.
+3. Pulsa **New repository secret**.
+4. Nombre: `KOMMO_WIDGET_SECRET_KEY`.
+5. Valor: la clave secreta exacta generada por Kommo. Guarda el secreto. No lo pongas
+   en un archivo del repositorio ni lo compartas en capturas.
+
+Después:
+
+1. Abre la pestaña **Actions** del repositorio.
+2. En la columna izquierda selecciona **Build Kommo widget**.
+3. Abre la ejecución verde correspondiente al commit nuevo. Si no hay una,
    pulsa **Run workflow**, selecciona la rama y confirma **Run workflow**.
-5. Baja hasta **Artifacts** y descarga **kommo-salesbot-widget**.
-6. GitHub descargará `kommo-salesbot-widget.zip`. Ese archivo ya es el ZIP instalable:
-   no lo descomprimas ni lo vuelvas a comprimir.
-7. Antes de subirlo, puedes abrirlo sin extraerlo para comprobar que `manifest.json`
-   aparece inmediatamente junto a `script.js`, `i18n/` e `images/`.
+4. Baja hasta **Artifacts** y descarga **kommo-salesbot-widget**.
+5. GitHub descarga un ZIP contenedor. Extráelo una vez y usa el archivo interior
+   `kommo-salesbot-widget.zip`; no descomprimas ni recomprimas el ZIP interior.
+6. Al abrir el ZIP interior sin extraerlo, `manifest.json` debe aparecer inmediatamente
+   junto a `script.js`, `i18n/` e `images/`.
 
 ## Subirlo a la integración mostrada en Kommo
 
@@ -91,6 +100,8 @@ GitHub ejecuta este mismo comando para construir el artefacto. También puede us
 localmente después de modificar el widget:
 
 ```bash
+KOMMO_WIDGET_CODE=tanaka_railway_ai_195b0635 \
+KOMMO_WIDGET_SECRET_KEY='<clave secreta>' \
 ./kommo_widget/build.sh
 ```
 

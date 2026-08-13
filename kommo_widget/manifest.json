@@ -3,6 +3,8 @@
     "name": "widget.name",
     "description": "widget.description",
     "short_description": "widget.short_description",
+    "code": "__KOMMO_WIDGET_CODE__",
+    "secret_key": "__KOMMO_WIDGET_SECRET_KEY__",
     "version": "1.0.1",
     "interface_version": 2,
     "init_once": true,
