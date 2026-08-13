@@ -34,7 +34,7 @@ jobs:
           path: |
             kommo_widget/manifest.json
             kommo_widget/script.js
-            kommo_widget/i18n
+            kommo_widget/i18n/es.json
             kommo_widget/images
           if-no-files-found: error
           retention-days: 30

@@ -28,17 +28,40 @@ de texto verificables del widget:
 
 1. Entra a **Ajustes → Centro de integraciones**.
 2. Abre **Agente AI Railway 2** y pulsa **Editar**.
-3. En **Integración con código personalizado**, pulsa **Subir**.
-4. Selecciona `kommo-salesbot-widget.zip` y pulsa **Guardar**.
-5. Recarga Kommo completamente (`Ctrl+F5`).
-6. Abre o crea el Salesbot, añade un paso **Widget** y selecciona **Agente IA Railway**.
-7. En **URL del webhook de Railway** escribe la URL completa del servicio web:
+3. **Borra la URL de redirección**. Para una integración privada que utiliza token de
+   larga duración, Kommo indica que ese campo debe quedar vacío; la URL de Railway se
+   introduce después dentro del bloque del Salesbot.
+4. En el campo **Descripción**, escribe al menos cinco caracteres, por ejemplo:
+   `Agente de IA conectado a Railway`. La descripción es obligatoria aunque Kommo
+   muestre `Descripción` como texto provisional dentro del campo.
+5. Mantén seleccionados los alcances que necesita la integración.
+6. En **Integración con código personalizado**, pulsa **Subir**.
+7. Selecciona `kommo-salesbot-widget.zip` y pulsa **Subir integración**.
+8. Recarga Kommo completamente (`Ctrl+F5`).
+9. Abre o crea el Salesbot, añade un paso **Widget** y selecciona **Agente IA Railway**.
+10. En **URL del webhook de Railway** escribe la URL completa del servicio web:
 
    ```text
    https://TU-DOMINIO.up.railway.app/api/webhook/kommo
    ```
 
-8. Guarda y publica el Salesbot.
+11. Guarda y publica el Salesbot.
+
+### Si Kommo solo muestra `Something went wrong`
+
+Antes de inspeccionar el ZIP, revisa los demás campos del formulario. Kommo usa ese
+mismo mensaje genérico cuando falla la validación de la integración completa. En
+particular:
+
+- **Descripción** no puede estar vacía y debe contener al menos 5 caracteres.
+- **URL de redirección** debe quedar vacía cuando se usa el token de larga duración.
+- El nombre debe contener entre 3 y 255 caracteres.
+- `manifest.json` debe estar en la raíz del ZIP.
+
+Si continúa fallando, abre las herramientas del navegador (`F12`), selecciona
+**Network/Red**, repite **Subir integración**, abre la petición roja y copia el texto
+de **Response/Respuesta**. Esa respuesta identifica el campo exacto que Kommo rechazó;
+el modal por sí solo no lo muestra.
 
 ## Estructura exacta del ZIP
 
@@ -50,7 +73,6 @@ kommo-salesbot-widget.zip
 ├── manifest.json
 ├── script.js
 ├── i18n/
-│   ├── en.json
 │   └── es.json
 └── images/
     ├── logo.png
@@ -59,6 +81,11 @@ kommo-salesbot-widget.zip
     ├── logo_min.png
     └── logo_small.png
 ```
+
+El manifiesto declara únicamente `es` porque la integración de la cuenta está creada
+solo en **Idioma: Español**. Los idiomas declarados por el widget deben coincidir con
+los idiomas añadidos a la integración; añade primero el idioma en Kommo antes de
+volver a incluir otra traducción en el ZIP.
 
 GitHub ejecuta este mismo comando para construir el artefacto. También puede usarse
 localmente después de modificar el widget:

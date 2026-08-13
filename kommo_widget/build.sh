@@ -8,13 +8,12 @@ OUTPUT="$ROOT/dist/kommo-salesbot-widget.zip"
 python3 "$WIDGET/generate_images.py"
 python3 -m json.tool "$WIDGET/manifest.json" >/dev/null
 python3 -m json.tool "$WIDGET/i18n/es.json" >/dev/null
-python3 -m json.tool "$WIDGET/i18n/en.json" >/dev/null
 
 mkdir -p "$ROOT/dist"
 rm -f "$OUTPUT"
 (
   cd "$WIDGET"
-  zip -q -r "$OUTPUT" manifest.json script.js i18n images
+  zip -q -r "$OUTPUT" manifest.json script.js i18n/es.json images
 )
 
 python3 - "$OUTPUT" <<'PY'
