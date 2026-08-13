@@ -15,6 +15,9 @@ if [[ ! "$KOMMO_WIDGET_CODE" =~ ^[a-z][a-z0-9_]{2,63}$ ]]; then
   exit 1
 fi
 
+# Generated images are intentionally excluded from Git. Generate them before
+# copying widget assets so this also works in a clean GitHub Actions checkout.
+python3 "$WIDGET/generate_images.py"
 cp -R "$WIDGET/i18n" "$WIDGET/images" "$WIDGET/script.js" "$STAGING/"
 python3 - "$WIDGET/manifest.json" "$STAGING/manifest.json" <<'PY'
 import json
@@ -30,9 +33,6 @@ with open(sys.argv[2], "w", encoding="utf-8", newline="\n") as target:
     target.write("\n")
 PY
 
-python3 "$WIDGET/generate_images.py"
-rm -rf "$STAGING/images"
-cp -R "$WIDGET/images" "$STAGING/images"
 python3 -m json.tool "$STAGING/manifest.json" >/dev/null
 python3 -m json.tool "$WIDGET/i18n/es.json" >/dev/null
 
