@@ -31,6 +31,9 @@ def parse_gemini_model_list(raw_models: str | None, primary_model: str) -> list[
 
 
 class Settings:
+    # One deployment serves exactly one business. Use the same code in separate
+    # Railway projects and select the business only through this identifier.
+    BUSINESS_ID = os.getenv("BUSINESS_ID", "").strip().lower()
     SUPABASE_URL = os.getenv("SUPABASE_URL")
     # Database access runs only on the server. Prefer the service-role secret so
     # message history is not silently hidden by RLS when SUPABASE_KEY contains a
@@ -87,23 +90,20 @@ class Settings:
     PHONE_LOCK_TTL_SECONDS = int(os.getenv("PHONE_LOCK_TTL_SECONDS", "180"))
     # JSON array of customer-facing files the model is allowed to request.
     PRESAVED_FILES_JSON = os.getenv("PRESAVED_FILES_JSON", "[]")
-    # Separate catalog for Quesos Memo's so the existing deployment variable remains reusable.
-    catalogo_memos = os.getenv("catalogo_memos", "[]")
-    # Tanaka uses its own catalog without overwriting the reusable Memo's configuration.
-    catalogo_tanaka = os.getenv("catalogo_tanaka", "[]")
 
     @classmethod
-    def catalog_storage_key(cls, client_name: str) -> str:
-        return f"{client_name}.pdf"
+    def catalog_storage_key(cls, client_name: str | None = None) -> str:
+        return f"{client_name or cls.BUSINESS_ID}.pdf"
 
     @classmethod
-    def catalog_public_url(cls, client_name: str) -> str:
+    def catalog_public_url(cls, client_name: str | None = None) -> str:
         base_url = (cls.SUPABASE_URL or "").rstrip("/")
         return f"{base_url}/storage/v1/object/public/{cls.CATALOG_STORAGE_BUCKET}/{cls.catalog_storage_key(client_name)}"
     
     @classmethod
     def validate(cls):
         critical_vars = [
+            "BUSINESS_ID",
             "SUPABASE_URL", "SUPABASE_KEY", 
             "WA_VERIFY_TOKEN", "WA_TOKEN", "WA_PHONE_NUMBER_ID",
             "GEMINI_API_KEY"

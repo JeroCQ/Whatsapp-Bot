@@ -2,6 +2,7 @@ import os
 
 for key in ("SUPABASE_URL", "SUPABASE_KEY", "WA_VERIFY_TOKEN", "WA_TOKEN", "WA_PHONE_NUMBER_ID", "GEMINI_API_KEY"):
     os.environ.setdefault(key, "test-value")
+os.environ.setdefault("BUSINESS_ID", "client_1")
 os.environ.setdefault("DASHBOARD_API_KEY", "dashboard-secret")
 
 from fastapi import FastAPI
@@ -128,9 +129,9 @@ def test_auth_traversal_and_bad_pdfs():
     assert client.get("/api/current-si?client_name=ok").status_code == 401
     assert client.get("/api/current-si?client_name=../secret", headers=headers).status_code == 422
     assert client.get("/api/si-history?client_name=../secret", headers=headers).status_code == 422
-    assert client.post("/api/upload-catalog?client_name=ok", headers=headers,
+    assert client.post("/api/upload-catalog?client_name=client_1", headers=headers,
                        files={"file": ("x.txt", b"hello", "text/plain")}).status_code == 400
-    assert client.post("/api/upload-catalog?client_name=ok", headers=headers,
+    assert client.post("/api/upload-catalog?client_name=client_1", headers=headers,
                        files={"file": ("x.pdf", b"", "application/pdf")}).status_code == 400
 
 
@@ -151,7 +152,7 @@ def test_sha_conflict_is_sanitized(monkeypatch):
 def test_oversized_pdf(monkeypatch):
     monkeypatch.setattr(api.config, "DASHBOARD_MAX_CATALOG_MB", 0)
     client, headers = make_client(FakeGemini("x"), FakeGitHub(), FakeStorage())
-    response = client.post("/api/upload-catalog?client_name=ok", headers=headers,
+    response = client.post("/api/upload-catalog?client_name=client_1", headers=headers,
                            files={"file": ("x.pdf", b"%PDF-123", "application/pdf")})
     assert response.status_code == 413
 
