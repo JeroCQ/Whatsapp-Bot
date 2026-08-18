@@ -52,6 +52,13 @@ def update_chatwoot_conversation_id(phone_number: str, conv_id: int):
     supabase.table("conversation_states").update({"chatwoot_conversation_id": conv_id}).eq("phone_number", phone_number).execute()
 
 
+def recover_failed_handoff(phone_number: str):
+    """Re-enable the bot only when no Chatwoot ticket was established."""
+    return supabase.table("conversation_states").update({
+        "current_state": "GREETING", "is_paused": False, "handoff_reason": None,
+    }).eq("phone_number", phone_number).eq("is_paused", True).is_("chatwoot_conversation_id", "null").execute()
+
+
 def get_phone_by_chatwoot_id(conv_id: int):
     """Busca el número de WhatsApp usando el ID del ticket de Chatwoot."""
     res = supabase.table("conversation_states").select("phone_number").eq("chatwoot_conversation_id", conv_id).execute()
@@ -158,13 +165,13 @@ def resume_bot_state(conv_id: int):
         if not phone:
             return None
         print(f"[DEBUG DB] Ticket resuelto para {phone}. Conservando historial de mensajes.")
-        supabase.table("conversation_states").update({
+        result = supabase.table("conversation_states").update({
             "current_state": "GREETING",
             "is_paused": False,
             "chatwoot_conversation_id": None,
             "handoff_reason": None,
-        }).eq("phone_number", phone).execute()
-        return phone
+        }).eq("phone_number", phone).eq("chatwoot_conversation_id", conv_id).execute()
+        return phone if result.data else None
     except Exception as e:
         print(f"Error al actualizar estado en resume_bot_state: {e}")
         return None
