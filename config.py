@@ -1,5 +1,6 @@
 import os
 import logging
+from chatwoot_security import normalize_chatwoot_root
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -49,6 +50,9 @@ class Settings:
     CHATWOOT_API_TOKEN = os.getenv("CHATWOOT_API_TOKEN")
     CHATWOOT_ACCOUNT_ID = os.getenv("CHATWOOT_ACCOUNT_ID")
     CHATWOOT_INBOX_ID = os.getenv("CHATWOOT_INBOX_ID")
+    CHATWOOT_WEBHOOK_SECRET = os.getenv("CHATWOOT_WEBHOOK_SECRET")
+    CHATWOOT_MAX_ATTACHMENT_BYTES = int(os.getenv("CHATWOOT_MAX_ATTACHMENT_BYTES", str(25 * 1024 * 1024)))
+    APP_ENV = os.getenv("APP_ENV", "production").strip().lower()
 
     # Backwards-compatible aliases for older helper code/deployments.
     # The canonical names used by this codebase are CHATWOOT_BASE_URL and
@@ -113,6 +117,18 @@ class Settings:
             error_msg = f"FALTAN VARIABLES DE ENTORNO CRÍTICAS: {', '.join(missing)}"
             logger.error(error_msg)
             raise ValueError(error_msg)
+        chatwoot_values = [cls.CHATWOOT_BASE_URL, cls.CHATWOOT_API_TOKEN, cls.CHATWOOT_ACCOUNT_ID, cls.CHATWOOT_INBOX_ID]
+        if any(chatwoot_values):
+            if not all(chatwoot_values) or not cls.CHATWOOT_WEBHOOK_SECRET:
+                raise ValueError("Chatwoot requires BASE_URL, API_TOKEN, ACCOUNT_ID, INBOX_ID and WEBHOOK_SECRET")
+            cls.CHATWOOT_BASE_URL = normalize_chatwoot_root(cls.CHATWOOT_BASE_URL, production=cls.APP_ENV not in {"development", "test"})
+            cls.CHATWOOT_API_URL = cls.CHATWOOT_BASE_URL
+            cls.CHATWOOT_ACCESS_TOKEN = cls.CHATWOOT_API_TOKEN
+            for name in ("CHATWOOT_ACCOUNT_ID", "CHATWOOT_INBOX_ID"):
+                if not str(getattr(cls, name)).isdigit() or int(getattr(cls, name)) <= 0:
+                    raise ValueError(f"{name} must be a positive integer")
+            if cls.CHATWOOT_MAX_ATTACHMENT_BYTES <= 0:
+                raise ValueError("CHATWOOT_MAX_ATTACHMENT_BYTES must be positive")
 
 config = Settings()
 config.validate()

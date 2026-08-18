@@ -3,11 +3,17 @@ import mimetypes
 import requests
 from config import config
 from http_client import MEDIA_TIMEOUT, get, post, put
+from provider_errors import ProviderError, provider_error
 
 
 def get_base_url():
-    base = config.CHATWOOT_BASE_URL.rstrip('/')
-    return f"{base}/api/v1/accounts/{config.CHATWOOT_ACCOUNT_ID}"
+    return f"{config.CHATWOOT_BASE_URL}/api/v1/accounts/{int(config.CHATWOOT_ACCOUNT_ID)}"
+
+
+def _checked(response, operation: str, expected=(200,)):
+    if response.status_code not in expected:
+        raise provider_error("chatwoot", operation, response, (config.CHATWOOT_API_TOKEN, config.WA_TOKEN))
+    return response
 
 
 def get_headers():
@@ -33,10 +39,11 @@ def get_or_create_contact(phone: str, name: str = "Cliente WhatsApp"):
         return None
 
     # 1. Buscar si el contacto ya existe
-    search_url = f"{url}/search?q={phone}"
+    search_url = f"{url}/search"
     try:
-        search_res = get(search_url, headers=get_headers())
-        if search_res.status_code == 200 and search_res.json().get("payload"):
+        search_res = get(search_url, headers=get_headers(), params={"q": phone}, allow_redirects=False)
+        _checked(search_res, "search_contact")
+        if search_res.json().get("payload"):
             contact = search_res.json()["payload"][0]
             contact_id = contact["id"]
             current_name = contact.get("name")
@@ -44,11 +51,12 @@ def get_or_create_contact(phone: str, name: str = "Cliente WhatsApp"):
             # Si encontramos al cliente, y el nuevo nombre no es el genérico, actualizamos Chatwoot
             if name != "Cliente WhatsApp" and current_name != name:
                 update_url = f"{url}/{contact_id}"
-                put(update_url, headers=get_headers(), json={"name": name})
+                _checked(put(update_url, headers=get_headers(), json={"name": name}, allow_redirects=False), "update_contact", (200, 201))
                 
             return contact_id
-    except Exception as e:
-         print(f"[CHATWOOT DEBUG] Error buscando contacto: {e}")
+    except (ProviderError, requests.exceptions.RequestException, ValueError, TypeError, AttributeError, KeyError, IndexError) as e:
+        print(f"[PROVIDER ERROR] {e}")
+        return None
 
     # 2. Si no existe, crear uno nuevo
     data = {
@@ -58,11 +66,11 @@ def get_or_create_contact(phone: str, name: str = "Cliente WhatsApp"):
     }
     
     try:
-        res = post(url, headers=get_headers(), json=data)
-        if res.status_code in [200, 201]:
-            return res.json()["payload"]["contact"]["id"]
-    except Exception as e:
-        print(f"[CHATWOOT DEBUG] Excepción en get_or_create_contact (creando): {e}")
+        res = post(url, headers=get_headers(), json=data, allow_redirects=False)
+        _checked(res, "create_contact", (200, 201))
+        return res.json()["payload"]["contact"]["id"]
+    except (ProviderError, requests.exceptions.RequestException, ValueError, TypeError, AttributeError, KeyError, IndexError) as e:
+        print(f"[PROVIDER ERROR] {e}")
     
     return None
 
@@ -76,11 +84,11 @@ def create_conversation(contact_id: int):
     }
     
     try:
-        res = post(url, headers=get_headers(), json=data)
-        if res.status_code == 200:
-            return res.json()["id"]
-    except Exception as e:
-        print(f"[CHATWOOT DEBUG] Excepción en create_conversation: {e}")
+        res = post(url, headers=get_headers(), json=data, allow_redirects=False)
+        _checked(res, "create_conversation", (200, 201))
+        return res.json()["id"]
+    except (ProviderError, requests.exceptions.RequestException, ValueError, TypeError, AttributeError, KeyError) as e:
+        print(f"[PROVIDER ERROR] {e}")
     return None
 
 
@@ -93,9 +101,10 @@ def send_message_to_chatwoot(conversation_id: int, content: str, is_private: boo
         "private": is_private       
     }
     try:
-        post(url, headers=get_headers(), json=data)
-    except Exception as e:
-         print(f"[CHATWOOT DEBUG] Excepción enviando mensaje: {e}")
+        return _checked(post(url, headers=get_headers(), json=data, allow_redirects=False), "send_message", (200, 201))
+    except (ProviderError, requests.exceptions.RequestException) as e:
+        print(f"[PROVIDER ERROR] {e}")
+        return None
 
 
 def download_meta_media(media_id: str):
@@ -141,7 +150,7 @@ def send_media_to_chatwoot(conversation_id: int, content: str, media_bytes: byte
         "private": "true" if is_private else "false"
     }
     try:
-        response = post(url, headers=get_multipart_headers(), files=files, data=data, timeout=MEDIA_TIMEOUT)
+        response = post(url, headers=get_multipart_headers(), files=files, data=data, timeout=MEDIA_TIMEOUT, allow_redirects=False)
         print(f"[CHATWOOT DEBUG] Respuesta POST Archivo - Status: {response.status_code}")
         response.raise_for_status()
         return response
