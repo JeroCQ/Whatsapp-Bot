@@ -1,0 +1,140 @@
+# Puesta en producción de Quesos Memo's sin tocar Tanaka
+
+## Arquitectura final
+
+No conviertas el Railway de Tanaka en Memo's. Déjalo intacto y crea un segundo proyecto Railway desde este mismo repositorio. Cada despliegue ejecuta una sola marca mediante `BUSINESS_ID`; el backend rechaza cualquier `client_name` distinto al de ese despliegue. Cada marca tiene su propio WhatsApp, Supabase, Redis, inbox de Chatwoot, secretos y URL. Lovable es el único frontend compartido y actúa como enrutador de perfiles.
+
+## 0. Antes de empezar
+
+1. Anota la URL pública, variables y commit actualmente desplegado en Tanaka.
+2. No elimines ni cambies variables, webhooks o servicios del proyecto Tanaka.
+3. Genera secretos nuevos para Memo's. Nunca copies `WA_TOKEN`, `WA_VERIFY_TOKEN`, `DASHBOARD_API_KEY`, `PIN`, Redis ni claves Supabase de Tanaka.
+4. Puedes reutilizar una clave Gemini y un token GitHub si conscientemente quieres compartir sus cuotas/permisos; para aislamiento total, crea otros.
+
+## 1. Supabase nuevo
+
+1. En Supabase crea una organización/proyecto para Memo's, elige región cercana y guarda la contraseña de base de datos.
+2. Abre **SQL Editor**, pega todo `supabase/bootstrap.sql` y ejecútalo una vez.
+3. En **Storage** confirma que exista el bucket público `catalogos`.
+4. En **Project Settings → API** copia:
+   - Project URL → `SUPABASE_URL`.
+   - La clave secreta `service_role` → `SUPABASE_SERVICE_ROLE_KEY`. No uses la `anon`/publishable key y nunca la expongas en Lovable.
+5. No copies datos o tablas de Tanaka: el proyecto nuevo debe comenzar vacío.
+
+## 2. WhatsApp/Meta nuevo
+
+1. En Meta Business configura o selecciona la cuenta de WhatsApp de Memo's y agrega/verifica su número nuevo.
+2. En WhatsApp → API Setup copia **Phone number ID** → `WA_PHONE_NUMBER_ID`.
+3. Crea un token permanente de system user con permisos de WhatsApp para producción → `WA_TOKEN`. El token temporal sirve solo para una prueba corta.
+4. Genera localmente un texto aleatorio largo → `WA_VERIFY_TOKEN`, por ejemplo `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
+5. Espera a tener la URL Railway antes de configurar el webhook. Después usa `https://DOMINIO-MEMOS/webhook` como callback y el mismo `WA_VERIFY_TOKEN`; suscribe el campo `messages`.
+6. Envía y recibe un mensaje de prueba. No reutilices el Phone Number ID ni el token de Tanaka.
+
+## 3. Chatwoot
+
+1. En la instalación de Chatwoot crea un inbox/API channel exclusivo para Memo's. No uses el inbox de Tanaka.
+2. Copia el ID numérico de la cuenta → `CHATWOOT_ACCOUNT_ID` y el ID numérico del inbox nuevo → `CHATWOOT_INBOX_ID`.
+3. Desde el perfil del agente/integración que atenderá Memo's copia el access token → `CHATWOOT_API_TOKEN`.
+4. Usa la raíz de la instalación, sin `/api/v1` al final, como `CHATWOOT_BASE_URL`.
+5. Configura en Chatwoot el webhook del inbox hacia `https://DOMINIO-MEMOS/chatwoot-webhook` para que las respuestas humanas y el cierre del ticket regresen al bot.
+
+## 4. Railway nuevo
+
+1. Crea **New Project → Deploy from GitHub repo** y selecciona este repositorio y rama. No clones el servicio de Tanaka si Railway arrastrará secretos compartidos.
+2. Agrega Redis dentro del proyecto Memo's.
+3. Usa un solo servicio web inicialmente. `railway.json` ejecuta web + worker embebido; no crees un worker separado todavía.
+4. Carga las variables de la tabla siguiente. En Railway usa referencias del proyecto Memo's, por ejemplo `${{Redis.REDIS_URL}}`; no dejes referencias `${{powerful-stillness.*}}`, pues apuntan al proyecto anterior.
+5. Despliega, abre `/` y exige: `status=ok`, `queue_enabled=true`, `queue.workers_seen>=1`.
+6. En logs confirma `[WORKER] Starting RQ worker for queue=whatsapp-events-memos`.
+7. Configura los webhooks de Meta y Chatwoot solo después de que el health check pase.
+
+### Variables: qué eliminar, conservar o cambiar
+
+| Variable anterior | Acción en Memo's | Valor/origen |
+|---|---|---|
+| `catalogo_memos` | **Eliminar** | Reemplazada por `PRESAVED_FILES_JSON`. |
+| `catalogo_tanaka` | **Eliminar** | Ya no hay variables por marca en el código. |
+| `GOOGLE_API_KEY` | **Eliminar** | El código usa `GEMINI_API_KEY`; evita precedencia ambigua del SDK. |
+| `KOMMO_PRIVATE_TOKEN`, `KOMMO_BASE_URL`, `KOMMO_REQUEST_TIMEOUT_SECONDS` | **Eliminar** | No existe integración Kommo en este código. |
+| `PIN` | **Eliminar de Railway** | El PIN/contraseña pertenece al proxy server-side de Lovable, no al bot. |
+| `BUSINESS_ID` | **Agregar/cambiar** | Exactamente `memos`, en minúsculas. |
+| `SUPABASE_URL` | **Cambiar** | URL del Supabase nuevo. |
+| `SUPABASE_KEY` | **Eliminar** | Usa el nombre explícito `SUPABASE_SERVICE_ROLE_KEY`. |
+| `SUPABASE_SERVICE_ROLE_KEY` | **Agregar/cambiar** | Secreto service-role del Supabase nuevo. |
+| `WA_PHONE_NUMBER_ID`, `WA_TOKEN` | **Cambiar** | Número y token nuevos de Meta. |
+| `WA_VERIFY_TOKEN` | **Cambiar** | Secreto aleatorio nuevo; debe coincidir con Meta. |
+| `CHATWOOT_INBOX_ID` | **Cambiar** | Inbox exclusivo de Memo's. |
+| `CHATWOOT_ACCOUNT_ID` | **Revisar** | Igual solo si usan la misma cuenta Chatwoot; si no, cambiar. |
+| `CHATWOOT_API_TOKEN` | **Revisar/cambiar recomendado** | Token del agente/integración con acceso al inbox Memo's. |
+| `CHATWOOT_BASE_URL` | **Conservar** | Igual si sigue siendo la misma instalación Chatwoot. |
+| `GEMINI_API_KEY` | **Conservar o cambiar** | Puede compartirse; una clave/proyecto separado aísla cuota y facturación. |
+| `GEMINI_DASHBOARD_MODEL` | **Conservar** | Puede omitirse para usar el default del código. |
+| `GITHUB_TOKEN` | **Conservar o cambiar** | Token con permiso de contenido sobre este repo; queda solo en Railway. |
+| `CATALOG_STORAGE_BUCKET` | **Conservar** | `catalogos`. |
+| `PRESAVED_FILES_JSON` | **Cambiar** | Usa el JSON exacto mostrado abajo. |
+| `REDIS_URL` | **Cambiar** | Referencia al Redis del proyecto Memo's: `${{Redis.REDIS_URL}}`. |
+| `QUEUE_NAME` | **Cambiar** | `whatsapp-events-memos`; nunca compartir nombre con Tanaka. |
+| `DASHBOARD_API_KEY` | **Cambiar** | Secreto aleatorio propio de Memo's; mismo valor en Railway y secreto server-side de Lovable. |
+| `DASHBOARD_CORS_ORIGINS` | **Conservar/cambiar** | Origen HTTPS exacto de Lovable, sin path; aunque el proxy server-side es preferible. |
+| `DASHBOARD_EXTERNAL_TIMEOUT_SECONDS` | **Conservar** | El valor actual si ya funciona; default `30`. |
+| `DASHBOARD_HISTORY_MAX_PAGE_SIZE` | **Conservar** | Default `50`. |
+| `DASHBOARD_MAX_CATALOG_MB` | **Conservar** | Default `100`; debe ser compatible con el límite de Storage. |
+| `DASHBOARD_MAX_PDF_BYTES` | **Eliminar** | No se usa actualmente; el límite efectivo es `DASHBOARD_MAX_CATALOG_MB`. |
+| `DASHBOARD_MAX_TEXT_CHARS` | **Conservar** | Default `100000`. |
+| `DASHBOARD_REQUESTS_PER_MINUTE` | **Conservar** | Default `30`. |
+| `DASHBOARD_STORAGE_TIMEOUT_SECONDS` | **Conservar** | Default `180`. |
+
+También puedes agregar `DASHBOARD_FORMAT_TIMEOUT_SECONDS=90`. No configures `RUN_WORKER_IN_WEB=false` mientras uses el worker embebido.
+
+### `PRESAVED_FILES_JSON` para Memo's
+
+La URL es un placeholder válido porque el backend la reemplaza en runtime por `SUPABASE_URL/storage/v1/object/public/catalogos/memos.pdf`:
+
+```json
+[{"id":"catalogo_pdf","description":"Catálogo de Quesos Memo's; enviarlo cuando pidan el catálogo, precios generales o quieran ver todos los productos.","type":"document","link":"https://example.com/catalogo.pdf","filename":"catalogo-quesos-memos.pdf","caption":"Patrón, aquí tienes el catálogo de Quesos Memo's 🧀"}]
+```
+
+Después del primer deploy, entra al perfil Memo's de Lovable y sube el PDF real. Verifica en Supabase Storage que quede exactamente como `catalogos/memos.pdf`.
+
+## 5. Prompt para Lovable
+
+Copia y pega este prompt completo en Lovable:
+
+> Tenemos un dashboard existente con dos perfiles completamente separados: `tanaka` y `memos`. Modifica únicamente la capa server-side/proxy; no expongas secretos en el navegador ni en variables `VITE_*`.
+>
+> Crea una configuración server-only por perfil:
+> - Tanaka: `TANAKA_DASHBOARD_BACKEND_URL`, `TANAKA_DASHBOARD_API_KEY`, `TANAKA_DASHBOARD_PASSWORD`.
+> - Memo's: `MEMOS_DASHBOARD_BACKEND_URL`, `MEMOS_DASHBOARD_API_KEY`, `MEMOS_DASHBOARD_PASSWORD`.
+>
+> Cada URL debe apuntar a su Railway independiente y cada API key debe coincidir solo con `DASHBOARD_API_KEY` de ese Railway. Elige el backend exclusivamente a partir del perfil autenticado en servidor, nunca desde una URL o `client_name` libre enviado por el navegador.
+>
+> Para todas las rutas `current-si`, `generate-si-changes`, `format-and-save-si`, `si-history`, `current-catalog` y `upload-catalog`, inyecta en servidor el `client_name` fijo del perfil (`tanaka` o `memos`) y envía `X-Dashboard-API-Key` al backend correspondiente. Rechaza con 403 cualquier body, query o FormData cuyo `client_name` no coincida; idealmente ignora el valor del navegador y reconstruye la solicitud en servidor.
+>
+> No envíes al frontend las URLs Railway, API keys ni contraseñas. Mantén cookies/sesiones separadas y `httpOnly`, `secure`, `sameSite=lax`. No uses un único `DASHBOARD_BACKEND_URL` compartido. Conserva la UI y comportamiento actuales salvo lo necesario para este enrutamiento.
+>
+> Agrega una prueba server-side que demuestre: login Memo's solo llama al Railway Memo's con `client_name=memos`; login Tanaka solo llama al Railway Tanaka con `client_name=tanaka`; un intento cruzado devuelve 403; y ningún secreto aparece en el bundle del cliente. Al terminar, enumera archivos cambiados, variables exactas a crear en Lovable y pruebas ejecutadas.
+
+En los secretos server-side de Lovable asigna:
+
+- `TANAKA_DASHBOARD_BACKEND_URL`: URL Railway live actual de Tanaka.
+- `TANAKA_DASHBOARD_API_KEY`: valor actual del Railway Tanaka.
+- `TANAKA_DASHBOARD_PASSWORD`: contraseña actual del perfil Tanaka.
+- `MEMOS_DASHBOARD_BACKEND_URL`: nueva URL Railway Memo's.
+- `MEMOS_DASHBOARD_API_KEY`: nuevo `DASHBOARD_API_KEY` de Railway Memo's.
+- `MEMOS_DASHBOARD_PASSWORD`: nueva contraseña del perfil Memo's.
+
+## 6. Pruebas de aceptación y orden seguro
+
+1. Desde Lovable/Memo's, lee la instrucción y confirma que menciona Quesos Memo's; desde Tanaka confirma que sigue mostrando Tanaka.
+2. Sube el catálogo Memo's y comprueba `catalogos/memos.pdf`; confirma que el catálogo Tanaka no cambió.
+3. Escribe al WhatsApp Memo's “¿qué productos tienen?” y confirma que llega el PDF Memo's.
+4. Prueba una cotización menor a $400.000: no debe hacer handoff.
+5. Prueba una cotización igual/superior a $400.000: debe crear conversación en el inbox Memo's.
+6. Envía una imagen: debe ir al inbox Memo's, nunca al de Tanaka.
+7. Contesta desde Chatwoot y cierra el ticket; comprueba que el bot Memo's se reanuda.
+8. Prueba follow-up con `FOLLOW_UP_TEST_DELAY_SECONDS=10`; después elimina esa variable.
+9. Solo cuando todo pase anuncia el número Memo's. No hagas ningún redeploy de Tanaka durante esta transición.
+
+## Rollback
+
+Si algo falla, desconecta temporalmente solo el webhook de Meta Memo's o revierte el último deploy del Railway Memo's. No cambies Tanaka. Supabase Memo's y su inbox pueden conservarse mientras corriges y vuelves a desplegar.

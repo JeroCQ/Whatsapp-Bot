@@ -6,6 +6,7 @@ from unittest import TestCase, mock
 
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "config.py"
 REQUIRED_ENV = {
+    "BUSINESS_ID": "memos",
     "SUPABASE_URL": "https://example.supabase.co",
     "SUPABASE_KEY": "legacy-key",
     "WA_VERIFY_TOKEN": "verify",

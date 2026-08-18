@@ -2,6 +2,16 @@
 
 FastAPI WhatsApp sales bot with Chatwoot handoff and Gemini responses.
 
+## Deployments por negocio
+
+El código es multi-despliegue, no multi-negocio: cada Railway debe definir un único
+`BUSINESS_ID`, usar su propio Supabase/WhatsApp/Redis/Chatwoot inbox y cargar los
+archivos permitidos desde `PRESAVED_FILES_JSON`. El backend administrativo rechaza
+un `client_name` que no coincida con ese identificador, evitando cruces entre marcas.
+
+Para crear Quesos Memo's sin modificar el bot live de Tanaka, sigue el checklist
+completo de [`SETUP_MEMOS.md`](SETUP_MEMOS.md).
+
 ## Dashboard administrativo de Tanaka
 
 The repository contains the initial dashboard-managed Tanaka system instruction at

@@ -82,6 +82,14 @@ def validate_client_name(value: str) -> str:
     return value
 
 
+def validate_deployment_client(value: str) -> str:
+    """Prevent one brand's dashboard from reading or editing another brand."""
+    client_name = validate_client_name(value)
+    if client_name != config.BUSINESS_ID:
+        raise ValueError("client_name no corresponde a este despliegue")
+    return client_name
+
+
 def client_path(client_name: str, filename: str) -> str:
     validate_client_name(client_name)
     root = PurePosixPath("src/clients")
@@ -435,7 +443,7 @@ def generate_si_changes(body: TextRequest, client_name: str | None = Query(None)
                         gemini: GeminiAdapter = Depends(get_gemini)):
     if client_name is not None:
         try:
-            validate_client_name(client_name)
+            validate_deployment_client(client_name)
         except ValueError as exc:
             raise HTTPException(422, str(exc))
     system_instruction = (
@@ -480,7 +488,7 @@ def format_and_save_si(body: SaveRequest, client_name: str | None = Query(None),
     if not resolved_client_name:
         raise HTTPException(422, "client_name requerido")
     try:
-        resolved_client_name = validate_client_name(resolved_client_name)
+        resolved_client_name = validate_deployment_client(resolved_client_name)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     prompt = ("Formatea el siguiente texto para mejorar exclusivamente su presentación. RESTRICCIÓN ABSOLUTA: "
@@ -502,7 +510,7 @@ def format_and_save_si(body: SaveRequest, client_name: str | None = Query(None),
 @router.get("/current-si")
 def current_si(client_name: str = Query(min_length=1), github: GitHubAdapter = Depends(get_github)):
     try:
-        path = client_path(client_name, "system_instruction.txt")
+        path = client_path(validate_deployment_client(client_name), "system_instruction.txt")
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     existing = github.get_file(path)
@@ -515,7 +523,7 @@ def current_si(client_name: str = Query(min_length=1), github: GitHubAdapter = D
 def si_history(client_name: str = Query(min_length=1), page: int = Query(1, ge=1),
                per_page: int = Query(20, ge=1), github: GitHubAdapter = Depends(get_github)):
     try:
-        path = client_path(client_name, "system_instruction.txt")
+        path = client_path(validate_deployment_client(client_name), "system_instruction.txt")
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     per_page = min(per_page, config.DASHBOARD_HISTORY_MAX_PAGE_SIZE)
@@ -535,7 +543,7 @@ def uploaded_file_size(file: UploadFile) -> int:
 @router.get("/current-catalog")
 def current_catalog(client_name: str = Query(min_length=1), storage: CatalogStorageAdapter = Depends(get_catalog_storage)):
     try:
-        validate_client_name(client_name)
+        validate_deployment_client(client_name)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     return storage.metadata(client_name)
@@ -549,7 +557,7 @@ def upload_catalog(file: Annotated[UploadFile, File()], client_name: str | None 
     if not resolved_client_name:
         raise HTTPException(422, "client_name requerido")
     try:
-        resolved_client_name = validate_client_name(resolved_client_name)
+        resolved_client_name = validate_deployment_client(resolved_client_name)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     if file.content_type != "application/pdf" or not (file.filename or "").lower().endswith(".pdf"):
