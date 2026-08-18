@@ -63,6 +63,7 @@ async def health_check():
     """Railway/root health endpoint and visible deployment-version check."""
     return {
         "status": "ok",
+        "business_client": config.BUSINESS_CLIENT,
         "commit": DEPLOYMENT_COMMIT_SHA,
         "queue_enabled": queue_enabled(),
         "queue": get_queue_stats(),
@@ -182,7 +183,7 @@ def send_whatsapp_media(to_number: str, media_id: str, media_type: str, caption:
 
 def catalog_link_for_whatsapp(file_id: str, link: str) -> str:
     """Add a cache-busting query to dashboard-managed catalog links sent through Meta."""
-    if file_id != "catalogo_pdf" or link != config.catalog_public_url("tanaka"):
+    if file_id != "catalogo_pdf" or link != config.catalog_public_url(config.BUSINESS_CLIENT):
         return link
     try:
         response = requests.head(link, timeout=MEDIA_TIMEOUT, allow_redirects=True)
@@ -238,7 +239,7 @@ def send_presaved_file(to_number: str, file_id: str):
         if file_id == "catalogo_pdf" and item.media_type == "document":
             version = dict(parse_qsl(urlsplit(resolved_link).query, keep_blank_values=True)).get("v", "")
             digest = hashlib.sha256(version.encode("utf-8")).hexdigest()[:12] if version else str(int(time.time()))
-            resolved_filename = f"catalogo-tanaka-{digest}.pdf"
+            resolved_filename = f"catalogo-{config.BUSINESS_CLIENT}-{digest}.pdf"
             print(f"[FILE CATALOG] Sending dashboard catalog link={resolved_link} filename={resolved_filename}")
             media_id = upload_public_url_to_meta_media(resolved_link, resolved_filename, "application/pdf")
             if media_id:

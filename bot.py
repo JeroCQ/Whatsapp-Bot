@@ -43,11 +43,12 @@ class BotTurn:
     follow_up_delay_minutes: int = 120
 
 
-FILE_CATALOG = load_file_catalog(config.catalogo_tanaka, "catalogo_tanaka")
+_catalog_json, _catalog_variable = config.presaved_files_for_business()
+FILE_CATALOG = load_file_catalog(_catalog_json, _catalog_variable)
 if "catalogo_pdf" in FILE_CATALOG:
     FILE_CATALOG["catalogo_pdf"] = replace(
         FILE_CATALOG["catalogo_pdf"],
-        link=config.catalog_public_url("tanaka"),
+        link=config.catalog_public_url(config.BUSINESS_CLIENT),
         media_id=None,
     )
 
@@ -220,9 +221,9 @@ Activa el handoff (trigger_handoff = true) en estos casos:
 # The dashboard edits this repository-backed file. Keeping the literal above as
 # the fallback lets the worker start safely in older deployments while making a
 # Dashboard commit effective after Railway redeploys the updated branch.
-_TANAKA_SYSTEM_INSTRUCTION_PATH = Path(__file__).parent / "src" / "clients" / "tanaka" / "system_instruction.txt"
-if _TANAKA_SYSTEM_INSTRUCTION_PATH.is_file():
-    SYSTEM_INSTRUCTION = _TANAKA_SYSTEM_INSTRUCTION_PATH.read_text(encoding="utf-8").strip()
+_SYSTEM_INSTRUCTION_PATH = Path(__file__).parent / "src" / "clients" / config.BUSINESS_CLIENT / "system_instruction.txt"
+if _SYSTEM_INSTRUCTION_PATH.is_file():
+    SYSTEM_INSTRUCTION = _SYSTEM_INSTRUCTION_PATH.read_text(encoding="utf-8").strip()
 
 # Keep the carefully maintained business prompt above intact. File capabilities are
 # appended at runtime instead of replacing, templating, or editing its contents.

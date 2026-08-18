@@ -86,3 +86,16 @@ class SupabaseKeyConfigTests(TestCase):
     def test_dashboard_format_timeout_default(self):
         with mock.patch.dict(os.environ, REQUIRED_ENV, clear=True):
             self.assertEqual(load_config().DASHBOARD_FORMAT_TIMEOUT_SECONDS, 90)
+
+    def test_selects_memos_catalog(self):
+        env = {**REQUIRED_ENV, "BUSINESS_CLIENT": "memos", "catalogo_memos": "[{}]"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            config = load_config()
+            self.assertEqual(config.BUSINESS_CLIENT, "memos")
+            self.assertEqual(config.presaved_files_for_business(), ("[{}]", "catalogo_memos"))
+
+    def test_rejects_unknown_business(self):
+        env = {**REQUIRED_ENV, "BUSINESS_CLIENT": "unknown"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            with self.assertRaisesRegex(ValueError, "BUSINESS_CLIENT"):
+                load_config()

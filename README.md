@@ -260,3 +260,11 @@ Search Railway logs for these markers:
 - `[METRIC] chatwoot_event_processed` - full Chatwoot webhook processing time.
 
 You can also open the root endpoint in a browser. It returns queue diagnostics without exposing secrets, including queued jobs, failed jobs, and how many RQ workers Redis can currently see.
+
+## Despliegue de una segunda marca
+
+El proceso completo para crear Quesos Memo's con Railway, Supabase, WhatsApp,
+Chatwoot y un perfil aislado en el mismo Lovable está en [`SETUP_MEMOS.md`](SETUP_MEMOS.md).
+Cada deployment debe definir `BUSINESS_CLIENT=tanaka` o `BUSINESS_CLIENT=memos`;
+esto selecciona el system instruction, la variable `catalogo_<marca>`, el objeto
+`<marca>.pdf` de Storage y restringe el dashboard a esa marca.

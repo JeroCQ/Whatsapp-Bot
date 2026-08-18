@@ -79,6 +79,8 @@ class GeminiProviderError(Exception):
 def validate_client_name(value: str) -> str:
     if not CLIENT_RE.fullmatch(value or ""):
         raise ValueError("client_name inválido")
+    if value != config.BUSINESS_CLIENT:
+        raise ValueError("Este deployment no administra ese cliente")
     return value
 
 

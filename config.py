@@ -31,6 +31,9 @@ def parse_gemini_model_list(raw_models: str | None, primary_model: str) -> list[
 
 
 class Settings:
+    BUSINESS_CLIENT = os.getenv("BUSINESS_CLIENT", "tanaka").strip().lower()
+    if BUSINESS_CLIENT not in {"tanaka", "memos"}:
+        raise ValueError("BUSINESS_CLIENT debe ser 'tanaka' o 'memos'")
     SUPABASE_URL = os.getenv("SUPABASE_URL")
     # Database access runs only on the server. Prefer the service-role secret so
     # message history is not silently hidden by RLS when SUPABASE_KEY contains a
@@ -91,6 +94,11 @@ class Settings:
     catalogo_memos = os.getenv("catalogo_memos", "[]")
     # Tanaka uses its own catalog without overwriting the reusable Memo's configuration.
     catalogo_tanaka = os.getenv("catalogo_tanaka", "[]")
+
+    @classmethod
+    def presaved_files_for_business(cls) -> tuple[str, str]:
+        variable_name = f"catalogo_{cls.BUSINESS_CLIENT}"
+        return getattr(cls, variable_name), variable_name
 
     @classmethod
     def catalog_storage_key(cls, client_name: str) -> str:

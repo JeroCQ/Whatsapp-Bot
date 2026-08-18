@@ -77,39 +77,39 @@ def test_successful_endpoints_and_catalog_path():
 
     client, headers = make_client(FakeGemini("formatted"), github, storage)
     response = client.post("/api/format-and-save-si", headers=headers,
-                           json={"client_name": "client_1", "draft_si": "draft"})
+                           json={"client_name": "tanaka", "draft_si": "draft"})
     assert response.json()["commit_sha"] == "new-sha"
 
-    response = client.post("/api/format-and-save-si?client_name=client_1", headers=headers,
+    response = client.post("/api/format-and-save-si?client_name=tanaka", headers=headers,
                            json={"draft_si": "draft"})
     assert response.status_code == 200
 
-    response = client.post("/api/format-and-save-si?client_name=client_1", headers=headers,
+    response = client.post("/api/format-and-save-si?client_name=tanaka", headers=headers,
                            json={"new_si": "draft"})
     assert response.status_code == 200
 
-    response = client.post("/api/format-and-save-si?client_name=client_1", headers=headers,
+    response = client.post("/api/format-and-save-si?client_name=tanaka", headers=headers,
                            json={"new_si": "draft", "commit_message": "Asistente IA: 1 cambio aplicado"})
     assert response.status_code == 200
 
-    response = client.get("/api/current-si?client_name=client_1", headers=headers)
+    response = client.get("/api/current-si?client_name=tanaka", headers=headers)
     assert response.json() == {"system_instruction": "current system instruction"}
 
-    response = client.get("/api/si-history?client_name=client_1", headers=headers)
+    response = client.get("/api/si-history?client_name=tanaka", headers=headers)
     assert response.json() == [{"date": "2026-08-04T00:00:00Z", "message": "Update", "sha": "abc"}]
 
-    response = client.get("/api/current-catalog?client_name=client_1", headers=headers)
+    response = client.get("/api/current-catalog?client_name=tanaka", headers=headers)
     assert response.json() == {
-        "public_url": "https://storage.test/catalogos/client_1.pdf",
+        "public_url": "https://storage.test/catalogos/tanaka.pdf",
         "updated_at": "Tue, 04 Aug 2026 00:00:00 GMT",
         "size_bytes": 123,
     }
 
-    response = client.post("/api/upload-catalog?client_name=client_1", headers=headers,
+    response = client.post("/api/upload-catalog?client_name=tanaka", headers=headers,
                            files={"file": ("ignored.pdf", b"%PDF-1.7\nbody", "application/pdf")})
     assert response.status_code == 200
-    assert response.json()["public_url"] == "https://storage.test/catalogos/client_1.pdf"
-    assert storage.uploaded == ("client_1", b"%PDF-1.7\nbody", 13)
+    assert response.json()["public_url"] == "https://storage.test/catalogos/tanaka.pdf"
+    assert storage.uploaded == ("tanaka", b"%PDF-1.7\nbody", 13)
 
 
 def test_invalid_gemini_json_and_original_validation():
@@ -125,12 +125,12 @@ def test_invalid_gemini_json_and_original_validation():
 
 def test_auth_traversal_and_bad_pdfs():
     client, headers = make_client(FakeGemini("x"), FakeGitHub(), FakeStorage())
-    assert client.get("/api/current-si?client_name=ok").status_code == 401
+    assert client.get("/api/current-si?client_name=tanaka").status_code == 401
     assert client.get("/api/current-si?client_name=../secret", headers=headers).status_code == 422
     assert client.get("/api/si-history?client_name=../secret", headers=headers).status_code == 422
-    assert client.post("/api/upload-catalog?client_name=ok", headers=headers,
+    assert client.post("/api/upload-catalog?client_name=tanaka", headers=headers,
                        files={"file": ("x.txt", b"hello", "text/plain")}).status_code == 400
-    assert client.post("/api/upload-catalog?client_name=ok", headers=headers,
+    assert client.post("/api/upload-catalog?client_name=tanaka", headers=headers,
                        files={"file": ("x.pdf", b"", "application/pdf")}).status_code == 400
 
 
@@ -151,7 +151,7 @@ def test_sha_conflict_is_sanitized(monkeypatch):
 def test_oversized_pdf(monkeypatch):
     monkeypatch.setattr(api.config, "DASHBOARD_MAX_CATALOG_MB", 0)
     client, headers = make_client(FakeGemini("x"), FakeGitHub(), FakeStorage())
-    response = client.post("/api/upload-catalog?client_name=ok", headers=headers,
+    response = client.post("/api/upload-catalog?client_name=tanaka", headers=headers,
                            files={"file": ("x.pdf", b"%PDF-123", "application/pdf")})
     assert response.status_code == 413
 
@@ -203,7 +203,7 @@ def test_format_and_save_requires_client_without_echoing_draft():
 
 def test_format_and_save_accepts_system_instruction_alias():
     client, headers = make_client(FakeGemini("formatted"), FakeGitHub())
-    response = client.post("/api/format-and-save-si?client_name=client_1", headers=headers,
+    response = client.post("/api/format-and-save-si?client_name=tanaka", headers=headers,
                            json={"system_instruction": "draft"})
 
     assert response.status_code == 200
@@ -211,7 +211,7 @@ def test_format_and_save_accepts_system_instruction_alias():
 
 def test_format_and_save_ignores_lovable_metadata_without_echoing_prompt():
     client, headers = make_client(FakeGemini("formatted"), FakeGitHub())
-    response = client.post("/api/format-and-save-si?client_name=client_1", headers=headers,
+    response = client.post("/api/format-and-save-si?client_name=tanaka", headers=headers,
                            json={"new_si": "sensitive prompt body", "commit_message": "Asistente IA"})
 
     assert response.status_code == 200
