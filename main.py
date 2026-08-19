@@ -70,6 +70,15 @@ async def health_check():
     }
 
 
+@app.get("/chatwoot-health")
+async def chatwoot_health():
+    """Run a safe end-to-end authorization check against the configured inbox."""
+    diagnostic = chatwoot_api.diagnose_connection()
+    if not diagnostic.ok:
+        raise HTTPException(status_code=503, detail=diagnostic.as_dict())
+    return diagnostic.as_dict()
+
+
 @app.on_event("startup")
 async def log_deployment_version():
     """Log the Railway commit so deployments can be verified."""
