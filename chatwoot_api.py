@@ -1,8 +1,62 @@
 import mimetypes
+from dataclasses import dataclass, asdict
 
 import requests
 from config import config
 from http_client import MEDIA_TIMEOUT, get, post, put
+
+
+@dataclass
+class ChatwootDiagnostic:
+    ok: bool
+    reason: str
+    status_code: int | None = None
+
+    def as_dict(self):
+        return asdict(self)
+
+
+def _response_error(action: str, response) -> str:
+    """Return a useful Chatwoot error without ever printing the access token."""
+    try:
+        detail = response.json()
+    except ValueError:
+        detail = (response.text or "").strip()[:500]
+    return f"{action} falló (HTTP {response.status_code}): {detail}"
+
+
+def diagnose_connection() -> ChatwootDiagnostic:
+    """Verify configuration, token scope, account access and inbox access."""
+    required = {
+        "CHATWOOT_BASE_URL": config.CHATWOOT_BASE_URL,
+        "CHATWOOT_API_TOKEN": config.CHATWOOT_API_TOKEN,
+        "CHATWOOT_ACCOUNT_ID": config.CHATWOOT_ACCOUNT_ID,
+        "CHATWOOT_INBOX_ID": config.CHATWOOT_INBOX_ID,
+    }
+    missing = [name for name, value in required.items() if not value]
+    if missing:
+        return ChatwootDiagnostic(False, f"Faltan variables: {', '.join(missing)}")
+    try:
+        int(config.CHATWOOT_ACCOUNT_ID)
+        int(config.CHATWOOT_INBOX_ID)
+    except (TypeError, ValueError):
+        return ChatwootDiagnostic(False, "CHATWOOT_ACCOUNT_ID y CHATWOOT_INBOX_ID deben ser IDs numéricos")
+
+    try:
+        response = get(f"{get_base_url()}/inboxes/{int(config.CHATWOOT_INBOX_ID)}", headers=get_headers())
+    except requests.RequestException as exc:
+        return ChatwootDiagnostic(False, f"No se pudo conectar con Chatwoot: {exc}")
+    if response.status_code in (401, 403):
+        return ChatwootDiagnostic(
+            False,
+            "El token no autoriza la Application API. Un token de Agent Bot no sustituye el token de acceso de un usuario; usa el token del perfil de un agente con acceso a este inbox.",
+            response.status_code,
+        )
+    if response.status_code == 404:
+        return ChatwootDiagnostic(False, "La cuenta o el inbox no existe, o no pertenece a la cuenta configurada", 404)
+    if not response.ok:
+        return ChatwootDiagnostic(False, _response_error("Validación del inbox", response), response.status_code)
+    return ChatwootDiagnostic(True, "Conexión correcta: token, cuenta e inbox tienen acceso", response.status_code)
 
 
 def get_base_url():
@@ -28,7 +82,7 @@ def get_or_create_contact(phone: str, name: str = "Cliente WhatsApp"):
     
     try:
         inbox_id_int = int(config.CHATWOOT_INBOX_ID)
-    except ValueError:
+    except (TypeError, ValueError):
         print(f"[CHATWOOT DEBUG] ERROR GRAVE: CHATWOOT_INBOX_ID no es válido.")
         return None
 
@@ -36,6 +90,9 @@ def get_or_create_contact(phone: str, name: str = "Cliente WhatsApp"):
     search_url = f"{url}/search?q={phone}"
     try:
         search_res = get(search_url, headers=get_headers())
+        if not search_res.ok:
+            print(f"[CHATWOOT ERROR] {_response_error('Buscar contacto', search_res)}")
+            return None
         if search_res.status_code == 200 and search_res.json().get("payload"):
             contact = search_res.json()["payload"][0]
             contact_id = contact["id"]
@@ -61,6 +118,7 @@ def get_or_create_contact(phone: str, name: str = "Cliente WhatsApp"):
         res = post(url, headers=get_headers(), json=data)
         if res.status_code in [200, 201]:
             return res.json()["payload"]["contact"]["id"]
+        print(f"[CHATWOOT ERROR] {_response_error('Crear contacto', res)}")
     except Exception as e:
         print(f"[CHATWOOT DEBUG] Excepción en get_or_create_contact (creando): {e}")
     
@@ -77,8 +135,9 @@ def create_conversation(contact_id: int):
     
     try:
         res = post(url, headers=get_headers(), json=data)
-        if res.status_code == 200:
+        if res.status_code in (200, 201):
             return res.json()["id"]
+        print(f"[CHATWOOT ERROR] {_response_error('Crear conversación', res)}")
     except Exception as e:
         print(f"[CHATWOOT DEBUG] Excepción en create_conversation: {e}")
     return None
@@ -93,7 +152,11 @@ def send_message_to_chatwoot(conversation_id: int, content: str, is_private: boo
         "private": is_private       
     }
     try:
-        post(url, headers=get_headers(), json=data)
+        response = post(url, headers=get_headers(), json=data)
+        if not response.ok:
+            print(f"[CHATWOOT ERROR] {_response_error('Enviar mensaje', response)}")
+            return None
+        return response
     except Exception as e:
          print(f"[CHATWOOT DEBUG] Excepción enviando mensaje: {e}")
 

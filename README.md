@@ -82,6 +82,9 @@ Existing required variables are still needed:
 - `WA_PHONE_NUMBER_ID`
 - `GEMINI_API_KEY`
 - Chatwoot variables used by handoff: `CHATWOOT_BASE_URL`, `CHATWOOT_API_TOKEN`, `CHATWOOT_ACCOUNT_ID`, `CHATWOOT_INBOX_ID`
+  - `CHATWOOT_API_TOKEN` must be a **user/agent access token** authorized for the account and inbox. An Agent Bot token only identifies that bot and cannot replace a user token for creating contacts and conversations through the Application API.
+  - After deploying, open `GET /chatwoot-health`. It validates the four variables and checks access to the configured inbox without exposing the token. HTTP 401/403 indicates an invalid token or insufficient token scope; HTTP 404 normally indicates a wrong account/inbox pairing.
+  - For existing Supabase projects, run `supabase/allow_message_log_roles.sql` once so handoff and advisor events can be recorded.
 
 For scalable queued processing, also set:
 
