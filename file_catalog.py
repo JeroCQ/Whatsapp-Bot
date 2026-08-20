@@ -43,7 +43,12 @@ def load_file_catalog(raw_json: str, variable_name: str = "PRESAVED_FILES_JSON")
             raise ValueError(f"File entry {index} requires id and description")
         if file_id in result:
             raise ValueError(f"Duplicate presaved file id: {file_id}")
-        if bool(link) == bool(media_id):
+        # The dashboard-managed catalog is resolved from this deployment's
+        # Supabase bucket at send time. It needs metadata for Gemini, but no
+        # duplicate external URL. Other allow-listed files still need exactly
+        # one concrete source.
+        storage_managed_catalog = file_id == "catalogo_pdf" and not link and not media_id
+        if not storage_managed_catalog and bool(link) == bool(media_id):
             raise ValueError(f"File '{file_id}' must define exactly one of link or media_id")
         if link and not link.startswith("https://"):
             raise ValueError(f"File '{file_id}' link must use HTTPS")

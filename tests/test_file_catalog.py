@@ -16,6 +16,30 @@ class FileCatalogTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             load_file_catalog('[{"id":"x","description":"x","link":"https://example.com/x","media_id":"1"}]')
 
+    def test_dashboard_managed_catalog_does_not_need_duplicate_link(self):
+        catalog = load_file_catalog(
+            '[{"id":"catalogo_pdf","description":"Catálogo Tanaka","type":"document","filename":"Catalogo_Tanaka.pdf"}]'
+        )
+
+        self.assertIsNone(catalog["catalogo_pdf"].link)
+        self.assertIsNone(catalog["catalogo_pdf"].media_id)
+
+    def test_exact_railway_catalog_value_without_link_is_valid(self):
+        raw_value = (
+            '[{"id":"catalogo_pdf","description":"Catálogo de Tanaka Saludable; '
+            'enviarlo cuando pidan el catálogo, precios generales o quieran ver todos los productos.",'
+            '"type":"document","filename":"Catalogo_Tanaka.pdf",'
+            '"caption":"Aquí tienes nuestro catálogo completo ☺️"}]'
+        )
+
+        catalog = load_file_catalog(raw_value)
+
+        self.assertEqual(catalog["catalogo_pdf"].filename, "Catalogo_Tanaka.pdf")
+
+    def test_non_catalog_file_still_requires_a_source(self):
+        with self.assertRaises(ValueError):
+            load_file_catalog('[{"id":"ficha_tecnica","description":"Ficha"}]')
+
     def test_empty_configuration_disables_file_requests(self):
         self.assertEqual(load_file_catalog(""), {})
         self.assertIn("requested_files=[]", catalog_prompt({}))

@@ -12,6 +12,10 @@ un `client_name` que no coincida con ese identificador, evitando cruces entre ma
 Para crear Quesos Memo's sin modificar el bot live de Tanaka, sigue el checklist
 completo de [`SETUP_MEMOS.md`](SETUP_MEMOS.md).
 
+Para crear el despliegue aislado de Tanaka sobre Chatwoot self-hosted, Supabase,
+Meta y Railway nuevos, sigue [`SETUP_TANAKA.md`](SETUP_TANAKA.md). El runbook
+incluye el orden de creación, la lista exacta de variables y las pruebas de corte.
+
 ## Dashboard administrativo de Tanaka
 
 The repository contains the initial dashboard-managed Tanaka system instruction at
@@ -112,7 +116,7 @@ For scalable queued processing, also set:
 
 ### AI-controlled presaved files
 
-Set `catalogo_tanaka` to a JSON array. Each entry gives Gemini a safe ID and a
+Set `PRESAVED_FILES_JSON` to a JSON array. Each entry gives Gemini a safe ID and a
 description that explains **when** it should send the file. The existing system prompt
 can add more business rules using that ID. Files can use a permanent public HTTPS URL
 (`link`) or a Meta media ID (`media_id`), but not both:
@@ -123,12 +127,15 @@ can add more business rules using that ID. Files can use a permanent public HTTP
     "id": "catalogo_pdf",
     "description": "Catálogo de Tanaka Saludable; enviarlo cuando pidan el catálogo o quieran ver todos los productos.",
     "type": "document",
-    "link": "https://example.com/catalogo.pdf",
     "filename": "catalogo-tanaka.pdf",
     "caption": "Aquí tienes nuestro catálogo completo ☺️"
   }
 ]
 ```
+
+The reserved `catalogo_pdf` entry does not need a `link`: the bot resolves the
+current `catalogos/{BUSINESS_ID}.{ext}` object from Supabase Storage at send time.
+Other entries must provide exactly one HTTPS `link` or Meta `media_id`.
 
 Supported `type` values are `document`, `image`, `video`, and `audio`; other file
 formats should use `document`. The model can select one or several configured IDs and
@@ -136,8 +143,8 @@ choose whether the files arrive before or after its text. Unknown IDs are ignore
 the application, so the model cannot send an unapproved file. Changes to this variable
 take effect after restarting/redeploying the service.
 
-`catalogo_memos` y `PRESAVED_FILES_JSON` se conservan sin cambios para poder reutilizar
-el código en otros negocios. Esta configuración de Tanaka solo carga `catalogo_tanaka`.
+No uses las variables históricas `catalogo_tanaka` o `catalogo_memos`: el runtime
+solo carga `PRESAVED_FILES_JSON` y el despliegue se selecciona con `BUSINESS_ID`.
 
 ### Follow up automático
 
