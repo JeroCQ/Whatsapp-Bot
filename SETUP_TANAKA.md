@@ -364,3 +364,27 @@ concreto no demuestra un límite de body inferior en el proxy Railway. Los lími
 plan/plataforma pueden cambiar: confirma el límite vigente en la documentación o
 soporte Railway antes de aumentar `DASHBOARD_MAX_CATALOG_MB`; no se afirma aquí un
 valor global no verificado.
+
+## Diagnóstico: no hay notificación de handoff o Resolve no reactiva la IA
+
+Estos dos síntomas dependen de recursos Chatwoot distintos:
+
+* La notificación requiere que la conversación quede asignada al ID numérico de
+  `tanaka@briosos.org` y que el agente tenga activada “conversation assigned to you”.
+* La reactivación requiere un **account webhook** Tanaka que entregue
+  `conversation_status_changed` a `https://DOMINIO-TANAKA/chatwoot-webhook` con el
+  mismo secreto configurado en `CHATWOOT_WEBHOOK_SECRET`.
+
+En logs, un flujo sano muestra primero `[CHATWOOT] Conversation ... assigned...` y,
+al resolver, un acceso `POST /chatwoot-webhook`, seguido de
+`[CHATWOOT WEBHOOK] accepted`, `[CHATWOOT EVENT] ... status=resolved` y
+`Bot resumed`. Si no aparece ningún POST a `/chatwoot-webhook`, el problema está en
+la URL/suscripción del account webhook de Chatwoot, no en Redis ni en la lógica de
+estado. Si aparece 401, el secreto/firma no coincide; si aparece 403, account o inbox
+están cruzados.
+
+Algunas versiones self-hosted aceptan `assignee_id` al crear la conversación pero no
+lo aplican en la respuesta. El backend verifica la respuesta y, solo si falta la
+asignación esperada, ejecuta una llamada adicional acotada al endpoint de assignments.
+Para Resolve también acepta `id/status` tanto en la raíz como dentro de
+`conversation`, porque la forma del payload varía entre eventos/versiones.
