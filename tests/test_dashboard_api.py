@@ -147,6 +147,8 @@ def test_explicit_si_path_cannot_cross_business(monkeypatch):
 
 def test_explicit_si_path_may_match_deployment_business(monkeypatch):
     monkeypatch.setattr(api.config, "GITHUB_SI_PATH", "src/clients/client_1/system_instruction.txt")
+    storage = FakeStorage()
+    client, headers = make_client(storage=storage)
 
     assert api.system_instruction_path("client_1") == "src/clients/client_1/system_instruction.txt"
 
