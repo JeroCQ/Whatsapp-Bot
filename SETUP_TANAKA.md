@@ -22,7 +22,7 @@ Supabase, Chatwoot ni Railway, pero sí el paso a producción:
 | Capa | Recurso exclusivo de Tanaka |
 | --- | --- |
 | Railway | Proyecto nuevo, un servicio web y un Redis nuevo |
-| Supabase | Proyecto nuevo con el esquema de `supabase/bootstrap.sql` |
+| Supabase | Proyecto Tanaka pagado existente, actualizado sin borrar sus datos |
 | Meta | WABA/número, Phone Number ID, token permanente y verify token nuevos |
 | Chatwoot | Cuenta/workspace, API inbox, usuario agente, token y webhook propios |
 | Aplicación | `BUSINESS_ID=tanaka`, prompt Tanaka y cola Tanaka |
@@ -40,15 +40,41 @@ cuenta. Crear solamente el correo no sustituye la cuenta ni el inbox.
 3. Reserva dos URLs finales: `https://DOMINIO-TANAKA/webhook` para Meta y
    `https://DOMINIO-TANAKA/chatwoot-webhook` para Chatwoot.
 
-## 2. Preparar el Supabase nuevo
+## 2. Verificar y actualizar el Supabase Tanaka existente
 
-1. Crea el proyecto de Tanaka.
-2. Ejecuta una sola vez, completo, `supabase/bootstrap.sql` en **SQL Editor**.
-3. Comprueba las tablas `customers`, `conversation_states`, `message_logs` y
-   `processed_webhook_events`, y el bucket público `catalogos`.
-4. Copia **Project URL** a `SUPABASE_URL` y la clave secreta **service_role** a
-   `SUPABASE_SERVICE_ROLE_KEY`. Nunca uses la clave anon/publishable.
-5. No copies filas desde el Supabase de otra marca.
+No crees otro proyecto ni ejecutes `supabase/bootstrap.sql` sobre el proyecto
+pagado. El esquema compartido demuestra que ya existen las cuatro tablas que usa el
+runtime: `customers`, `conversation_states`, `message_logs` y
+`processed_webhook_events`. Las tablas históricas `clients`, `products`,
+`business_config` y `orders` son compatibles, pero este runtime no las consulta.
+`dashboard_admins` pertenece a la capa administrativa y tampoco sustituye ninguna
+de las cuatro tablas del bot.
+
+El esquema **no está todavía completo para esta versión**: a
+`conversation_states` le falta `follow_up_token`. El código actual lo usa para
+programar, cancelar y consumir seguimientos. También faltan en el extracto los
+índices actuales y no se puede confirmar desde un `CREATE TABLE` si existe el bucket
+Storage `catalogos`, sus políticas o el estado de RLS.
+
+1. Haz un backup o snapshot y confirma que las variables apuntan al proyecto Tanaka
+   pagado, no al de otra marca.
+2. Abre `supabase/upgrade_existing_tanaka.sql`. Ejecuta primero únicamente la consulta
+   de IDs Chatwoot duplicados de la cabecera. Debe devolver **cero filas**. Si devuelve
+   datos, conserva la fila que corresponda al ticket activo y limpia los IDs obsoletos
+   antes de continuar.
+3. Ejecuta el archivo completo en **SQL Editor**. Es idempotente: agrega solo
+   `follow_up_token`, crea los índices que faltan y crea/corrige el bucket público
+   `catalogos`; no elimina tablas ni filas históricas.
+4. Verifica que la última consulta del archivo devuelva `true` en las siete columnas.
+5. En **Project Settings → API**, copia la URL de este mismo proyecto a
+   `SUPABASE_URL` y su clave secreta **service_role** a
+   `SUPABASE_SERVICE_ROLE_KEY`. No uses anon/publishable y no expongas service-role
+   en Lovable ni en el navegador.
+6. Si el dashboard usa autenticación Supabase, verifica aparte que
+   `dashboard_admins` tenga RLS habilitado, ningún policy para navegador y los grants
+   de `anon`/`authenticated` revocados, como define
+   `supabase/migrations/20260804000000_dashboard_admins.sql`. El extracto del esquema
+   no contiene metadatos suficientes para confirmar esos controles.
 
 ## 3. Preparar Meta Cloud API
 
@@ -109,8 +135,8 @@ requiere un cambio de código.
 | `QUEUE_NAME` | **Cambiar** | `whatsapp-events-tanaka` |
 | `REDIS_URL` | **Cambiar** | Referencia al Redis **nuevo**, normalmente `${{Redis.REDIS_URL}}` |
 | `RUN_WORKER_IN_WEB` | **Eliminar** (recomendado) | Sin definir equivale a worker embebido; alternativamente `true`. Nunca `false` en esta topología inicial |
-| `SUPABASE_SERVICE_ROLE_KEY` | **Cambiar** | `service_role` secreto del Supabase nuevo |
-| `SUPABASE_URL` | **Cambiar** | URL del Supabase nuevo |
+| `SUPABASE_SERVICE_ROLE_KEY` | **Cambiar respecto de otra marca / verificar para Tanaka** | `service_role` secreto del Supabase Tanaka pagado existente |
+| `SUPABASE_URL` | **Cambiar respecto de otra marca / verificar para Tanaka** | URL del Supabase Tanaka pagado existente |
 | `WA_PHONE_NUMBER_ID` | **Cambiar** | Phone Number ID del número nuevo |
 | `WA_TOKEN` | **Cambiar** | Token permanente nuevo autorizado para ese número |
 | `WA_VERIFY_TOKEN` | **Cambiar** | Secreto aleatorio nuevo, idéntico al configurado en Meta |
@@ -118,10 +144,11 @@ requiere un cambio de código.
 | `GITHUB_TOKEN` | **Conservar o cambiar** | Conservar solo si tiene el permiso mínimo de contenido para este repo; uno separado aísla permisos |
 | `CHATWOOT_ASSIGNEE_ID` | **Cambiar después de crear el agente** | ID numérico de `tanaka@briosos.org`, no correo, nombre ni inbox ID |
 
-Por tanto, de la lista mostrada cambian obligatoriamente ocho: `QUEUE_NAME`,
-`REDIS_URL`, las dos de Supabase, las tres de WhatsApp y
-`CHATWOOT_ASSIGNEE_ID`. `RUN_WORKER_IN_WEB` se elimina o queda `true`;
-`GITHUB_SI_PATH` se verifica; `GITHUB_TOKEN` puede conservarse conscientemente.
+Por tanto, cambian obligatoriamente `QUEUE_NAME`, `REDIS_URL`, las tres variables
+de WhatsApp y `CHATWOOT_ASSIGNEE_ID`. Las dos variables Supabase deben apuntar al
+proyecto Tanaka pagado existente: cámbialas solo si los valores actuales pertenecen
+a otro proyecto. `RUN_WORKER_IN_WEB` se elimina o queda `true`;
+`GITHUB_SI_PATH` se verifica y `GITHUB_TOKEN` puede conservarse conscientemente.
 
 ### Variables que faltan en la lista y deben agregarse
 
@@ -139,12 +166,19 @@ Por tanto, de la lista mostrada cambian obligatoriamente ocho: `QUEUE_NAME`,
 | `DASHBOARD_API_KEY` | Si se usa dashboard | Secreto nuevo compartido solo con el proxy server-side de Tanaka |
 | `DASHBOARD_CORS_ORIGINS` | Si hay acceso web directo | Origen HTTPS exacto; omitir si todo pasa por proxy server-side |
 
-Valor inicial de `PRESAVED_FILES_JSON` (el backend sustituye el placeholder por el
-objeto vigente `catalogos/tanaka.{ext}` en Supabase):
+Valor de `PRESAVED_FILES_JSON`. No incluyas `link`: `catalogo_pdf` es el catálogo
+administrado por el dashboard y el backend descubre en runtime el objeto vigente
+`catalogos/tanaka.{ext}` en Supabase:
 
 ```json
-[{"id":"catalogo_pdf","description":"Catálogo de Tanaka Saludable; enviarlo cuando pidan el catálogo, precios generales o quieran ver todos los productos.","type":"document","link":"https://example.com/catalogo.pdf","filename":"catalogo-tanaka.pdf","caption":"Aquí tienes nuestro catálogo completo ☺️"}]
+[{"id":"catalogo_pdf","description":"Catálogo de Tanaka Saludable; enviarlo cuando pidan el catálogo, precios generales o quieran ver todos los productos.","type":"document","filename":"Catalogo_Tanaka.pdf","caption":"Aquí tienes nuestro catálogo completo ☺️"}]
 ```
+
+`PRESAVED_FILES_JSON` define para Gemini el ID permitido, cuándo usarlo, el nombre y
+el caption; no es el almacenamiento del archivo. El PDF real vive únicamente en
+Supabase Storage y se reemplaza desde el dashboard. Un `link` sigue siendo obligatorio
+para otros archivos preguardados que no tengan el ID reservado `catalogo_pdf` (salvo
+que usen `media_id`).
 
 No agregues `SUPABASE_KEY`, `GOOGLE_API_KEY`, `catalogo_tanaka`,
 `catalogo_memos` ni `PIN`. Son nombres históricos, ambiguos o pertenecen al proxy,
@@ -153,14 +187,47 @@ Redis de otra marca.
 
 ## 7. Dashboard, catálogo y webhooks
 
-1. Si se usa Lovable, configura allí secretos **server-only**
+1. En Lovable configura como secretos **server-only**
    `TANAKA_DASHBOARD_BACKEND_URL`, `TANAKA_DASHBOARD_API_KEY` y
    `TANAKA_DASHBOARD_PASSWORD`. La API key debe coincidir con
-   `DASHBOARD_API_KEY` de este Railway y nunca ser `VITE_*`.
-2. Sube el catálogo desde el perfil Tanaka y confirma que Supabase contiene un solo
+   `DASHBOARD_API_KEY` del Railway Tanaka y nunca ser `VITE_*`.
+   `MEMOS_DASHBOARD_API_KEY` es exclusivamente la credencial del perfil Memo's:
+   debe coincidir con el Railway Memo's, nunca con Tanaka, y no debe ser un valor
+   débil como `123456`.
+2. No copies `PRESAVED_FILES_JSON` a Lovable; pertenece a las variables del Railway
+   Tanaka. Tampoco copies `DASHBOARD_CORS_ORIGINS` a Lovable. Si Lovable llama al
+   backend mediante su proxy server-side, elimina `DASHBOARD_CORS_ORIGINS` de
+   Railway o déjalo vacío. Solo configúralo con el origen HTTPS exacto de Lovable
+   si el navegador llama directamente a FastAPI.
+3. Sube el catálogo desde el perfil Tanaka y confirma que Supabase contiene un solo
    objeto vigente `catalogos/tanaka.{pdf|jpg|jpeg|png|webp}`.
-3. Meta apunta a `/webhook`. Chatwoot apunta a `/chatwoot-webhook`. No intercambies
+4. Meta apunta a `/webhook`. Chatwoot apunta a `/chatwoot-webhook`. No intercambies
    estas URLs y no pongas secretos en ellas.
+
+### Texto exacto para Lovable
+
+Copia este encargo y sustituye únicamente los valores secretos en su gestor
+server-side:
+
+> Configura el perfil Tanaka para usar exclusivamente un proxy server-side. Crea
+> `TANAKA_DASHBOARD_BACKEND_URL` con la URL pública del Railway Tanaka,
+> `TANAKA_DASHBOARD_API_KEY` con el mismo secreto aleatorio fuerte configurado como
+> `DASHBOARD_API_KEY` en Railway Tanaka, y `TANAKA_DASHBOARD_PASSWORD` con una
+> contraseña fuerte independiente. Nunca expongas estos valores como `VITE_*`, en
+> el bundle, en respuestas al navegador ni en logs. El proxy debe fijar
+> `client_name=tanaka` en servidor y enviar `X-Dashboard-API-Key`; no debe aceptar
+> del navegador otro backend ni otro `client_name`. Conserva
+> `MEMOS_DASHBOARD_API_KEY` únicamente para el Railway Memo's y reemplaza cualquier
+> valor débil como `123456` por un secreto aleatorio. No agregues
+> `PRESAVED_FILES_JSON` ni `DASHBOARD_CORS_ORIGINS` a Lovable: son configuración del
+> Railway. Como las llamadas pasan por el proxy server-side, no llames FastAPI
+> directamente desde el navegador.
+
+Genera las dos API keys por separado, por ejemplo con
+`python -c "import secrets; print(secrets.token_urlsafe(32))"`. El valor Tanaka se
+copia tanto a `TANAKA_DASHBOARD_API_KEY` en Lovable como a `DASHBOARD_API_KEY` en
+Railway Tanaka. El valor Memo's se copia tanto a `MEMOS_DASHBOARD_API_KEY` en
+Lovable como a `DASHBOARD_API_KEY` en Railway Memo's. Nunca cruces ambos valores.
 
 ## 8. Pruebas de aceptación antes de anunciar el número
 
@@ -171,7 +238,7 @@ Ejecuta en este orden y detente ante el primer fallo:
    `whatsapp-events-tanaka`, sin imprimir secretos.
 3. Meta acepta la verificación GET del webhook.
 4. Un mensaje nuevo recibe una respuesta propia del prompt Tanaka.
-5. “Envíame el catálogo” entrega el archivo Tanaka desde el Supabase nuevo.
+5. “Envíame el catálogo” entrega el archivo Tanaka desde el Supabase Tanaka existente.
 6. Un mensaje que requiere asesor crea la conversación únicamente en la cuenta e
    inbox Tanaka y queda asignada a `tanaka@briosos.org`.
 7. Una respuesta pública desde Chatwoot llega al WhatsApp correcto; resolver la
@@ -187,3 +254,41 @@ Ejecuta en este orden y detente ante el primer fallo:
 Si falla el corte, desconecta solo el callback del número Tanaka o restaura sus
 valores registrados. No borres recursos ni revoques tokens antiguos durante la
 ventana de rollback y no modifiques el proyecto de otra marca.
+
+## Diagnóstico: Railway reinicia con `catalogo_pdf must define exactly one...`
+
+Ese error identifica una versión anterior del código, no un fallo de Redis,
+Supabase ni Lovable. En la versión actual, `catalogo_pdf` puede omitir `link` y
+`media_id`; el catálogo se resuelve desde Supabase. Compara siempre el hash que
+imprime `[WORKER] ... commit=<hash>` con el commit que contiene este runbook.
+
+Cuando ocurre:
+
+1. El worker alcanza a iniciar porque `workers.runner` no importa `bot.py`.
+2. Uvicorn importa `main.py`, que importa `bot.py` y valida
+   `PRESAVED_FILES_JSON`.
+3. La versión antigua rechaza el catálogo sin link, el proceso web termina y el
+   launcher apaga correctamente el worker y scheduler hijos.
+4. Lovable recibe 502 porque Railway no tiene un proceso HTTP vivo. Cambiar CORS,
+   contraseñas o el proxy no corrige ese 502.
+
+### Solución correcta
+
+Despliega en Railway un commit que incluya la excepción de catálogo administrado
+en `file_catalog.py` y confirma en logs que el hash cambió. Mantén después este JSON
+sin URL duplicada:
+
+```json
+[{"id":"catalogo_pdf","description":"Catálogo de Tanaka Saludable; enviarlo cuando pidan el catálogo, precios generales o quieran ver todos los productos.","type":"document","filename":"Catalogo_Tanaka.pdf","caption":"Aquí tienes nuestro catálogo completo ☺️"}]
+```
+
+No consideres terminado el redeploy hasta que `/` responda 200 y Lovable deje de
+mostrar `backend 502`.
+
+### Recuperación temporal si aún no puedes desplegar el commit nuevo
+
+Restaura provisionalmente un `link` HTTPS en `PRESAVED_FILES_JSON`. Esto permite
+que la versión antigua arranque, aunque el código nuevo seguirá sustituyéndolo por
+el catálogo vigente de Supabase al enviarlo. Elimina otra vez el link después de
+desplegar y verificar la versión actual. Esta recuperación es preferible a cambiar
+Redis, Supabase, Chatwoot o CORS, que no participan en el error de importación.

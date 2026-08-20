@@ -47,6 +47,9 @@ FILE_CATALOG = load_file_catalog(config.PRESAVED_FILES_JSON, "PRESAVED_FILES_JSO
 if "catalogo_pdf" in FILE_CATALOG:
     FILE_CATALOG["catalogo_pdf"] = replace(
         FILE_CATALOG["catalogo_pdf"],
+        # The real object is discovered by extension in Supabase Storage when
+        # it is sent. This fallback keeps the immutable entry complete without
+        # requiring a second catalog URL in Railway.
         link=config.catalog_public_url(),
         media_id=None,
     )

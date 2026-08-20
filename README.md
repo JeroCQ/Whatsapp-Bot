@@ -127,12 +127,15 @@ can add more business rules using that ID. Files can use a permanent public HTTP
     "id": "catalogo_pdf",
     "description": "Catálogo de Tanaka Saludable; enviarlo cuando pidan el catálogo o quieran ver todos los productos.",
     "type": "document",
-    "link": "https://example.com/catalogo.pdf",
     "filename": "catalogo-tanaka.pdf",
     "caption": "Aquí tienes nuestro catálogo completo ☺️"
   }
 ]
 ```
+
+The reserved `catalogo_pdf` entry does not need a `link`: the bot resolves the
+current `catalogos/{BUSINESS_ID}.{ext}` object from Supabase Storage at send time.
+Other entries must provide exactly one HTTPS `link` or Meta `media_id`.
 
 Supported `type` values are `document`, `image`, `video`, and `audio`; other file
 formats should use `document`. The model can select one or several configured IDs and
