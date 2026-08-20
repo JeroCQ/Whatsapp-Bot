@@ -184,3 +184,46 @@ def test_account_path_and_configured_inbox_creation(monkeypatch):
     assert chatwoot_api.create_conversation(77) == 88
     assert captured["url"] == "https://app.chatwoot.com/api/v1/accounts/10/conversations"
     assert captured["json"]["inbox_id"] == 20
+
+
+def test_image_catalog_is_uploaded_and_sent_as_whatsapp_image(monkeypatch):
+    sent_payloads = []
+    item = types.SimpleNamespace(
+        media_id=None,
+        link="https://placeholder.test/catalog.pdf",
+        filename="catalog.pdf",
+        media_type="document",
+        default_caption="Catálogo",
+    )
+
+    def fake_head(url, **kwargs):
+        if url.endswith(".png"):
+            return Response(200, headers={"Content-Type": "image/png", "ETag": "v1"})
+        return Response(404)
+
+    monkeypatch.setattr(main.requests, "head", fake_head)
+    monkeypatch.setattr(main, "FILE_CATALOG", {"catalogo_pdf": item})
+    monkeypatch.setattr(main, "upload_public_url_to_meta_media", lambda url, filename, content_type: "media-png")
+    monkeypatch.setattr(main, "post", lambda url, **kwargs: sent_payloads.append(kwargs["json"]) or Response(200))
+
+    assert main.send_presaved_file("57300", "catalogo_pdf") is True
+    assert sent_payloads[0]["type"] == "image"
+    assert sent_payloads[0]["image"]["id"] == "media-png"
+    assert "filename" not in sent_payloads[0]["image"]
+
+
+def test_missing_catalog_does_not_send_broken_link(monkeypatch):
+    calls = []
+    item = types.SimpleNamespace(
+        media_id=None,
+        link="https://placeholder.test/catalog.pdf",
+        filename="catalog.pdf",
+        media_type="document",
+        default_caption="Catálogo",
+    )
+    monkeypatch.setattr(main.requests, "head", lambda *args, **kwargs: Response(404))
+    monkeypatch.setattr(main, "FILE_CATALOG", {"catalogo_pdf": item})
+    monkeypatch.setattr(main, "post", lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    assert main.send_presaved_file("57300", "catalogo_pdf") is False
+    assert calls == []

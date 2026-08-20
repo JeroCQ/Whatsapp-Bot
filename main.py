@@ -60,6 +60,13 @@ DEPLOYMENT_COMMIT_SHA = os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_CO
 print(f"[BOOT] WhatsApp bot code loaded. Commit: {DEPLOYMENT_COMMIT_SHA}. Scalable queue build: 2026-07-24.2")
 
 WHATSAPP_MEDIA_TYPES = {"audio", "document", "image", "sticker", "video"}
+CATALOG_FORMATS = (
+    ("pdf", "application/pdf", "document"),
+    ("jpg", "image/jpeg", "image"),
+    ("jpeg", "image/jpeg", "image"),
+    ("png", "image/png", "image"),
+    ("webp", "image/webp", "image"),
+)
 
 
 @app.get("/")
@@ -192,7 +199,7 @@ def send_whatsapp_media(to_number: str, media_id: str, media_type: str, caption:
 
 def catalog_link_for_whatsapp(file_id: str, link: str) -> str:
     """Add a cache-busting query to dashboard-managed catalog links sent through Meta."""
-    if file_id != "catalogo_pdf" or link != config.catalog_public_url():
+    if file_id != "catalogo_pdf":
         return link
     try:
         response = requests.head(link, timeout=MEDIA_TIMEOUT, allow_redirects=True)
@@ -205,6 +212,24 @@ def catalog_link_for_whatsapp(file_id: str, link: str) -> str:
     query = dict(parse_qsl(parts.query, keep_blank_values=True))
     query["v"] = str(version or int(time.time()))
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+
+def current_catalog_for_whatsapp() -> tuple[str, str, str, str] | None:
+    """Find this deployment's active PDF/image catalog from public Storage metadata."""
+    for extension, expected_content_type, media_type in CATALOG_FORMATS:
+        link = config.catalog_public_url(extension=extension)
+        try:
+            response = requests.head(link, timeout=MEDIA_TIMEOUT, allow_redirects=True)
+        except requests.exceptions.RequestException:
+            continue
+        if not 200 <= response.status_code < 300:
+            continue
+        content_type = (response.headers.get("Content-Type") or expected_content_type).split(";", 1)[0].lower()
+        if content_type != expected_content_type:
+            print("[FILE CATALOG] Stored catalog has an unexpected content type")
+            return None
+        return link, content_type, media_type, extension
+    return None
 
 
 
@@ -240,29 +265,41 @@ def send_presaved_file(to_number: str, file_id: str):
         print(f"[FILE CATALOG] Ignoring unknown file id requested by AI: {file_id}")
         return
     resolved_filename = item.filename
+    media_type = item.media_type
+    catalog_content_type = "application/pdf"
     if item.media_id:
         media_reference = {"id": item.media_id}
     else:
-        resolved_link = catalog_link_for_whatsapp(file_id, item.link)
+        source_link = item.link
+        catalog_extension = "pdf"
+        if file_id == "catalogo_pdf":
+            current_catalog = current_catalog_for_whatsapp()
+            if not current_catalog:
+                print("[FILE CATALOG] No active PDF/image catalog exists for this deployment")
+                return False
+            source_link, catalog_content_type, media_type, catalog_extension = current_catalog
+        resolved_link = catalog_link_for_whatsapp(file_id, source_link)
         media_reference = {"link": resolved_link}
-        if file_id == "catalogo_pdf" and item.media_type == "document":
+        if file_id == "catalogo_pdf":
             version = dict(parse_qsl(urlsplit(resolved_link).query, keep_blank_values=True)).get("v", "")
             digest = hashlib.sha256(version.encode("utf-8")).hexdigest()[:12] if version else str(int(time.time()))
-            resolved_filename = f"catalogo-{config.BUSINESS_ID}-{digest}.pdf"
-            print(f"[FILE CATALOG] Sending dashboard catalog link={resolved_link} filename={resolved_filename}")
-            media_id = upload_public_url_to_meta_media(resolved_link, resolved_filename, "application/pdf")
-            if media_id:
-                media_reference = {"id": media_id}
-    if item.default_caption and item.media_type in {"document", "image", "video"}:
+            resolved_filename = f"catalogo-{config.BUSINESS_ID}-{digest}.{catalog_extension}"
+            print(f"[FILE CATALOG] Uploading current {media_type} catalog to Meta")
+            media_id = upload_public_url_to_meta_media(resolved_link, resolved_filename, catalog_content_type)
+            if not media_id:
+                print("[FILE CATALOG] Catalog delivery stopped because Meta upload failed")
+                return False
+            media_reference = {"id": media_id}
+    if item.default_caption and media_type in {"document", "image", "video"}:
         media_reference["caption"] = item.default_caption
-    if resolved_filename and item.media_type == "document":
+    if resolved_filename and media_type == "document":
         media_reference["filename"] = resolved_filename
     payload = {
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
         "to": to_number,
-        "type": item.media_type,
-        item.media_type: media_reference,
+        "type": media_type,
+        media_type: media_reference,
     }
     url = f"https://graph.facebook.com/v20.0/{config.WA_PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {config.WA_TOKEN}", "Content-Type": "application/json"}

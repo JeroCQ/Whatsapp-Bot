@@ -90,13 +90,13 @@ También puedes agregar `DASHBOARD_FORMAT_TIMEOUT_SECONDS=90`. No configures `RU
 
 ### `PRESAVED_FILES_JSON` para Memo's
 
-La URL es un placeholder válido porque el backend la reemplaza en runtime por `SUPABASE_URL/storage/v1/object/public/catalogos/memos.pdf`:
+La URL es un placeholder válido porque el backend busca en runtime el único catálogo vigente como `catalogos/memos.{pdf|jpg|jpeg|png|webp}` y usa su MIME real para enviarlo como documento o imagen:
 
 ```json
 [{"id":"catalogo_pdf","description":"Catálogo de Quesos Memo's; enviarlo cuando pidan el catálogo, precios generales o quieran ver todos los productos.","type":"document","link":"https://example.com/catalogo.pdf","filename":"catalogo-quesos-memos.pdf","caption":"Patrón, aquí tienes el catálogo de Quesos Memo's 🧀"}]
 ```
 
-Después del primer deploy, entra al perfil Memo's de Lovable y sube el PDF real. Verifica en Supabase Storage que quede exactamente como `catalogos/memos.pdf`.
+Después del primer deploy, entra al perfil Memo's de Lovable y sube el PDF o imagen real. Verifica en Supabase Storage que exista exactamente un objeto `catalogos/memos.{ext}` con la extensión correcta.
 
 ## 5. Prompt para Lovable
 
@@ -128,8 +128,8 @@ En los secretos server-side de Lovable asigna:
 ## 6. Pruebas de aceptación y orden seguro
 
 1. Desde Lovable/Memo's, lee la instrucción y confirma que menciona Quesos Memo's; desde Tanaka confirma que sigue mostrando Tanaka.
-2. Sube el catálogo Memo's y comprueba `catalogos/memos.pdf`; confirma que el catálogo Tanaka no cambió.
-3. Escribe al WhatsApp Memo's “¿qué productos tienen?” y confirma que llega el PDF Memo's.
+2. Sube el catálogo Memo's y comprueba que solo exista `catalogos/memos.{pdf|jpg|jpeg|png|webp}`; confirma que el catálogo Tanaka no cambió.
+3. Escribe al WhatsApp Memo's “¿qué productos tienen?” y confirma que llega el PDF o imagen Memo's con el MIME correcto.
 4. Prueba una cotización menor a $400.000: no debe hacer handoff.
 5. Prueba una cotización igual/superior a $400.000: debe crear conversación en el inbox Memo's.
 6. Envía una imagen: debe ir al inbox Memo's, nunca al de Tanaka.

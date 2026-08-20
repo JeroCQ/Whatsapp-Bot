@@ -222,6 +222,14 @@ class GitHubAdapter:
 
 
 class CatalogStorageAdapter:
+    CATALOG_FORMATS = {
+        "pdf": "application/pdf",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "png": "image/png",
+        "webp": "image/webp",
+    }
+
     def __init__(self) -> None:
         self.base_url = (config.SUPABASE_URL or "").rstrip("/")
         self.bucket = config.CATALOG_STORAGE_BUCKET
@@ -230,13 +238,13 @@ class CatalogStorageAdapter:
             "apikey": config.SUPABASE_KEY or "",
         }
 
-    def key(self, client_name: str) -> str:
+    def key(self, client_name: str, extension: str = "pdf") -> str:
         validate_client_name(client_name)
-        return config.catalog_storage_key(client_name)
+        return config.catalog_storage_key(client_name, extension)
 
-    def public_url(self, client_name: str) -> str:
+    def public_url(self, client_name: str, extension: str = "pdf") -> str:
         validate_client_name(client_name)
-        return config.catalog_public_url(client_name)
+        return f"{self.base_url}/storage/v1/object/public/{self.bucket}/{self.key(client_name, extension)}"
 
     def storage_hostname(self) -> str:
         parsed = urlparse(self.base_url)
@@ -270,8 +278,8 @@ class CatalogStorageAdapter:
             raise HTTPException(409, detail)
         raise HTTPException(502, detail)
 
-    def delete_existing(self, client_name: str) -> None:
-        key = self.key(client_name)
+    def delete_existing(self, client_name: str, extension: str = "pdf") -> None:
+        key = self.key(client_name, extension)
         url = f"{self.base_url}/storage/v1/object/{self.bucket}/{key}"
         try:
             response = requests.delete(url, headers=self.headers, timeout=(5, config.DASHBOARD_EXTERNAL_TIMEOUT_SECONDS))
@@ -287,8 +295,8 @@ class CatalogStorageAdapter:
             )
             raise HTTPException(502, "El almacenamiento no permitió reemplazar el catálogo existente")
 
-    def create_tus_upload(self, client_name: str, size_bytes: int) -> str:
-        key = self.key(client_name)
+    def create_tus_upload(self, client_name: str, size_bytes: int, extension: str, content_type: str) -> str:
+        key = self.key(client_name, extension)
         url = f"{self.storage_hostname()}/storage/v1/upload/resumable"
         headers = {
             **self.headers,
@@ -297,8 +305,8 @@ class CatalogStorageAdapter:
             "Upload-Metadata": self.tus_metadata(
                 bucketName=self.bucket,
                 objectName=key,
-                contentType="application/pdf",
-                cacheControl="3600",
+                contentType=content_type,
+                cacheControl="300",
             ),
             "x-upsert": "true",
         }
@@ -310,9 +318,9 @@ class CatalogStorageAdapter:
             raise HTTPException(502, "El almacenamiento no devolvió URL de carga resumable")
         return urljoin(url, upload_url)
 
-    def upload_pdf_once(self, client_name: str, file_obj, size_bytes: int) -> dict:
+    def upload_once(self, client_name: str, file_obj, size_bytes: int, extension: str, content_type: str) -> dict:
         chunk_size = 6 * 1024 * 1024
-        upload_url = self.create_tus_upload(client_name, size_bytes)
+        upload_url = self.create_tus_upload(client_name, size_bytes, extension, content_type)
         offset = 0
         try:
             while True:
@@ -337,35 +345,49 @@ class CatalogStorageAdapter:
         if offset != size_bytes:
             logger.error("Catalog upload incomplete: client=%s size_bytes=%s uploaded_bytes=%s", client_name, size_bytes, offset)
             raise HTTPException(502, "El almacenamiento no confirmó la carga completa")
-        return {"public_url": self.public_url(client_name), "updated_at": datetime.now(timezone.utc).isoformat(), "size_bytes": size_bytes}
+        return {
+            "publicUrl": self.public_url(client_name, extension),
+            "updatedAt": datetime.now(timezone.utc).isoformat(),
+            "sizeBytes": size_bytes,
+            "contentType": content_type,
+            "filename": self.key(client_name, extension),
+        }
 
-    def upload_pdf(self, client_name: str, file_obj, size_bytes: int) -> dict:
+    def upload(self, client_name: str, file_obj, size_bytes: int, extension: str, content_type: str) -> dict:
         try:
-            return self.upload_pdf_once(client_name, file_obj, size_bytes)
+            result = self.upload_once(client_name, file_obj, size_bytes, extension, content_type)
         except HTTPException as exc:
             if exc.status_code != 409:
                 raise
             logger.warning("Catalog path already exists during upload; deleting and retrying once: client=%s size_bytes=%s", client_name, size_bytes)
-            self.delete_existing(client_name)
+            self.delete_existing(client_name, extension)
             file_obj.seek(0)
-            return self.upload_pdf_once(client_name, file_obj, size_bytes)
+            result = self.upload_once(client_name, file_obj, size_bytes, extension, content_type)
+        for stale_extension in self.CATALOG_FORMATS:
+            if stale_extension != extension:
+                self.delete_existing(client_name, stale_extension)
+        return result
 
     def metadata(self, client_name: str) -> dict:
-        public_url = self.public_url(client_name)
-        try:
-            response = requests.head(public_url, timeout=(5, config.DASHBOARD_EXTERNAL_TIMEOUT_SECONDS), allow_redirects=True)
-        except requests.RequestException:
-            raise HTTPException(502, "No fue posible consultar el catálogo")
-        if response.status_code == 404:
-            raise HTTPException(404, "El catálogo no existe en el almacenamiento")
-        if response.status_code >= 400:
-            raise HTTPException(502, "El almacenamiento rechazó la consulta del catálogo")
-        size = response.headers.get("content-length")
-        return {
-            "public_url": public_url,
-            "updated_at": response.headers.get("last-modified"),
-            "size_bytes": int(size) if size and size.isdigit() else None,
-        }
+        for extension, expected_content_type in self.CATALOG_FORMATS.items():
+            public_url = self.public_url(client_name, extension)
+            try:
+                response = requests.head(public_url, timeout=(5, config.DASHBOARD_EXTERNAL_TIMEOUT_SECONDS), allow_redirects=True)
+            except requests.RequestException:
+                raise HTTPException(502, "No fue posible consultar el catálogo")
+            if response.status_code in (400, 404):
+                continue
+            if response.status_code >= 400:
+                raise HTTPException(502, "El almacenamiento rechazó la consulta del catálogo")
+            size = response.headers.get("content-length")
+            return {
+                "publicUrl": public_url,
+                "updatedAt": response.headers.get("last-modified"),
+                "sizeBytes": int(size) if size and size.isdigit() else None,
+                "contentType": (response.headers.get("content-type") or expected_content_type).split(";", 1)[0],
+                "filename": self.key(client_name, extension),
+            }
+        raise HTTPException(404, "El catálogo no existe en el almacenamiento")
 
 _gemini: GeminiAdapter | None = None
 _github: GitHubAdapter | None = None
@@ -540,6 +562,36 @@ def uploaded_file_size(file: UploadFile) -> int:
     return size
 
 
+CATALOG_UPLOAD_FORMATS = {
+    ".pdf": "application/pdf",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
+CATALOG_FORMAT_ERROR = "Formatos aceptados: PDF, JPG/JPEG, PNG y WebP"
+
+
+def validated_catalog_format(file: UploadFile) -> tuple[str, str]:
+    extension = PurePosixPath(file.filename or "").suffix.lower()
+    expected_content_type = CATALOG_UPLOAD_FORMATS.get(extension)
+    supplied_content_type = (file.content_type or "").lower().split(";", 1)[0]
+    if not expected_content_type or supplied_content_type not in {expected_content_type, "application/octet-stream"}:
+        raise HTTPException(400, CATALOG_FORMAT_ERROR)
+
+    header = file.file.read(12)
+    file.file.seek(0)
+    valid_header = {
+        "application/pdf": header.startswith(b"%PDF-"),
+        "image/jpeg": header.startswith(b"\xff\xd8\xff"),
+        "image/png": header.startswith(b"\x89PNG\r\n\x1a\n"),
+        "image/webp": header.startswith(b"RIFF") and header[8:12] == b"WEBP",
+    }[expected_content_type]
+    if not valid_header:
+        raise HTTPException(400, f"El archivo está vacío o su contenido no coincide. {CATALOG_FORMAT_ERROR}")
+    return extension.lstrip("."), expected_content_type
+
+
 @router.get("/current-catalog")
 def current_catalog(client_name: str = Query(min_length=1), storage: CatalogStorageAdapter = Depends(get_catalog_storage)):
     try:
@@ -560,15 +612,11 @@ def upload_catalog(file: Annotated[UploadFile, File()], client_name: str | None 
         resolved_client_name = validate_deployment_client(resolved_client_name)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
-    if file.content_type != "application/pdf" or not (file.filename or "").lower().endswith(".pdf"):
-        raise HTTPException(400, "El archivo debe ser un PDF")
+    extension, content_type = validated_catalog_format(file)
     size_bytes = uploaded_file_size(file)
     max_bytes = config.DASHBOARD_MAX_CATALOG_MB * 1024 * 1024
     if size_bytes > max_bytes:
-        raise HTTPException(413, f"El PDF excede el tamaño máximo de {config.DASHBOARD_MAX_CATALOG_MB} MB")
-    header = file.file.read(5)
-    if not header or header != b"%PDF-":
-        raise HTTPException(400, "El PDF está vacío o tiene una cabecera inválida")
+        raise HTTPException(413, f"El catálogo excede el tamaño máximo de {config.DASHBOARD_MAX_CATALOG_MB} MB")
     file.file.seek(0)
-    result = storage.upload_pdf(resolved_client_name, file.file, size_bytes)
+    result = storage.upload(resolved_client_name, file.file, size_bytes, extension, content_type)
     return {"ok": True, **result}

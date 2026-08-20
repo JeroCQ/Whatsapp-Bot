@@ -96,13 +96,13 @@ class Settings:
     PRESAVED_FILES_JSON = os.getenv("PRESAVED_FILES_JSON", "[]")
 
     @classmethod
-    def catalog_storage_key(cls, client_name: str | None = None) -> str:
-        return f"{client_name or cls.BUSINESS_ID}.pdf"
+    def catalog_storage_key(cls, client_name: str | None = None, extension: str = "pdf") -> str:
+        return f"{client_name or cls.BUSINESS_ID}.{extension.lstrip('.').lower()}"
 
     @classmethod
-    def catalog_public_url(cls, client_name: str | None = None) -> str:
+    def catalog_public_url(cls, client_name: str | None = None, extension: str = "pdf") -> str:
         base_url = (cls.SUPABASE_URL or "").rstrip("/")
-        return f"{base_url}/storage/v1/object/public/{cls.CATALOG_STORAGE_BUCKET}/{cls.catalog_storage_key(client_name)}"
+        return f"{base_url}/storage/v1/object/public/{cls.CATALOG_STORAGE_BUCKET}/{cls.catalog_storage_key(client_name, extension)}"
     
     @classmethod
     def validate(cls):

@@ -19,4 +19,4 @@ def test_bot_uses_deployment_business_for_prompt_and_catalog():
 
 def test_main_uses_business_id_in_catalog_filename():
     source = Path("main.py").read_text(encoding="utf-8")
-    assert 'resolved_filename = f"catalogo-{config.BUSINESS_ID}-{digest}.pdf"' in source
+    assert 'resolved_filename = f"catalogo-{config.BUSINESS_ID}-{digest}.{catalog_extension}"' in source

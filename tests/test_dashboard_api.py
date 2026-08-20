@@ -1,7 +1,8 @@
 import os
 
-for key in ("SUPABASE_URL", "SUPABASE_KEY", "WA_VERIFY_TOKEN", "WA_TOKEN", "WA_PHONE_NUMBER_ID", "GEMINI_API_KEY"):
+for key in ("SUPABASE_KEY", "WA_VERIFY_TOKEN", "WA_TOKEN", "WA_PHONE_NUMBER_ID", "GEMINI_API_KEY"):
     os.environ.setdefault(key, "test-value")
+os.environ.setdefault("SUPABASE_URL", "https://example.supabase.co")
 os.environ.setdefault("BUSINESS_ID", "client_1")
 os.environ.setdefault("DASHBOARD_API_KEY", "dashboard-secret")
 
@@ -39,19 +40,23 @@ class FakeStorage:
     def __init__(self):
         self.uploaded = None
 
-    def upload_pdf(self, client_name, file_obj, size_bytes):
-        self.uploaded = (client_name, file_obj.read(), size_bytes)
+    def upload(self, client_name, file_obj, size_bytes, extension, content_type):
+        self.uploaded = (client_name, file_obj.read(), size_bytes, extension, content_type)
         return {
-            "public_url": f"https://storage.test/catalogos/{client_name}.pdf",
-            "updated_at": "2026-08-04T00:00:00+00:00",
-            "size_bytes": size_bytes,
+            "publicUrl": f"https://storage.test/catalogos/{client_name}.{extension}",
+            "updatedAt": "2026-08-04T00:00:00+00:00",
+            "sizeBytes": size_bytes,
+            "contentType": content_type,
+            "filename": f"{client_name}.{extension}",
         }
 
     def metadata(self, client_name):
         return {
-            "public_url": f"https://storage.test/catalogos/{client_name}.pdf",
-            "updated_at": "Tue, 04 Aug 2026 00:00:00 GMT",
-            "size_bytes": 123,
+            "publicUrl": f"https://storage.test/catalogos/{client_name}.pdf",
+            "updatedAt": "Tue, 04 Aug 2026 00:00:00 GMT",
+            "sizeBytes": 123,
+            "contentType": "application/pdf",
+            "filename": f"{client_name}.pdf",
         }
 
 
@@ -101,16 +106,26 @@ def test_successful_endpoints_and_catalog_path():
 
     response = client.get("/api/current-catalog?client_name=client_1", headers=headers)
     assert response.json() == {
-        "public_url": "https://storage.test/catalogos/client_1.pdf",
-        "updated_at": "Tue, 04 Aug 2026 00:00:00 GMT",
-        "size_bytes": 123,
+        "publicUrl": "https://storage.test/catalogos/client_1.pdf",
+        "updatedAt": "Tue, 04 Aug 2026 00:00:00 GMT",
+        "sizeBytes": 123,
+        "contentType": "application/pdf",
+        "filename": "client_1.pdf",
     }
 
     response = client.post("/api/upload-catalog?client_name=client_1", headers=headers,
                            files={"file": ("ignored.pdf", b"%PDF-1.7\nbody", "application/pdf")})
     assert response.status_code == 200
-    assert response.json()["public_url"] == "https://storage.test/catalogos/client_1.pdf"
-    assert storage.uploaded == ("client_1", b"%PDF-1.7\nbody", 13)
+    assert response.json()["publicUrl"] == "https://storage.test/catalogos/client_1.pdf"
+    assert storage.uploaded == ("client_1", b"%PDF-1.7\nbody", 13, "pdf", "application/pdf")
+
+    png = b"\x89PNG\r\n\x1a\n" + b"image-body"
+    response = client.post("/api/upload-catalog?client_name=client_1", headers=headers,
+                           files={"file": ("catalog.png", png, "image/png")})
+    assert response.status_code == 200
+    assert response.json()["contentType"] == "image/png"
+    assert response.json()["filename"] == "client_1.png"
+    assert storage.uploaded == ("client_1", png, len(png), "png", "image/png")
 
 
 def test_invalid_gemini_json_and_original_validation():
@@ -131,6 +146,9 @@ def test_auth_traversal_and_bad_pdfs():
     assert client.get("/api/si-history?client_name=../secret", headers=headers).status_code == 422
     assert client.post("/api/upload-catalog?client_name=client_1", headers=headers,
                        files={"file": ("x.txt", b"hello", "text/plain")}).status_code == 400
+    error = client.post("/api/upload-catalog?client_name=client_1", headers=headers,
+                        files={"file": ("x.txt", b"hello", "text/plain")})
+    assert "PDF, JPG/JPEG, PNG y WebP" in error.json()["detail"]
     assert client.post("/api/upload-catalog?client_name=client_1", headers=headers,
                        files={"file": ("x.pdf", b"", "application/pdf")}).status_code == 400
 
@@ -252,3 +270,69 @@ def test_catalog_storage_maps_already_exists_to_409():
     except Exception as exc:
         assert exc.status_code == 409
         assert "already exists" in exc.detail
+
+
+def test_catalog_tus_metadata_preserves_image_content_type(monkeypatch):
+    class Response:
+        status_code = 201
+        text = ""
+        headers = {"location": "/storage/v1/upload/resumable/upload-id"}
+
+    captured = {}
+    monkeypatch.setattr(api.requests, "post", lambda url, **kwargs: captured.update(url=url, **kwargs) or Response())
+    adapter = object.__new__(api.CatalogStorageAdapter)
+    adapter.base_url = "https://project.supabase.co"
+    adapter.bucket = "catalogos"
+    adapter.headers = {"Authorization": "Bearer secret", "apikey": "secret"}
+
+    adapter.create_tus_upload("client_1", 123, "png", "image/png")
+    metadata = captured["headers"]["Upload-Metadata"]
+    decoded = {
+        item.split(" ", 1)[0]: __import__("base64").b64decode(item.split(" ", 1)[1]).decode()
+        for item in metadata.split(",")
+    }
+    assert decoded == {
+        "bucketName": "catalogos",
+        "objectName": "client_1.png",
+        "contentType": "image/png",
+        "cacheControl": "300",
+    }
+    assert captured["headers"]["x-upsert"] == "true"
+
+
+def test_catalog_upload_removes_other_client_formats(monkeypatch):
+    adapter = object.__new__(api.CatalogStorageAdapter)
+    deleted = []
+    monkeypatch.setattr(adapter, "upload_once", lambda *args: {"filename": "client_1.png"})
+    monkeypatch.setattr(adapter, "delete_existing", lambda client, extension="pdf": deleted.append((client, extension)))
+
+    assert adapter.upload("client_1", object(), 10, "png", "image/png") == {"filename": "client_1.png"}
+    assert {extension for _, extension in deleted} == {"pdf", "jpg", "jpeg", "webp"}
+
+
+def test_catalog_metadata_finds_image_after_missing_pdf(monkeypatch):
+    class Response:
+        def __init__(self, status_code, headers=None):
+            self.status_code = status_code
+            self.headers = headers or {}
+
+    monkeypatch.setattr(
+        api.requests,
+        "head",
+        lambda url, **kwargs: Response(200, {
+            "content-type": "image/png",
+            "content-length": "321",
+            "last-modified": "now",
+        }) if url.endswith(".png") else Response(404),
+    )
+    adapter = object.__new__(api.CatalogStorageAdapter)
+    adapter.base_url = "https://project.supabase.co"
+    adapter.bucket = "catalogos"
+
+    assert adapter.metadata("client_1") == {
+        "publicUrl": "https://project.supabase.co/storage/v1/object/public/catalogos/client_1.png",
+        "updatedAt": "now",
+        "sizeBytes": 321,
+        "contentType": "image/png",
+        "filename": "client_1.png",
+    }
