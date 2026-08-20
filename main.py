@@ -389,6 +389,10 @@ def _create_handoff_ticket_if_needed(sender_phone: str, sender_name: str, new_st
         return
 
     print("[DEBUG] 8. Bot decidió pausarse, creando ticket...")
+    print(
+        f"[CHATWOOT CONFIG] account_id={config.CHATWOOT_ACCOUNT_ID} "
+        f"inbox_id={config.CHATWOOT_INBOX_ID} assignee_id={config.CHATWOOT_ASSIGNEE_ID}"
+    )
     state_check = get_or_create_customer_state(sender_phone)
     if state_check.get("chatwoot_conversation_id"):
         return
@@ -418,12 +422,12 @@ def _create_handoff_ticket_if_needed(sender_phone: str, sender_name: str, new_st
         extension = chatwoot_api.extension_from_mime(final_mime_type, ".bin")
         chatwoot_api.send_message_to_chatwoot(conv_id, context_details, is_private=True)
         if file_bytes:
-            chatwoot_api.send_media_to_chatwoot(conv_id, short_alert, file_bytes, final_mime_type, filename or f"archivo_cliente{extension}", is_private=True)
+            chatwoot_api.send_media_to_chatwoot(conv_id, short_alert, file_bytes, final_mime_type, filename or f"archivo_cliente{extension}", is_private=False)
         else:
-            chatwoot_api.send_message_to_chatwoot(conv_id, short_alert + " *(Error descargando el adjunto)*", is_private=True)
+            chatwoot_api.send_message_to_chatwoot(conv_id, short_alert + " *(Error descargando el adjunto)*", is_private=False)
     else:
         chatwoot_api.send_message_to_chatwoot(conv_id, context_details, is_private=True)
-        chatwoot_api.send_message_to_chatwoot(conv_id, short_alert, is_private=True)
+        chatwoot_api.send_message_to_chatwoot(conv_id, short_alert, is_private=False)
 
 
 def process_whatsapp_message(sender_phone: str, sender_name: str, message_body: str, is_image: bool = False, media_id: str = None, is_audio: bool = False, audio_media_id: str = None, media_type: str = None, mime_type: str = None, filename: str = None, event_id: str = None):
@@ -661,6 +665,7 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
 
 
 @app.post("/chatwoot-webhook")
+@app.post("/chatwoo-webhook", include_in_schema=False)
 async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
     raw_body = await request.body()
     if not verify_chatwoot_signature(

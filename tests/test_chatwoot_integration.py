@@ -68,6 +68,59 @@ def test_valid_webhook_and_root_dispatcher_constraint(monkeypatch):
     assert client.post("/", json=payload()).status_code == 404
 
 
+def test_temporary_webhook_alias_uses_same_signature_validation(monkeypatch):
+    client = TestClient(main.app)
+    monkeypatch.setattr(main.time, "time", lambda: 2000000000)
+    monkeypatch.setattr(main, "claim_webhook_event", lambda *args: True)
+    monkeypatch.setattr(main, "_dispatch", lambda *args, **kwargs: "queued")
+    body = json.dumps(payload()).encode()
+
+    assert client.post("/chatwoo-webhook", content=body, headers=signed(body)).status_code == 200
+    assert client.post("/chatwoo-webhook", content=body).status_code == 401
+
+
+def _mock_handoff_dependencies(monkeypatch):
+    monkeypatch.setattr(main, "get_or_create_customer_state", lambda phone: {"chatwoot_conversation_id": None})
+    monkeypatch.setattr(main, "update_chatwoot_conversation_id", lambda *args: None)
+    monkeypatch.setattr(main, "get_message_logs", lambda *args, **kwargs: [{"role": "user", "content": "Necesito ayuda"}])
+    monkeypatch.setattr(main, "save_message_log", lambda *args: None)
+    monkeypatch.setattr(chatwoot_api, "get_or_create_contact", lambda *args, **kwargs: 12)
+    monkeypatch.setattr(chatwoot_api, "create_conversation", lambda contact_id: 34)
+
+
+def test_handoff_summary_is_private_and_text_alert_is_public(monkeypatch):
+    _mock_handoff_dependencies(monkeypatch)
+    messages = []
+    monkeypatch.setattr(chatwoot_api, "send_message_to_chatwoot", lambda *args, **kwargs: messages.append((args, kwargs)))
+
+    main._create_handoff_ticket_if_needed(
+        "57300", "Cliente", {"is_paused": True, "handoff_reason": "Necesita asesor"}, None, "", None, None
+    )
+
+    assert "Resumen" in messages[0][0][1]
+    assert messages[0][1]["is_private"] is True
+    assert "🔔 Necesita asesor" in messages[1][0][1]
+    assert messages[1][1]["is_private"] is False
+
+
+def test_handoff_summary_is_private_and_media_alert_is_public(monkeypatch):
+    _mock_handoff_dependencies(monkeypatch)
+    messages = []
+    media = []
+    monkeypatch.setattr(chatwoot_api, "download_meta_media", lambda media_id: (b"file", "image/png"))
+    monkeypatch.setattr(chatwoot_api, "send_message_to_chatwoot", lambda *args, **kwargs: messages.append((args, kwargs)))
+    monkeypatch.setattr(chatwoot_api, "send_media_to_chatwoot", lambda *args, **kwargs: media.append((args, kwargs)))
+
+    main._create_handoff_ticket_if_needed(
+        "57300", "Cliente", {"is_paused": True, "handoff_reason": "Revisar archivo"}, "media-1", "", "image/png", "foto.png"
+    )
+
+    assert "Resumen" in messages[0][0][1]
+    assert messages[0][1]["is_private"] is True
+    assert "🔔 Revisar archivo" in media[0][0][1]
+    assert media[0][1]["is_private"] is False
+
+
 class Response:
     def __init__(self, status, body=None, headers=None, chunks=None):
         self.status_code = status

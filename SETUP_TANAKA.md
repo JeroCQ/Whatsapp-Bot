@@ -369,6 +369,19 @@ valor global no verificado.
 
 Estos dos síntomas dependen de recursos Chatwoot distintos:
 
+* Durante el handoff, el resumen del historial permanece como nota privada, pero la
+  alerta inicial se envía como mensaje incoming público para activar la regla de
+  “nuevo mensaje”.
+* Compara los valores efectivos de `CHATWOOT_ACCOUNT_ID` y `CHATWOOT_INBOX_ID` que
+  muestra `[CHATWOOT CONFIG]` con la cuenta y el inbox Tanaka. Si el payload muestra
+  otra marca (aunque el nombre pueda ser histórico), revisa esos IDs; no filtres por
+  el nombre de la cuenta.
+* El `assignee_id` registrado es el valor efectivo: si Railway muestra `4`, se está
+  usando `4` aunque el panel o un reporte indique `3`. El agente efectivo debe
+  pertenecer al inbox efectivo.
+* El agente debe tener habilitadas en Chatwoot las preferencias de “conversación
+  asignada” y “nuevo mensaje”.
+
 * La notificación requiere que la conversación quede asignada al ID numérico de
   `tanaka@briosos.org` y que el agente tenga activada “conversation assigned to you”.
 * La reactivación requiere un **account webhook** Tanaka que entregue
