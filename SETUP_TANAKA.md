@@ -171,7 +171,7 @@ administrado por el dashboard y el backend descubre en runtime el objeto vigente
 `catalogos/tanaka.{ext}` en Supabase:
 
 ```json
-[{"id":"catalogo_pdf","description":"Catálogo de Tanaka Saludable; enviarlo cuando pidan el catálogo, precios generales o quieran ver todos los productos.","type":"document","filename":"Catalogo_Tanaka.pdf","caption":"Aquí tienes nuestro catálogo completo ☺️"}]
+[{"id":"catalogo_pdf","description":"Catálogo de Tanaka Saludable; enviarlo cuando pidan el catálogo, precios generales o quieran ver todos los productos.","type":"document","filename":"Catálogo Tanaka.pdf","caption":"Aquí tienes nuestro catálogo completo ☺️"}]
 ```
 
 `PRESAVED_FILES_JSON` define para Gemini el ID permitido, cuándo usarlo, el nombre y
@@ -279,7 +279,7 @@ en `file_catalog.py` y confirma en logs que el hash cambió. Mantén después es
 sin URL duplicada:
 
 ```json
-[{"id":"catalogo_pdf","description":"Catálogo de Tanaka Saludable; enviarlo cuando pidan el catálogo, precios generales o quieran ver todos los productos.","type":"document","filename":"Catalogo_Tanaka.pdf","caption":"Aquí tienes nuestro catálogo completo ☺️"}]
+[{"id":"catalogo_pdf","description":"Catálogo de Tanaka Saludable; enviarlo cuando pidan el catálogo, precios generales o quieran ver todos los productos.","type":"document","filename":"Catálogo Tanaka.pdf","caption":"Aquí tienes nuestro catálogo completo ☺️"}]
 ```
 
 No consideres terminado el redeploy hasta que `/` responda 200 y Lovable deje de

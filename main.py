@@ -238,6 +238,17 @@ def current_catalog_for_whatsapp() -> tuple[str, str, str, str] | None:
     return None
 
 
+def catalog_display_filename(configured_filename: str | None, extension: str, fallback: str) -> str:
+    """Return the configured customer-facing catalog name with its real extension."""
+    if not configured_filename:
+        return fallback
+    # The dashboard can replace a PDF with an image (or vice versa). Keep the
+    # commercial name but always advertise the format that is actually sent.
+    safe_name = os.path.basename(configured_filename.strip())
+    stem, _configured_extension = os.path.splitext(safe_name)
+    return f"{stem or safe_name}.{extension}"
+
+
 
 def upload_public_url_to_meta_media(file_url: str, filename: str, fallback_mime_type: str = "application/pdf") -> str:
     """Download a public file and upload it to Meta so WhatsApp receives fresh media bytes."""
@@ -271,6 +282,7 @@ def send_presaved_file(to_number: str, file_id: str):
         print(f"[FILE CATALOG] Ignoring unknown file id requested by AI: {file_id}")
         return
     resolved_filename = item.filename
+    display_filename = item.filename
     media_type = item.media_type
     catalog_content_type = "application/pdf"
     if item.media_id:
@@ -290,16 +302,20 @@ def send_presaved_file(to_number: str, file_id: str):
             version = dict(parse_qsl(urlsplit(resolved_link).query, keep_blank_values=True)).get("v", "")
             digest = hashlib.sha256(version.encode("utf-8")).hexdigest()[:12] if version else str(int(time.time()))
             resolved_filename = f"catalogo-{config.BUSINESS_ID}-{digest}.{catalog_extension}"
+            display_filename = catalog_display_filename(item.filename, catalog_extension, resolved_filename)
             print(f"[FILE CATALOG] Uploading current {media_type} catalog to Meta")
             media_id = upload_public_url_to_meta_media(resolved_link, resolved_filename, catalog_content_type)
             if not media_id:
                 print("[FILE CATALOG] Catalog delivery stopped because Meta upload failed")
                 return False
             media_reference = {"id": media_id}
-    if item.default_caption and media_type in {"document", "image", "video"}:
-        media_reference["caption"] = item.default_caption
-    if resolved_filename and media_type == "document":
-        media_reference["filename"] = resolved_filename
+    caption = item.default_caption
+    if file_id == "catalogo_pdf" and media_type == "image" and display_filename:
+        caption = os.path.splitext(display_filename)[0]
+    if caption and media_type in {"document", "image", "video"}:
+        media_reference["caption"] = caption
+    if display_filename and media_type == "document":
+        media_reference["filename"] = display_filename
     payload = {
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
