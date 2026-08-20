@@ -82,6 +82,11 @@ def create_conversation(contact_id: int):
         "contact_id": int(contact_id),
         "status": "open"
     }
+    # Passing the assignee during creation is atomic. Letting the inbox default
+    # policy assign it afterwards can leave conversations unassigned when the
+    # agent is unavailable or the round-robin policy does not select anyone.
+    if config.CHATWOOT_ASSIGNEE_ID:
+        data["assignee_id"] = int(config.CHATWOOT_ASSIGNEE_ID)
     
     try:
         res = post(url, headers=get_headers(), json=data, allow_redirects=False)
