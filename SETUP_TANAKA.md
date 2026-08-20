@@ -292,3 +292,53 @@ que la versión antigua arranque, aunque el código nuevo seguirá sustituyéndo
 el catálogo vigente de Supabase al enviarlo. Elimina otra vez el link después de
 desplegar y verificar la versión actual. Esta recuperación es preferible a cambiar
 Redis, Supabase, Chatwoot o CORS, que no participan en el error de importación.
+
+## Diagnóstico: el perfil Tanaka muestra la instrucción de Memo's
+
+Puede ser el enrutamiento de Lovable **o** una variable incorrecta de Railway. La
+etiqueta visual “Cliente activo: Tanaka” no demuestra qué backend respondió.
+
+1. Abre directamente
+   `https://DOMINIO-TANAKA/api/current-si?client_name=tanaka` enviando
+   `X-Dashboard-API-Key` desde una herramienta segura. La respuesta actual incluye
+   `client_name=tanaka` y `path=src/clients/tanaka/system_instruction.txt`.
+2. Abre `/api/dashboard-health` del mismo Railway y confirma en `configuration`
+   esos mismos `business_id` y `system_instruction_path`.
+3. En Railway Tanaka fija `BUSINESS_ID=tanaka`. Elimina `GITHUB_SI_PATH` para usar
+   la ruta derivada segura o fíjalo exactamente como
+   `src/clients/tanaka/system_instruction.txt`. El backend rechaza ahora cualquier
+   path de otra marca en vez de devolver silenciosamente su contenido.
+4. Si Railway directo devuelve Tanaka pero Lovable muestra Memo's, el error sí está
+   en Lovable: su sesión Tanaka está usando `MEMOS_DASHBOARD_BACKEND_URL` o
+   `MEMOS_DASHBOARD_API_KEY`, o está reutilizando una respuesta/cache de Memo's.
+5. Si Railway directo devuelve error indicando otro `BUSINESS_ID`, Lovable está
+   llamando al Railway equivocado o ese Railway tiene variables cruzadas.
+
+No guardes el texto largo desde la pantalla incorrecta: podría sobrescribir el SI
+de Memo's. Corrige primero el enrutamiento, recarga la sesión y verifica que la
+respuesta muestre la ruta Tanaka antes de editar.
+
+## Diagnóstico: actualizar catálogo devuelve backend 502
+
+Un 502 es una categoría, no la causa. Antes de cambiar código o CORS:
+
+1. Abre `/api/dashboard-health` del Railway Tanaka con su API key. En
+   `supabase_storage`, un 401/403 indica casi siempre que
+   `SUPABASE_SERVICE_ROLE_KEY` no pertenece al mismo proyecto que `SUPABASE_URL`; un
+   404 indica que falta el bucket exacto `catalogos`.
+2. Confirma en Railway Tanaka `CATALOG_STORAGE_BUCKET=catalogos` y que el bucket sea
+   público. No uses la service-role de Memo's ni la clave anon/publishable.
+3. Repite una carga pequeña (PDF válido menor de 1 MB) y busca en logs Railway
+   `Catalog upload provider error`, `creation transport error` o `timed out`. Copia
+   el status y body sanitizado, nunca la clave.
+4. Prueba el endpoint Railway directamente. Si funciona directo y falla en Lovable,
+   el proxy de Lovable debe reenviar el multipart sin reconstruir incorrectamente su
+   boundary y debe conservar el status/body JSON del upstream; no debe convertir
+   todos los errores en el texto genérico “backend 502”.
+5. Si también falla directo, el detalle nuevo distingue credencial cruzada, bucket
+   ausente, timeout, fallo de transporte, límite 413 y conflicto 409.
+
+No cambies `PRESAVED_FILES_JSON` para reparar la subida: esa variable describe el
+archivo para Gemini; el upload utiliza `SUPABASE_URL`,
+`SUPABASE_SERVICE_ROLE_KEY`, `CATALOG_STORAGE_BUCKET` y los límites
+`DASHBOARD_MAX_CATALOG_MB`/Storage del proyecto.
