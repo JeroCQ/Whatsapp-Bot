@@ -194,19 +194,22 @@ class GitHubAdapter:
         if status >= 400:
             self._log_error(response)
         if status == 401:
-            raise HTTPException(502, "GitHub rechazó GITHUB_TOKEN: el token es inválido o está vencido")
+            raise HTTPException(502, self._detail("GITHUB_TOKEN es inválido o está vencido", response))
         headers = getattr(response, "headers", {})
         if status == 403 and headers.get("x-ratelimit-remaining") == "0":
             reset = headers.get("x-ratelimit-reset") or "desconocido"
-            raise HTTPException(502, f"GitHub agotó el límite de solicitudes; x-ratelimit-reset={reset}")
+            raise HTTPException(502, self._detail(f"GitHub agotó el límite de solicitudes; x-ratelimit-reset={reset}", response))
         if status == 403:
             raise HTTPException(
                 502,
-                "GITHUB_TOKEN no tiene permisos suficientes para el repositorio; "
-                "un token fine-grained requiere acceso al repositorio y Contents: Read and write",
+                self._detail(
+                    "GITHUB_TOKEN no tiene permisos suficientes; un token fine-grained requiere "
+                    "acceso al repositorio y Contents: Read and write",
+                    response,
+                ),
             )
         if status == 404:
-            raise HTTPException(404, "GitHub no encontró GITHUB_OWNER/GITHUB_REPO/GITHUB_BRANCH/GITHUB_SI_PATH; verifique la configuración")
+            raise HTTPException(404, self._detail("GitHub no encontró GITHUB_OWNER/GITHUB_REPO/GITHUB_BRANCH/GITHUB_SI_PATH", response))
         if status == 429:
             raise HTTPException(502, "GitHub limitó temporalmente la solicitud")
         if status >= 500:
@@ -231,9 +234,29 @@ class GitHubAdapter:
             headers.get("x-accepted-github-permissions"),
         )
 
+    def _detail(self, message: str, response: requests.Response, path: str | None = None) -> str:
+        headers = getattr(response, "headers", {})
+        location = f"{config.GITHUB_OWNER}/{config.GITHUB_REPO}@{config.GITHUB_BRANCH}"
+        return (
+            f"{message}; repo={location}; path={path or config.GITHUB_SI_PATH}; "
+            f"github_status={response.status_code}; "
+            f"x-ratelimit-remaining={headers.get('x-ratelimit-remaining')}"
+        )
+
+    def health(self, path: str) -> dict:
+        response = self._request(get, f"{self.repo_url}/contents/{path}", params={"ref": config.GITHUB_BRANCH})
+        if response.status_code >= 400:
+            self._check(response)
+        return {
+            "status": response.status_code,
+            "scopes": response.headers.get("x-oauth-scopes"),
+            "accepted_permissions": response.headers.get("x-accepted-github-permissions"),
+            "ratelimit_remaining": response.headers.get("x-ratelimit-remaining"),
+        }
+
     def get_file(self, path: str) -> dict | None:
         response = self._request(get, f"{self.repo_url}/contents/{path}", params={"ref": config.GITHUB_BRANCH})
-        return self._check(response, allow_not_found=True)
+        return self._check(response)
 
     def update_file(self, path: str, content: bytes, sha: str, message: str) -> dict:
         payload = {"message": message, "content": base64.b64encode(content).decode("ascii"),
@@ -250,7 +273,7 @@ class GitHubAdapter:
     def _request(self, operation, url: str, **kwargs):
         try:
             return operation(url, headers=self.headers,
-                             timeout=(3, config.DASHBOARD_EXTERNAL_TIMEOUT_SECONDS), **kwargs)
+                             timeout=(3, config.GITHUB_TIMEOUT_SECONDS), **kwargs)
         except requests.Timeout:
             raise HTTPException(504, "GitHub excedió el tiempo límite")
         except requests.RequestException:
@@ -579,14 +602,24 @@ def format_and_save_si(body: SaveRequest, client_name: str | None = Query(None),
 
 @router.get("/current-si")
 def current_si(client_name: str = Query(min_length=1), github: GitHubAdapter = Depends(get_github)):
+    path = None
     try:
         path = system_instruction_path(validate_deployment_client(client_name))
     except ValueError as exc:
         raise HTTPException(422, str(exc))
-    existing = github.get_file(path)
-    if not existing:
-        raise HTTPException(404, "GitHub no encontró GITHUB_OWNER/GITHUB_REPO/GITHUB_BRANCH/GITHUB_SI_PATH; verifique la configuración")
-    return {"system_instruction": decode_github_file_content(existing)}
+    try:
+        existing = github.get_file(path)
+        return {"system_instruction": decode_github_file_content(existing)}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Unexpected current-si failure: repo=%s/%s@%s path=%s error_type=%s",
+                         config.GITHUB_OWNER, config.GITHUB_REPO, config.GITHUB_BRANCH, path, type(exc).__name__)
+        raise HTTPException(
+            502,
+            f"Error interno {type(exc).__name__}; repo={config.GITHUB_OWNER}/{config.GITHUB_REPO}@"
+            f"{config.GITHUB_BRANCH}; path={path}",
+        )
 
 
 @router.get("/si-history")
@@ -612,16 +645,25 @@ def dashboard_health(
     checks: dict[str, dict[str, bool | str]] = {}
     try:
         path = system_instruction_path(config.BUSINESS_ID)
-        if not github.get_file(path):
-            raise RuntimeError("el System Instruction configurado no existe")
-        checks["github"] = {"ok": True, "detail": "GitHub y el System Instruction están accesibles"}
+        github_info = github.health(path)
+        checks["github"] = {
+            "ok": True,
+            "detail": "GitHub y el System Instruction están accesibles",
+            **github_info,
+        }
     except Exception as exc:
         detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
         checks["github"] = {"ok": False, "detail": detail}
 
     try:
         storage.health()
-        checks["supabase_storage"] = {"ok": True, "detail": "Supabase Storage está accesible"}
+        catalog = storage.metadata(config.BUSINESS_ID)
+        checks["supabase_storage"] = {
+            "ok": True,
+            "detail": "Supabase Storage y el objeto del catálogo están accesibles",
+            "bucket": config.CATALOG_STORAGE_BUCKET,
+            "object": catalog.get("filename"),
+        }
     except Exception as exc:
         checks["supabase_storage"] = {"ok": False, "detail": str(exc)}
 
@@ -635,6 +677,16 @@ def dashboard_health(
         checks["gemini"] = {"ok": True, "detail": "Gemini está accesible"}
     except Exception as exc:
         checks["gemini"] = {"ok": False, "detail": str(exc)}
+    checks["configuration"] = {
+        "ok": all((config.GITHUB_TOKEN, config.GITHUB_OWNER, config.GITHUB_REPO,
+                   config.GITHUB_BRANCH, config.GITHUB_SI_PATH, config.GEMINI_API_KEY)),
+        "detail": "Presencia de variables; los valores secretos no se exponen",
+        "present": {
+            name: bool(getattr(config, name, None))
+            for name in ("GITHUB_TOKEN", "GITHUB_OWNER", "GITHUB_REPO", "GITHUB_BRANCH",
+                         "GITHUB_SI_PATH", "SUPABASE_URL", "SUPABASE_KEY", "GEMINI_API_KEY")
+        },
+    }
     return checks
 
 

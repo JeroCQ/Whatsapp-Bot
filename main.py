@@ -81,6 +81,12 @@ async def health_check():
     }
 
 
+@app.get("/health")
+async def health_alias():
+    """Conventional platform health endpoint."""
+    return await health_check()
+
+
 @app.on_event("startup")
 async def log_deployment_version():
     """Log the Railway commit so deployments can be verified."""

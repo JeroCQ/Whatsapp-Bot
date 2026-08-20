@@ -37,6 +37,9 @@ class FakeGitHub:
     def history(self, path, page, per_page):
         return [{"sha": "abc", "commit": {"author": {"date": "2026-08-04T00:00:00Z"}, "message": "Update"}}]
 
+    def health(self, path):
+        return {"status": 200, "scopes": "repo", "accepted_permissions": "contents=write", "ratelimit_remaining": "99"}
+
 
 class FakeStorage:
     def __init__(self):
@@ -110,11 +113,13 @@ def test_successful_endpoints_and_catalog_path():
     assert response.json() == [{"date": "2026-08-04T00:00:00Z", "message": "Update", "sha": "abc"}]
 
     response = client.get("/api/dashboard-health", headers=headers)
-    assert response.json() == {
-        "github": {"ok": True, "detail": "GitHub y el System Instruction están accesibles"},
-        "supabase_storage": {"ok": True, "detail": "Supabase Storage está accesible"},
-        "gemini": {"ok": True, "detail": "Gemini está accesible"},
-    }
+    health = response.json()
+    assert health["github"]["ok"] is True
+    assert health["github"]["status"] == 200
+    assert health["supabase_storage"]["ok"] is True
+    assert health["supabase_storage"]["object"] == "client_1.pdf"
+    assert health["gemini"]["ok"] is True
+    assert "GITHUB_TOKEN" in health["configuration"]["present"]
 
     response = client.get("/api/current-catalog?client_name=client_1", headers=headers)
     assert response.json() == {
