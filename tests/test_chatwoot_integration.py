@@ -146,7 +146,7 @@ def test_chatwoot_provider_log_redacts_api_token(monkeypatch, capsys):
     assert "chatwoot-secret-token" not in output and "api_access_token=leak" not in output
 
 
-def test_relative_attachment_streams_and_cross_origin_is_rejected(monkeypatch):
+def test_relative_attachment_streams(monkeypatch):
     downloads = []
     def fake_get(url, **kwargs):
         downloads.append((url, kwargs.get("headers")))
@@ -159,14 +159,34 @@ def test_relative_attachment_streams_and_cross_origin_is_rejected(monkeypatch):
     assert len(downloads) == 1
 
 
-def test_cross_origin_redirect_gets_no_second_credentialed_request(monkeypatch):
+def test_cross_origin_storage_redirect_does_not_leak_chatwoot_credentials(monkeypatch):
     calls = []
     def fake_get(url, **kwargs):
         calls.append((url, kwargs.get("headers")))
-        return Response(302, headers={"Location": "https://evil.example/file"})
+        if len(calls) == 1:
+            return Response(302, headers={"Location": "https://storage.example/file"})
+        return Response(200, headers={"Content-Type": "image/png"}, chunks=[b"abc"])
     monkeypatch.setattr(main, "get", fake_get)
-    assert main.upload_chatwoot_attachment_to_meta("/file") is None
-    assert len(calls) == 1
+    monkeypatch.setattr(main, "post", lambda *a, **k: Response(200, {"id": "media-1"}))
+    assert main.upload_chatwoot_attachment_to_meta("/file") == "media-1"
+    assert calls == [
+        ("https://app.chatwoot.com/file", {"api_access_token": "chatwoot-secret-token"}),
+        ("https://storage.example/file", {}),
+    ]
+
+
+def test_attachment_forwarding_failure_is_retriable(monkeypatch):
+    event = payload()
+    event["attachments"] = [{"data_url": "/file.png", "content_type": "image/png"}]
+    marked = []
+    monkeypatch.setattr(main, "get_phone_by_chatwoot_id", lambda value: "57300")
+    monkeypatch.setattr(main, "save_message_log", lambda *a: None)
+    monkeypatch.setattr(main, "upload_chatwoot_attachment_to_meta", lambda *a: None)
+    monkeypatch.setattr(main, "mark_webhook_event_processed", lambda *a, **k: marked.append((a, k)))
+
+    with pytest.raises(ProviderError):
+        main.process_chatwoot_event(event, event_id="message_created:91")
+    assert marked[-1][1]["status"] == "failed"
 
 
 def test_attachment_size_limit(monkeypatch):
