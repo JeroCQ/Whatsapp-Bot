@@ -304,7 +304,7 @@ def test_image_catalog_is_uploaded_and_sent_as_whatsapp_image(monkeypatch):
     item = types.SimpleNamespace(
         media_id=None,
         link="https://placeholder.test/catalog.pdf",
-        filename="catalog.pdf",
+        filename="Catálogo Memo's.pdf",
         media_type="document",
         default_caption="Catálogo",
     )
@@ -322,7 +322,40 @@ def test_image_catalog_is_uploaded_and_sent_as_whatsapp_image(monkeypatch):
     assert main.send_presaved_file("57300", "catalogo_pdf") is True
     assert sent_payloads[0]["type"] == "image"
     assert sent_payloads[0]["image"]["id"] == "media-png"
+    assert sent_payloads[0]["image"]["caption"] == "Catálogo Memo's"
     assert "filename" not in sent_payloads[0]["image"]
+
+
+def test_pdf_catalog_uses_commercial_name_but_upload_keeps_cache_buster(monkeypatch):
+    sent_payloads = []
+    uploaded_filenames = []
+    item = types.SimpleNamespace(
+        media_id=None,
+        link="https://placeholder.test/catalog.png",
+        filename="Catálogo Tanaka.png",
+        media_type="image",
+        default_caption="Aquí tienes nuestro catálogo completo ☺️",
+    )
+
+    def fake_head(url, **kwargs):
+        if url.endswith(".pdf"):
+            return Response(200, headers={"Content-Type": "application/pdf", "ETag": "pdf-v1"})
+        return Response(404)
+
+    def fake_upload(url, filename, content_type):
+        uploaded_filenames.append(filename)
+        return "media-pdf"
+
+    monkeypatch.setattr(main.requests, "head", fake_head)
+    monkeypatch.setattr(main, "FILE_CATALOG", {"catalogo_pdf": item})
+    monkeypatch.setattr(main, "upload_public_url_to_meta_media", fake_upload)
+    monkeypatch.setattr(main, "post", lambda url, **kwargs: sent_payloads.append(kwargs["json"]) or Response(200))
+
+    assert main.send_presaved_file("57300", "catalogo_pdf") is True
+    assert uploaded_filenames[0].startswith("catalogo-tanaka-")
+    assert uploaded_filenames[0].endswith(".pdf")
+    assert sent_payloads[0]["document"]["filename"] == "Catálogo Tanaka.pdf"
+    assert sent_payloads[0]["document"]["caption"] == "Aquí tienes nuestro catálogo completo ☺️"
 
 
 def test_missing_catalog_does_not_send_broken_link(monkeypatch):

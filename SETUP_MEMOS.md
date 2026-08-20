@@ -94,7 +94,7 @@ También puedes agregar `DASHBOARD_FORMAT_TIMEOUT_SECONDS=90`. No configures `RU
 La URL es un placeholder válido porque el backend busca en runtime el único catálogo vigente como `catalogos/memos.{pdf|jpg|jpeg|png|webp}` y usa su MIME real para enviarlo como documento o imagen:
 
 ```json
-[{"id":"catalogo_pdf","description":"Catálogo de Quesos Memo's; enviarlo cuando pidan el catálogo, precios generales o quieran ver todos los productos.","type":"document","link":"https://example.com/catalogo.pdf","filename":"catalogo-quesos-memos.pdf","caption":"Patrón, aquí tienes el catálogo de Quesos Memo's 🧀"}]
+[{"id":"catalogo_pdf","description":"Catálogo de Quesos Memo's; enviarlo cuando pidan el catálogo, precios generales o quieran ver todos los productos.","type":"document","link":"https://example.com/catalogo.pdf","filename":"Catálogo Memo's.pdf","caption":"Patrón, aquí tienes el catálogo de Quesos Memo's 🧀"}]
 ```
 
 Después del primer deploy, entra al perfil Memo's de Lovable y sube el PDF o imagen real. Verifica en Supabase Storage que exista exactamente un objeto `catalogos/memos.{ext}` con la extensión correcta.
