@@ -1,12 +1,14 @@
 import os
 
+import pytest
+
 for key in ("SUPABASE_KEY", "WA_VERIFY_TOKEN", "WA_TOKEN", "WA_PHONE_NUMBER_ID", "GEMINI_API_KEY"):
     os.environ.setdefault(key, "test-value")
 os.environ.setdefault("SUPABASE_URL", "https://example.supabase.co")
 os.environ.setdefault("BUSINESS_ID", "client_1")
 os.environ.setdefault("DASHBOARD_API_KEY", "dashboard-secret")
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 import dashboard_api as api
@@ -35,6 +37,9 @@ class FakeGitHub:
     def history(self, path, page, per_page):
         return [{"sha": "abc", "commit": {"author": {"date": "2026-08-04T00:00:00Z"}, "message": "Update"}}]
 
+    def health(self, path):
+        return {"status": 200, "scopes": "repo", "accepted_permissions": "contents=write", "ratelimit_remaining": "99"}
+
 
 class FakeStorage:
     def __init__(self):
@@ -58,6 +63,9 @@ class FakeStorage:
             "contentType": "application/pdf",
             "filename": f"{client_name}.pdf",
         }
+
+    def health(self):
+        return None
 
 
 def make_client(gemini=None, github=None, storage=None):
@@ -103,6 +111,15 @@ def test_successful_endpoints_and_catalog_path():
 
     response = client.get("/api/si-history?client_name=client_1", headers=headers)
     assert response.json() == [{"date": "2026-08-04T00:00:00Z", "message": "Update", "sha": "abc"}]
+
+    response = client.get("/api/dashboard-health", headers=headers)
+    health = response.json()
+    assert health["github"]["ok"] is True
+    assert health["github"]["status"] == 200
+    assert health["supabase_storage"]["ok"] is True
+    assert health["supabase_storage"]["object"] == "client_1.pdf"
+    assert health["gemini"]["ok"] is True
+    assert "GITHUB_TOKEN" in health["configuration"]["present"]
 
     response = client.get("/api/current-catalog?client_name=client_1", headers=headers)
     assert response.json() == {
@@ -165,6 +182,33 @@ def test_sha_conflict_is_sanitized(monkeypatch):
     except Exception as exc:
         assert exc.status_code == 409
         assert "very-secret" not in exc.detail
+
+
+def test_github_errors_are_classified_and_logged(caplog):
+    class Response:
+        def __init__(self, status, headers=None):
+            self.status_code = status
+            self.headers = headers or {}
+            self.text = '{"message":"provider detail"}'
+
+        def json(self):
+            return {"message": "provider detail"}
+
+    adapter = object.__new__(api.GitHubAdapter)
+    cases = [
+        (Response(401), "inválido o está vencido"),
+        (Response(403, {"x-ratelimit-remaining": "0", "x-ratelimit-reset": "123"}), "límite de solicitudes"),
+        (Response(403, {"x-accepted-github-permissions": "contents=read"}), "Contents: Read and write"),
+        (Response(404), "GITHUB_OWNER/GITHUB_REPO/GITHUB_BRANCH/GITHUB_SI_PATH"),
+    ]
+    for response, expected in cases:
+        with pytest.raises(HTTPException) as caught:
+            adapter._check(response)
+        assert expected in caught.value.detail
+    assert "body={\"message\":\"provider detail\"}" in caplog.text
+    assert "x-ratelimit-remaining=0" in caplog.text
+    assert "x-ratelimit-reset=123" in caplog.text
+    assert "x-accepted-github-permissions=contents=read" in caplog.text
 
 
 def test_oversized_pdf(monkeypatch):

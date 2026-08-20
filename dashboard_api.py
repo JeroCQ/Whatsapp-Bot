@@ -99,6 +99,18 @@ def client_path(client_name: str, filename: str) -> str:
     return str(path)
 
 
+def system_instruction_path(client_name: str) -> str:
+    """Resolve the deployment's explicitly configured SI path, if present."""
+    validate_client_name(client_name)
+    configured = (config.GITHUB_SI_PATH or "").strip().lstrip("/")
+    if not configured:
+        return client_path(client_name, "system_instruction.txt")
+    path = PurePosixPath(configured)
+    if not configured or ".." in path.parts:
+        raise ValueError("GITHUB_SI_PATH inválido")
+    return str(path)
+
+
 def decode_github_file_content(file_info: dict) -> str:
     encoded = file_info.get("content")
     if not isinstance(encoded, str):
@@ -174,14 +186,30 @@ class GitHubAdapter:
 
     def _check(self, response: requests.Response, *, allow_not_found: bool = False) -> dict | list | None:
         if allow_not_found and response.status_code == 404:
+            self._log_error(response)
             return None
         status = response.status_code
         if status == 409:
             raise HTTPException(409, "Conflicto al actualizar GitHub; vuelva a intentarlo")
-        if status in (401, 403):
-            raise HTTPException(403, "GitHub rechazó los permisos o el límite de solicitudes")
+        if status >= 400:
+            self._log_error(response)
+        if status == 401:
+            raise HTTPException(502, self._detail("GITHUB_TOKEN es inválido o está vencido", response))
+        headers = getattr(response, "headers", {})
+        if status == 403 and headers.get("x-ratelimit-remaining") == "0":
+            reset = headers.get("x-ratelimit-reset") or "desconocido"
+            raise HTTPException(502, self._detail(f"GitHub agotó el límite de solicitudes; x-ratelimit-reset={reset}", response))
+        if status == 403:
+            raise HTTPException(
+                502,
+                self._detail(
+                    "GITHUB_TOKEN no tiene permisos suficientes; un token fine-grained requiere "
+                    "acceso al repositorio y Contents: Read and write",
+                    response,
+                ),
+            )
         if status == 404:
-            raise HTTPException(404, "El archivo configurado no existe en GitHub")
+            raise HTTPException(404, self._detail("GitHub no encontró GITHUB_OWNER/GITHUB_REPO/GITHUB_BRANCH/GITHUB_SI_PATH", response))
         if status == 429:
             raise HTTPException(502, "GitHub limitó temporalmente la solicitud")
         if status >= 500:
@@ -193,9 +221,42 @@ class GitHubAdapter:
         except ValueError:
             raise HTTPException(502, "GitHub devolvió una respuesta inválida")
 
+    @staticmethod
+    def _log_error(response: requests.Response) -> None:
+        headers = getattr(response, "headers", {})
+        logger.error(
+            "GitHub API error: status=%s body=%s x-ratelimit-remaining=%s "
+            "x-ratelimit-reset=%s x-accepted-github-permissions=%s",
+            response.status_code,
+            getattr(response, "text", ""),
+            headers.get("x-ratelimit-remaining"),
+            headers.get("x-ratelimit-reset"),
+            headers.get("x-accepted-github-permissions"),
+        )
+
+    def _detail(self, message: str, response: requests.Response, path: str | None = None) -> str:
+        headers = getattr(response, "headers", {})
+        location = f"{config.GITHUB_OWNER}/{config.GITHUB_REPO}@{config.GITHUB_BRANCH}"
+        return (
+            f"{message}; repo={location}; path={path or config.GITHUB_SI_PATH}; "
+            f"github_status={response.status_code}; "
+            f"x-ratelimit-remaining={headers.get('x-ratelimit-remaining')}"
+        )
+
+    def health(self, path: str) -> dict:
+        response = self._request(get, f"{self.repo_url}/contents/{path}", params={"ref": config.GITHUB_BRANCH})
+        if response.status_code >= 400:
+            self._check(response)
+        return {
+            "status": response.status_code,
+            "scopes": response.headers.get("x-oauth-scopes"),
+            "accepted_permissions": response.headers.get("x-accepted-github-permissions"),
+            "ratelimit_remaining": response.headers.get("x-ratelimit-remaining"),
+        }
+
     def get_file(self, path: str) -> dict | None:
         response = self._request(get, f"{self.repo_url}/contents/{path}", params={"ref": config.GITHUB_BRANCH})
-        return self._check(response, allow_not_found=True)
+        return self._check(response)
 
     def update_file(self, path: str, content: bytes, sha: str, message: str) -> dict:
         payload = {"message": message, "content": base64.b64encode(content).decode("ascii"),
@@ -212,7 +273,7 @@ class GitHubAdapter:
     def _request(self, operation, url: str, **kwargs):
         try:
             return operation(url, headers=self.headers,
-                             timeout=(3, config.DASHBOARD_EXTERNAL_TIMEOUT_SECONDS), **kwargs)
+                             timeout=(3, config.GITHUB_TIMEOUT_SECONDS), **kwargs)
         except requests.Timeout:
             raise HTTPException(504, "GitHub excedió el tiempo límite")
         except requests.RequestException:
@@ -389,6 +450,16 @@ class CatalogStorageAdapter:
             }
         raise HTTPException(404, "El catálogo no existe en el almacenamiento")
 
+    def health(self) -> None:
+        """Check the configured bucket without uploading or modifying data."""
+        response = requests.get(
+            f"{self.base_url}/storage/v1/bucket/{self.bucket}",
+            headers=self.headers,
+            timeout=(3, config.DASHBOARD_EXTERNAL_TIMEOUT_SECONDS),
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(f"Supabase Storage respondió HTTP {response.status_code}: {response.text}")
+
 _gemini: GeminiAdapter | None = None
 _github: GitHubAdapter | None = None
 _catalog_storage: CatalogStorageAdapter | None = None
@@ -519,7 +590,7 @@ def format_and_save_si(body: SaveRequest, client_name: str | None = Query(None),
     formatted = gemini_call(gemini, prompt, timeout_seconds=config.DASHBOARD_FORMAT_TIMEOUT_SECONDS).strip()
     if not formatted:
         raise HTTPException(502, "Gemini devolvió una respuesta vacía")
-    path = client_path(resolved_client_name, "system_instruction.txt")
+    path = system_instruction_path(resolved_client_name)
     existing = github.get_file(path)
     if not existing or not existing.get("sha"):
         raise HTTPException(404, "El archivo configurado no existe en GitHub")
@@ -531,27 +602,92 @@ def format_and_save_si(body: SaveRequest, client_name: str | None = Query(None),
 
 @router.get("/current-si")
 def current_si(client_name: str = Query(min_length=1), github: GitHubAdapter = Depends(get_github)):
+    path = None
     try:
-        path = client_path(validate_deployment_client(client_name), "system_instruction.txt")
+        path = system_instruction_path(validate_deployment_client(client_name))
     except ValueError as exc:
         raise HTTPException(422, str(exc))
-    existing = github.get_file(path)
-    if not existing:
-        raise HTTPException(404, "El archivo configurado no existe en GitHub")
-    return {"system_instruction": decode_github_file_content(existing)}
+    try:
+        existing = github.get_file(path)
+        return {"system_instruction": decode_github_file_content(existing)}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Unexpected current-si failure: repo=%s/%s@%s path=%s error_type=%s",
+                         config.GITHUB_OWNER, config.GITHUB_REPO, config.GITHUB_BRANCH, path, type(exc).__name__)
+        raise HTTPException(
+            502,
+            f"Error interno {type(exc).__name__}; repo={config.GITHUB_OWNER}/{config.GITHUB_REPO}@"
+            f"{config.GITHUB_BRANCH}; path={path}",
+        )
 
 
 @router.get("/si-history")
 def si_history(client_name: str = Query(min_length=1), page: int = Query(1, ge=1),
                per_page: int = Query(20, ge=1), github: GitHubAdapter = Depends(get_github)):
     try:
-        path = client_path(validate_deployment_client(client_name), "system_instruction.txt")
+        path = system_instruction_path(validate_deployment_client(client_name))
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     per_page = min(per_page, config.DASHBOARD_HISTORY_MAX_PAGE_SIZE)
     commits = github.history(path, page, per_page)
     return [{"date": item.get("commit", {}).get("author", {}).get("date"),
              "message": item.get("commit", {}).get("message"), "sha": item.get("sha")} for item in commits]
+
+
+@router.get("/dashboard-health")
+def dashboard_health(
+    github: GitHubAdapter = Depends(get_github),
+    storage: CatalogStorageAdapter = Depends(get_catalog_storage),
+    gemini: GeminiAdapter = Depends(get_gemini),
+):
+    """Perform small real requests against every dashboard dependency."""
+    checks: dict[str, dict[str, bool | str]] = {}
+    try:
+        path = system_instruction_path(config.BUSINESS_ID)
+        github_info = github.health(path)
+        checks["github"] = {
+            "ok": True,
+            "detail": "GitHub y el System Instruction están accesibles",
+            **github_info,
+        }
+    except Exception as exc:
+        detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+        checks["github"] = {"ok": False, "detail": detail}
+
+    try:
+        storage.health()
+        catalog = storage.metadata(config.BUSINESS_ID)
+        checks["supabase_storage"] = {
+            "ok": True,
+            "detail": "Supabase Storage y el objeto del catálogo están accesibles",
+            "bucket": config.CATALOG_STORAGE_BUCKET,
+            "object": catalog.get("filename"),
+        }
+    except Exception as exc:
+        checks["supabase_storage"] = {"ok": False, "detail": str(exc)}
+
+    try:
+        answer = gemini.generate(
+            "Responde únicamente OK.",
+            system_instruction="Esta es una comprobación de salud. Responde únicamente OK.",
+        )
+        if not answer.strip():
+            raise RuntimeError("Gemini devolvió una respuesta vacía")
+        checks["gemini"] = {"ok": True, "detail": "Gemini está accesible"}
+    except Exception as exc:
+        checks["gemini"] = {"ok": False, "detail": str(exc)}
+    checks["configuration"] = {
+        "ok": all((config.GITHUB_TOKEN, config.GITHUB_OWNER, config.GITHUB_REPO,
+                   config.GITHUB_BRANCH, config.GITHUB_SI_PATH, config.GEMINI_API_KEY)),
+        "detail": "Presencia de variables; los valores secretos no se exponen",
+        "present": {
+            name: bool(getattr(config, name, None))
+            for name in ("GITHUB_TOKEN", "GITHUB_OWNER", "GITHUB_REPO", "GITHUB_BRANCH",
+                         "GITHUB_SI_PATH", "SUPABASE_URL", "SUPABASE_KEY", "GEMINI_API_KEY")
+        },
+    }
+    return checks
 
 
 def uploaded_file_size(file: UploadFile) -> int:
