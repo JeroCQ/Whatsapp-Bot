@@ -105,20 +105,21 @@ def test_handoff_summary_is_private_and_text_alert_is_public(monkeypatch):
 
 def test_handoff_summary_is_private_and_media_alert_is_public(monkeypatch):
     _mock_handoff_dependencies(monkeypatch)
-    messages = []
-    media = []
+    events = []
     monkeypatch.setattr(chatwoot_api, "download_meta_media", lambda media_id: (b"file", "image/png"))
-    monkeypatch.setattr(chatwoot_api, "send_message_to_chatwoot", lambda *args, **kwargs: messages.append((args, kwargs)))
-    monkeypatch.setattr(chatwoot_api, "send_media_to_chatwoot", lambda *args, **kwargs: media.append((args, kwargs)))
+    monkeypatch.setattr(chatwoot_api, "send_message_to_chatwoot", lambda *args, **kwargs: events.append(("text", args, kwargs)))
+    monkeypatch.setattr(chatwoot_api, "send_media_to_chatwoot", lambda *args, **kwargs: events.append(("media", args, kwargs)))
 
     main._create_handoff_ticket_if_needed(
         "57300", "Cliente", {"is_paused": True, "handoff_reason": "Revisar archivo"}, "media-1", "", "image/png", "foto.png"
     )
 
-    assert "Resumen" in messages[0][0][1]
-    assert messages[0][1]["is_private"] is True
-    assert "🔔 Revisar archivo" in media[0][0][1]
-    assert media[0][1]["is_private"] is False
+    assert events[0][0] == "text"
+    assert "Resumen" in events[0][1][1]
+    assert events[0][2]["is_private"] is True
+    assert events[1][0] == "media"
+    assert "🔔 Revisar archivo" in events[1][1][1]
+    assert events[1][2]["is_private"] is False
 
 
 class Response:
