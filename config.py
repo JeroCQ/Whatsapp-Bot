@@ -66,12 +66,12 @@ class Settings:
     GEMINI_DASHBOARD_MODELS = parse_gemini_model_list(os.getenv("GEMINI_DASHBOARD_FALLBACK_MODELS"), GEMINI_DASHBOARD_MODEL)
 
     GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-    # Railway injects repository metadata for deployments connected to GitHub.
-    # Keep the manual GITHUB_* variables as optional fallbacks for local runs or
-    # non-Railway deployments.
-    GITHUB_OWNER = os.getenv("RAILWAY_GIT_REPO_OWNER") or os.getenv("GITHUB_OWNER")
-    GITHUB_REPO = os.getenv("RAILWAY_GIT_REPO_NAME") or os.getenv("GITHUB_REPO")
-    GITHUB_BRANCH = os.getenv("RAILWAY_GIT_BRANCH") or os.getenv("GITHUB_BRANCH", "main")
+    # Explicit dashboard settings take precedence. Railway's deployment branch
+    # can differ from the branch where the dashboard-managed SI is stored.
+    GITHUB_OWNER = os.getenv("GITHUB_OWNER") or os.getenv("RAILWAY_GIT_REPO_OWNER")
+    GITHUB_REPO = os.getenv("GITHUB_REPO") or os.getenv("RAILWAY_GIT_REPO_NAME")
+    GITHUB_BRANCH = os.getenv("GITHUB_BRANCH") or os.getenv("RAILWAY_GIT_BRANCH") or "main"
+    GITHUB_SI_PATH = os.getenv("GITHUB_SI_PATH")
     DASHBOARD_API_KEY = os.getenv("DASHBOARD_API_KEY")
     DASHBOARD_CORS_ORIGINS = [
         origin.strip()

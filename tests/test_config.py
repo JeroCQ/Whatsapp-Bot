@@ -33,7 +33,7 @@ class SupabaseKeyConfigTests(TestCase):
         with mock.patch.dict(os.environ, REQUIRED_ENV, clear=True):
             self.assertEqual(load_config().SUPABASE_KEY, "legacy-key")
 
-    def test_prefers_railway_git_metadata_over_manual_github_values(self):
+    def test_prefers_explicit_dashboard_github_values_over_railway_metadata(self):
         env = {
             **REQUIRED_ENV,
             "RAILWAY_GIT_REPO_OWNER": "railway-owner",
@@ -45,9 +45,9 @@ class SupabaseKeyConfigTests(TestCase):
         }
         with mock.patch.dict(os.environ, env, clear=True):
             config = load_config()
-            self.assertEqual(config.GITHUB_OWNER, "railway-owner")
-            self.assertEqual(config.GITHUB_REPO, "railway-repo")
-            self.assertEqual(config.GITHUB_BRANCH, "feature-branch")
+            self.assertEqual(config.GITHUB_OWNER, "manual-owner")
+            self.assertEqual(config.GITHUB_REPO, "manual-repo")
+            self.assertEqual(config.GITHUB_BRANCH, "manual-branch")
 
     def test_keeps_manual_github_metadata_fallbacks(self):
         env = {

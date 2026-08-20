@@ -542,7 +542,7 @@ def process_chatwoot_event(data: dict, event_id: str = None):
                         whatsapp_media_type = normalize_media_type(attachment.get("file_type"), attachment_mime, data_url)
                         meta_media_id = upload_chatwoot_attachment_to_meta(data_url, attachment_mime, attachment_filename)
                         if not meta_media_id:
-                            raise ProviderError("chatwoot", "forward_attachment", message="attachment upload failed")
+                            raise ProviderError("chatwoot", "forward_attachment", None, message="attachment upload failed")
                         send_whatsapp_media(phone, meta_media_id, whatsapp_media_type, content, attachment_filename)
                 if content and not attachments:
                     send_whatsapp_message(phone, content)
