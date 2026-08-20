@@ -249,13 +249,13 @@ def test_attachment_size_limit(monkeypatch):
     assert main.upload_chatwoot_attachment_to_meta("/file") is None
 
 
-def test_account_path_and_configured_inbox_creation(monkeypatch):
+def test_account_path_and_configured_inbox_creation(monkeypatch, capsys):
     captured = {}
     monkeypatch.setattr(chatwoot_api.config, "CHATWOOT_ASSIGNEE_ID", "31")
 
     def fake_post(url, **kwargs):
         captured.update(url=url, json=kwargs["json"])
-        return Response(200, {"id": 88})
+        return Response(200, {"id": 88, "meta": {"assignee": {"id": 31}}})
 
     monkeypatch.setattr(chatwoot_api, "post", fake_post)
     assert chatwoot_api.create_conversation(77) == 88
@@ -266,6 +266,7 @@ def test_account_path_and_configured_inbox_creation(monkeypatch):
         "status": "open",
         "assignee_id": 31,
     }
+    assert "requested_assignee_id=31 response_assignee_id=31" in capsys.readouterr().out
 
 
 def test_conversation_creation_keeps_inbox_policy_when_no_assignee(monkeypatch):

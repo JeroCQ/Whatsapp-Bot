@@ -91,7 +91,16 @@ def create_conversation(contact_id: int):
     try:
         res = post(url, headers=get_headers(), json=data, allow_redirects=False)
         _checked(res, "create_conversation", (200, 201))
-        return res.json()["id"]
+        payload = res.json()
+        conversation_id = payload["id"]
+        response_assignee = payload.get("assignee") or payload.get("meta", {}).get("assignee") or {}
+        response_assignee_id = response_assignee.get("id") if isinstance(response_assignee, dict) else None
+        print(
+            f"[CHATWOOT] Conversation {conversation_id} created "
+            f"requested_assignee_id={data.get('assignee_id') or 'inbox-policy'} "
+            f"response_assignee_id={response_assignee_id or 'not-returned'}"
+        )
+        return conversation_id
     except (ProviderError, requests.exceptions.RequestException, ValueError, TypeError, AttributeError, KeyError) as e:
         print(f"[PROVIDER ERROR] {e}")
     return None
