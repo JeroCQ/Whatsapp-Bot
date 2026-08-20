@@ -415,3 +415,25 @@ payload varía entre eventos/versiones.
 * Si cuenta, inbox y agente son correctos, revisa en el teléfono que la app esté
   conectada a `https://chat.briosos.org`, que el usuario Tanaka tenga una sesión push
   registrada y que la preferencia de notificación por asignación esté habilitada.
+
+### Push móvil con la app oficial de Chatwoot
+
+La app oficial de App Store/Google Play registra tokens FCM del proyecto móvil de
+Chatwoot. En una instalación self-hosted, deja `FIREBASE_PROJECT_ID` y
+`FIREBASE_CREDENTIALS` sin configurar y mantén `ENABLE_PUSH_RELAY_SERVER=true` tanto
+en web como en Sidekiq para que esos tokens se envíen mediante Chatwoot Hub. Un
+proyecto Firebase creado para Tanaka no puede enviar a los tokens emitidos para la
+app oficial; las credenciales Firebase propias solo corresponden a una compilación
+móvil propia que use ese mismo proyecto Firebase.
+
+Antes de cambiar el bot, abre **Super Admin → Push Diagnostics**, busca el correo del
+agente y prueba cada suscripción `fcm`. Si no hay suscripciones, cierra sesión en la
+app, vuelve a entrar usando **Custom server** y concede permisos de notificación. Si
+el test devuelve error, conserva la respuesta HTTP sanitizada y revisa los logs de
+Sidekiq/Chatwoot Hub. Si el test es exitoso pero no aparece en el teléfono, el fallo
+está en la app o en los permisos del sistema operativo.
+
+Para aislar la regla de eventos, verifica además en la cuenta correcta (Tanaka es el
+usuario `4`, no el usuario Memo's `3`) que `push_conversation_assignment` y
+`push_assigned_conversation_new_message` estén activos. Probar otra cuenta no valida
+las preferencias ni la suscripción FCM de Tanaka.
