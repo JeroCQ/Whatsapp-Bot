@@ -44,6 +44,7 @@ from webhook_utils import chatwoot_event_identity, is_restart_command
 from chatwoot_security import chatwoot_scope, verify_chatwoot_signature
 from provider_errors import ProviderError, provider_error, sanitize_text
 from dashboard_api import router as dashboard_router
+from dashboard_health import router as health_router
 
 app = FastAPI()
 app.add_middleware(
@@ -54,6 +55,7 @@ app.add_middleware(
     allow_headers=["Content-Type", "X-Dashboard-API-Key"],
 )
 app.include_router(dashboard_router)
+app.include_router(health_router)
 app.mount("/public", StaticFiles(directory="public"), name="public")
 
 DEPLOYMENT_COMMIT_SHA = os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_COMMIT_SHA") or "unknown"
