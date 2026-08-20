@@ -88,7 +88,7 @@ def _mock_handoff_dependencies(monkeypatch):
     monkeypatch.setattr(chatwoot_api, "create_conversation", lambda contact_id: 34)
 
 
-def test_handoff_summary_is_private_and_text_alert_is_public(monkeypatch):
+def test_handoff_summary_and_text_alert_are_private(monkeypatch):
     _mock_handoff_dependencies(monkeypatch)
     messages = []
     monkeypatch.setattr(chatwoot_api, "send_message_to_chatwoot", lambda *args, **kwargs: messages.append((args, kwargs)))
@@ -100,10 +100,10 @@ def test_handoff_summary_is_private_and_text_alert_is_public(monkeypatch):
     assert "Resumen" in messages[0][0][1]
     assert messages[0][1]["is_private"] is True
     assert "🔔 Necesita asesor" in messages[1][0][1]
-    assert messages[1][1]["is_private"] is False
+    assert messages[1][1]["is_private"] is True
 
 
-def test_handoff_summary_is_private_and_media_alert_is_public(monkeypatch):
+def test_handoff_summary_and_media_alert_are_private(monkeypatch):
     _mock_handoff_dependencies(monkeypatch)
     events = []
     monkeypatch.setattr(chatwoot_api, "download_meta_media", lambda media_id: (b"file", "image/png"))
@@ -119,7 +119,7 @@ def test_handoff_summary_is_private_and_media_alert_is_public(monkeypatch):
     assert events[0][2]["is_private"] is True
     assert events[1][0] == "media"
     assert "🔔 Revisar archivo" in events[1][1][1]
-    assert events[1][2]["is_private"] is False
+    assert events[1][2]["is_private"] is True
 
 
 class Response:
@@ -249,13 +249,13 @@ def test_attachment_size_limit(monkeypatch):
     assert main.upload_chatwoot_attachment_to_meta("/file") is None
 
 
-def test_account_path_and_configured_inbox_creation(monkeypatch):
+def test_account_path_and_configured_inbox_creation(monkeypatch, capsys):
     captured = {}
     monkeypatch.setattr(chatwoot_api.config, "CHATWOOT_ASSIGNEE_ID", "31")
 
     def fake_post(url, **kwargs):
         captured.update(url=url, json=kwargs["json"])
-        return Response(200, {"id": 88, "assignee": {"id": 31}})
+        return Response(200, {"id": 88, "meta": {"assignee": {"id": 31}}})
 
     monkeypatch.setattr(chatwoot_api, "post", fake_post)
     assert chatwoot_api.create_conversation(77) == 88
@@ -266,25 +266,7 @@ def test_account_path_and_configured_inbox_creation(monkeypatch):
         "status": "open",
         "assignee_id": 31,
     }
-
-
-def test_conversation_creation_falls_back_to_assignment_action(monkeypatch):
-    calls = []
-    monkeypatch.setattr(chatwoot_api.config, "CHATWOOT_ASSIGNEE_ID", "31")
-
-    def fake_post(url, **kwargs):
-        calls.append((url, kwargs["json"]))
-        if url.endswith("/conversations"):
-            return Response(200, {"id": 88})
-        return Response(200, {"id": 31})
-
-    monkeypatch.setattr(chatwoot_api, "post", fake_post)
-
-    assert chatwoot_api.create_conversation(77) == 88
-    assert calls[1] == (
-        "https://app.chatwoot.com/api/v1/accounts/10/conversations/88/assignments",
-        {"assignee_id": 31},
-    )
+    assert "requested_assignee_id=31 response_assignee_id=31" in capsys.readouterr().out
 
 
 def test_conversation_creation_keeps_inbox_policy_when_no_assignee(monkeypatch):

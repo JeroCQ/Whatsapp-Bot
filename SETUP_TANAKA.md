@@ -369,9 +369,9 @@ valor global no verificado.
 
 Estos dos síntomas dependen de recursos Chatwoot distintos:
 
-* Durante el handoff, el resumen del historial permanece como nota privada, pero la
-  alerta inicial se envía como mensaje incoming público para activar la regla de
-  “nuevo mensaje”.
+* Durante el handoff, tanto el resumen como la alerta inicial permanecen como notas
+  privadas. La notificación móvil esperada es la de asignación, generada al crear la
+  conversación con `assignee_id`; no depende de fabricar un mensaje público.
 * Compara los valores efectivos de `CHATWOOT_ACCOUNT_ID` y `CHATWOOT_INBOX_ID` que
   muestra `[CHATWOOT CONFIG]` con la cuenta y el inbox Tanaka. Si el payload muestra
   otra marca (aunque el nombre pueda ser histórico), revisa esos IDs; no filtres por
@@ -379,25 +379,61 @@ Estos dos síntomas dependen de recursos Chatwoot distintos:
 * El `assignee_id` registrado es el valor efectivo: si Railway muestra `4`, se está
   usando `4` aunque el panel o un reporte indique `3`. El agente efectivo debe
   pertenecer al inbox efectivo.
-* El agente debe tener habilitadas en Chatwoot las preferencias de “conversación
-  asignada” y “nuevo mensaje”.
-
 * La notificación requiere que la conversación quede asignada al ID numérico de
   `tanaka@briosos.org` y que el agente tenga activada “conversation assigned to you”.
 * La reactivación requiere un **account webhook** Tanaka que entregue
   `conversation_status_changed` a `https://DOMINIO-TANAKA/chatwoot-webhook` con el
   mismo secreto configurado en `CHATWOOT_WEBHOOK_SECRET`.
 
-En logs, un flujo sano muestra primero `[CHATWOOT] Conversation ... assigned...` y,
-al resolver, un acceso `POST /chatwoot-webhook`, seguido de
+En un handoff sano, la respuesta de creación de Chatwoot debe mostrar la conversación
+asignada al agente configurado. Al resolver, los logs deben mostrar un acceso
+`POST /chatwoot-webhook`, seguido de
 `[CHATWOOT WEBHOOK] accepted`, `[CHATWOOT EVENT] ... status=resolved` y
 `Bot resumed`. Si no aparece ningún POST a `/chatwoot-webhook`, el problema está en
 la URL/suscripción del account webhook de Chatwoot, no en Redis ni en la lógica de
 estado. Si aparece 401, el secreto/firma no coincide; si aparece 403, account o inbox
 están cruzados.
 
-Algunas versiones self-hosted aceptan `assignee_id` al crear la conversación pero no
-lo aplican en la respuesta. El backend verifica la respuesta y, solo si falta la
-asignación esperada, ejecuta una llamada adicional acotada al endpoint de assignments.
-Para Resolve también acepta `id/status` tanto en la raíz como dentro de
-`conversation`, porque la forma del payload varía entre eventos/versiones.
+El backend envía `assignee_id` en la misma creación de la conversación, que es la
+semántica conocida que genera la notificación de asignación. Para Resolve acepta
+`id/status` tanto en la raíz como dentro de `conversation`, porque la forma del
+payload varía entre eventos/versiones.
+
+### Auditoría rápida de variables de Tanaka
+
+* `PRESAVED_FILES_JSON` puede declarar `catalogo_pdf` sin `link`: el runtime resuelve
+  el objeto activo de `catalogos/tanaka.*` en Supabase Storage. Esto no interviene en
+  la notificación de Chatwoot.
+* `BUSINESS_ID=tanaka`, `CHATWOOT_ACCOUNT_ID`, `CHATWOOT_INBOX_ID` y
+  `CHATWOOT_ASSIGNEE_ID` deben pertenecer todos al despliegue Tanaka. Comprueba los
+  miembros efectivos con `GET /api/v1/accounts/{account_id}/inbox_members/{inbox_id}`;
+  no basta con que el agente exista en la cuenta.
+* `REDIS_URL` no debe referenciar un servicio llamado o perteneciente a Memo's. Usa
+  el Redis propio del proyecto Tanaka (normalmente `${{Redis.REDIS_URL}}`) y conserva
+  `QUEUE_NAME=whatsapp-events-tanaka`. Redis no genera la notificación móvil, pero una
+  referencia cruzada mezcla infraestructura y contradice el aislamiento requerido.
+* Si cuenta, inbox y agente son correctos, revisa en el teléfono que la app esté
+  conectada a `https://chat.briosos.org`, que el usuario Tanaka tenga una sesión push
+  registrada y que la preferencia de notificación por asignación esté habilitada.
+
+### Push móvil con la app oficial de Chatwoot
+
+La app oficial de App Store/Google Play registra tokens FCM del proyecto móvil de
+Chatwoot. En una instalación self-hosted, deja `FIREBASE_PROJECT_ID` y
+`FIREBASE_CREDENTIALS` sin configurar y mantén `ENABLE_PUSH_RELAY_SERVER=true` tanto
+en web como en Sidekiq para que esos tokens se envíen mediante Chatwoot Hub. Un
+proyecto Firebase creado para Tanaka no puede enviar a los tokens emitidos para la
+app oficial; las credenciales Firebase propias solo corresponden a una compilación
+móvil propia que use ese mismo proyecto Firebase.
+
+Antes de cambiar el bot, abre **Super Admin → Push Diagnostics**, busca el correo del
+agente y prueba cada suscripción `fcm`. Si no hay suscripciones, cierra sesión en la
+app, vuelve a entrar usando **Custom server** y concede permisos de notificación. Si
+el test devuelve error, conserva la respuesta HTTP sanitizada y revisa los logs de
+Sidekiq/Chatwoot Hub. Si el test es exitoso pero no aparece en el teléfono, el fallo
+está en la app o en los permisos del sistema operativo.
+
+Para aislar la regla de eventos, verifica además en la cuenta correcta (Tanaka es el
+usuario `4`, no el usuario Memo's `3`) que `push_conversation_assignment` y
+`push_assigned_conversation_new_message` estén activos. Probar otra cuenta no valida
+las preferencias ni la suscripción FCM de Tanaka.
