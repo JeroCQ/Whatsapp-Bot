@@ -95,6 +95,13 @@ Create an **account webhook** for only `message_created` and `conversation_statu
 
 Never place webhook secrets or API tokens in URLs. Rotate a Chatwoot webhook secret by updating the Railway secret and the corresponding account webhook together during a controlled window. Provider logs contain only sanitized status/code/message fields. Mobile push notifications are configured on the Chatwoot installation, not in this bot.
 
+Chatwoot Cloud and a self-hosted Chatwoot are separate systems even when an
+agent uses the same email address in both. For Memo's, the mobile client must be
+logged into the custom server `https://chat.briosos.org`; a session connected to
+`app.chatwoot.com` cannot receive its conversations or notifications. See the
+[Memo's mobile-app runbook](SETUP_MEMOS.md#app-móvil-no-mezclar-chatwoot-cloud-con-el-self-hosted)
+before changing bot or webhook settings.
+
 For scalable queued processing, also set:
 
 - `REDIS_URL` - enables durable RQ queue processing.

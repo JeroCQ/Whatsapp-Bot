@@ -160,6 +160,41 @@ Orden obligatorio:
 
 Las notificaciones push móviles se configuran en el stack Chatwoot, no en el bot. Como pruebas finales, confirma además que un Meta 400/401/429/5xx no programa follow-up y que ningún token aparece en logs.
 
+### App móvil: no mezclar Chatwoot Cloud con el self-hosted
+
+El correo de un agente **no une instalaciones de Chatwoot**. Una sesión de
+`app.chatwoot.com` y una sesión de `https://chat.briosos.org` son cuentas en dos
+bases de datos independientes, aunque ambas muestren `memos@briosos.org`. Por
+eso un handoff visible en `chat.briosos.org` nunca aparecerá en una app que siga
+conectada a Chatwoot Cloud; no es un problema del webhook ni del bot.
+
+La corrección más simple para Memo's es:
+
+1. Cerrar la sesión Cloud de la app móvil (o agregar otra cuenta si la versión
+   instalada permite mantener varias).
+2. En la pantalla de acceso elegir **Custom server / Self-hosted** e introducir
+   solo `https://chat.briosos.org`, sin `/app`, `/api/v1` ni el dominio Railway
+   del bot.
+3. Iniciar sesión con el usuario y la contraseña creados dentro de esa
+   instalación self-hosted. Tener el mismo correo en Cloud no reutiliza la
+   contraseña ni la sesión Cloud.
+4. Abrir la cuenta **Quesos Memo's**, habilitar las notificaciones del inbox y
+   conceder a Chatwoot el permiso de notificaciones del sistema operativo.
+5. Con la app cerrada, provocar un handoff nuevo. Confirmar primero que la
+   conversación aparece en la app y luego que llega el push.
+
+Si la app instalada no ofrece servidor personalizado, o abre siempre
+`app.chatwoot.com`, no se debe mover el bot a Cloud para solucionarlo. La salida
+inmediata y de menor riesgo es instalar `https://chat.briosos.org` como PWA
+desde Chrome/Safari y habilitar sus notificaciones. Esto conserva una sola
+fuente de conversaciones y no requiere cambiar ninguna variable de Railway.
+
+Si la conversación ya aparece en la app self-hosted pero el push no llega, la
+conexión de la app quedó corregida y el problema restante pertenece al servicio
+de push de la instalación Chatwoot. Revisar su configuración móvil/push y los
+logs de Chatwoot; modificar `CHATWOOT_BASE_URL`, los webhooks de Meta o este bot
+no puede reparar esa segunda capa.
+
 ## Rollback
 
 Si Memo's falla, desconecta temporalmente solo su webhook de Meta o revierte su último deploy. Si Tanaka falla después de migrar, restaura únicamente sus variables Cloud registradas y su account webhook Cloud; no borres ni revoques recursos Cloud durante la ventana. No cambies las variables, Supabase, Redis, cola ni webhooks del otro negocio.
