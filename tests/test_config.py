@@ -87,3 +87,7 @@ class SupabaseKeyConfigTests(TestCase):
     def test_dashboard_format_timeout_default(self):
         with mock.patch.dict(os.environ, REQUIRED_ENV, clear=True):
             self.assertEqual(load_config().DASHBOARD_FORMAT_TIMEOUT_SECONDS, 90)
+
+    def test_dashboard_storage_timeout_default_supports_large_catalogs(self):
+        with mock.patch.dict(os.environ, REQUIRED_ENV, clear=True):
+            self.assertEqual(load_config().DASHBOARD_STORAGE_TIMEOUT_SECONDS, 300)

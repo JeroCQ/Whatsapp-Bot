@@ -1,5 +1,7 @@
 import unittest
+from unittest.mock import patch
 
+import run_railway
 from run_railway import should_run_embedded_worker
 
 
@@ -21,6 +23,14 @@ class EmbeddedWorkerConfigurationTests(unittest.TestCase):
 
     def test_never_starts_without_redis(self):
         self.assertFalse(should_run_embedded_worker({"RUN_WORKER_IN_WEB": "true"}))
+
+    @patch("run_railway.signal.signal")
+    @patch("run_railway.uvicorn.run")
+    def test_uses_upload_safe_keep_alive_default(self, uvicorn_run, _signal):
+        with patch.dict("run_railway.os.environ", {"PORT": "8080"}, clear=True):
+            run_railway.main()
+
+        self.assertEqual(uvicorn_run.call_args.kwargs["timeout_keep_alive"], 120)
 
 
 if __name__ == "__main__":

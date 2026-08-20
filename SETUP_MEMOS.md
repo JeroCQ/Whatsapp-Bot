@@ -85,7 +85,7 @@ No conviertas el Railway de Tanaka en Memo's. Déjalo intacto y crea un segundo 
 | `DASHBOARD_MAX_PDF_BYTES` | **Eliminar** | No se usa actualmente; el límite efectivo es `DASHBOARD_MAX_CATALOG_MB`. |
 | `DASHBOARD_MAX_TEXT_CHARS` | **Conservar** | Default `100000`. |
 | `DASHBOARD_REQUESTS_PER_MINUTE` | **Conservar** | Default `30`. |
-| `DASHBOARD_STORAGE_TIMEOUT_SECONDS` | **Conservar** | Default `180`. |
+| `DASHBOARD_STORAGE_TIMEOUT_SECONDS` | **Conservar** | Default `300`. |
 
 También puedes agregar `DASHBOARD_FORMAT_TIMEOUT_SECONDS=90`. No configures `RUN_WORKER_IN_WEB=false` mientras uses el worker embebido.
 

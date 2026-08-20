@@ -68,7 +68,12 @@ def main():
     signal.signal(signal.SIGINT, _shutdown)
 
     try:
-        uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "8080")))
+        uvicorn.run(
+            "main:app",
+            host="0.0.0.0",
+            port=int(os.getenv("PORT", "8080")),
+            timeout_keep_alive=int(os.getenv("UVICORN_TIMEOUT_KEEP_ALIVE", "120")),
+        )
     finally:
         if worker_process and worker_process.poll() is None:
             worker_process.terminate()
