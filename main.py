@@ -324,14 +324,19 @@ def upload_chatwoot_attachment_to_meta(attachment_url: str, fallback_mime_type: 
         chatwoot_headers = {"api_access_token": config.CHATWOOT_API_TOKEN}
         current_url = attachment_url
         for _ in range(4):
-            res = get(current_url, headers=chatwoot_headers, timeout=MEDIA_TIMEOUT, allow_redirects=False, stream=True)
+            # Active Storage commonly redirects a Chatwoot URL to S3 or another
+            # object store.  The redirect is expected, but the Chatwoot API token
+            # must never be forwarded to that different origin.
+            current_target = urlsplit(current_url)
+            request_headers = chatwoot_headers if current_target.netloc == configured.netloc else {}
+            res = get(current_url, headers=request_headers, timeout=MEDIA_TIMEOUT, allow_redirects=False, stream=True)
             if not 300 <= res.status_code < 400:
                 break
             redirected = urljoin(current_url, res.headers.get("Location", ""))
             redirect_target = urlsplit(redirected)
             if (redirect_target.username or redirect_target.password or redirect_target.fragment or
-                    redirect_target.netloc != configured.netloc or redirect_target.scheme != configured.scheme):
-                raise ValueError("Cross-origin Chatwoot attachment redirect rejected")
+                    redirect_target.scheme != "https" or not redirect_target.netloc):
+                raise ValueError("Unsafe Chatwoot attachment redirect rejected")
             res.close()
             current_url = redirected
         else:
@@ -536,8 +541,9 @@ def process_chatwoot_event(data: dict, event_id: str = None):
                         attachment_filename = _attachment_filename(attachment)
                         whatsapp_media_type = normalize_media_type(attachment.get("file_type"), attachment_mime, data_url)
                         meta_media_id = upload_chatwoot_attachment_to_meta(data_url, attachment_mime, attachment_filename)
-                        if meta_media_id:
-                            send_whatsapp_media(phone, meta_media_id, whatsapp_media_type, content, attachment_filename)
+                        if not meta_media_id:
+                            raise ProviderError("chatwoot", "forward_attachment", None, message="attachment upload failed")
+                        send_whatsapp_media(phone, meta_media_id, whatsapp_media_type, content, attachment_filename)
                 if content and not attachments:
                     send_whatsapp_message(phone, content)
         elif event == "conversation_status_changed" and data.get("status") == "resolved":
@@ -554,6 +560,10 @@ def process_chatwoot_event(data: dict, event_id: str = None):
         print("[ERROR CRÍTICO] Falló process_chatwoot_event:")
         traceback.print_exc()
         mark_webhook_event_processed("chatwoot", event_id, status="failed", error=str(e))
+        # Let RQ apply its failure/retry policy instead of reporting a dropped
+        # attachment as a successfully completed job.
+        if isinstance(e, ProviderError):
+            raise
 
 
 def _dispatch(background_tasks: BackgroundTasks, func, *args, event_id: str = None, **kwargs):
