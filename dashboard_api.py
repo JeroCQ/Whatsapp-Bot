@@ -102,13 +102,20 @@ def client_path(client_name: str, filename: str) -> str:
 def system_instruction_path(client_name: str) -> str:
     """Resolve the deployment's explicitly configured SI path, if present."""
     validate_client_name(client_name)
+    expected = client_path(client_name, "system_instruction.txt")
     configured = (config.GITHUB_SI_PATH or "").strip().lstrip("/")
     if not configured:
-        return client_path(client_name, "system_instruction.txt")
+        return expected
     path = PurePosixPath(configured)
     if not configured or ".." in path.parts:
         raise ValueError("GITHUB_SI_PATH inválido")
-    return str(path)
+    normalized = str(path)
+    if normalized != expected:
+        raise ValueError(
+            f"GITHUB_SI_PATH no corresponde a BUSINESS_ID={client_name}; "
+            f"debe ser {expected}"
+        )
+    return normalized
 
 
 def decode_github_file_content(file_info: dict) -> str:
@@ -337,6 +344,17 @@ class CatalogStorageAdapter:
             raise HTTPException(413, detail)
         if response.status_code == 409 or "already exists" in provider_body.lower():
             raise HTTPException(409, detail)
+        if response.status_code in (401, 403):
+            raise HTTPException(
+                502,
+                "Supabase rechazó la credencial de Storage; verifica que "
+                "SUPABASE_SERVICE_ROLE_KEY pertenezca al mismo proyecto que SUPABASE_URL",
+            )
+        if response.status_code == 404:
+            raise HTTPException(
+                502,
+                f"Supabase no encontró el bucket de Storage '{self.bucket}'",
+            )
         raise HTTPException(502, detail)
 
     def delete_existing(self, client_name: str, extension: str = "pdf") -> None:
@@ -347,12 +365,25 @@ class CatalogStorageAdapter:
         except requests.RequestException as exc:
             logger.error("Catalog delete transport error before retry: client=%s error=%s", client_name, exc)
             raise HTTPException(502, "No fue posible reemplazar el catálogo existente")
-        if response.status_code not in (200, 204, 404):
+        provider_body = response.text[:500]
+        # Supabase can return HTTP 400 while embedding its actual Storage status
+        # as 404/NoSuchKey. Deleting an already absent object is successful for
+        # replacement purposes, so continue to the one bounded TUS retry.
+        object_is_absent = response.status_code == 404 or (
+            response.status_code == 400
+            and (
+                '"statusCode":"404"' in provider_body
+                or '"statusCode":404' in provider_body
+                or "NoSuchKey" in provider_body
+                or "Object not found" in provider_body
+            )
+        )
+        if response.status_code not in (200, 204) and not object_is_absent:
             logger.error(
                 "Catalog delete provider error before retry: client=%s status=%s body=%s",
                 client_name,
                 response.status_code,
-                response.text[:500],
+                provider_body,
             )
             raise HTTPException(502, "El almacenamiento no permitió reemplazar el catálogo existente")
 
@@ -371,7 +402,29 @@ class CatalogStorageAdapter:
             ),
             "x-upsert": "true",
         }
-        response = requests.post(url, headers=headers, timeout=(5, config.DASHBOARD_STORAGE_TIMEOUT_SECONDS))
+        try:
+            response = requests.post(
+                url,
+                headers=headers,
+                timeout=(5, config.DASHBOARD_STORAGE_TIMEOUT_SECONDS),
+            )
+        except requests.Timeout as exc:
+            logger.error(
+                "Catalog upload creation timed out: client=%s size_bytes=%s host=%s",
+                client_name,
+                size_bytes,
+                self.storage_hostname(),
+            )
+            raise HTTPException(504, "Supabase excedió el tiempo límite al iniciar la carga") from exc
+        except requests.RequestException as exc:
+            logger.error(
+                "Catalog upload creation transport error: client=%s size_bytes=%s host=%s error=%s",
+                client_name,
+                size_bytes,
+                self.storage_hostname(),
+                type(exc).__name__,
+            )
+            raise HTTPException(502, "No fue posible iniciar la carga con Supabase Storage") from exc
         self.check_upload_response(response, client_name, size_bytes)
         upload_url = response.headers.get("location")
         if not upload_url:
@@ -415,6 +468,7 @@ class CatalogStorageAdapter:
         }
 
     def upload(self, client_name: str, file_obj, size_bytes: int, extension: str, content_type: str) -> dict:
+        started_at = time.perf_counter()
         try:
             result = self.upload_once(client_name, file_obj, size_bytes, extension, content_type)
         except HTTPException as exc:
@@ -427,6 +481,13 @@ class CatalogStorageAdapter:
         for stale_extension in self.CATALOG_FORMATS:
             if stale_extension != extension:
                 self.delete_existing(client_name, stale_extension)
+        logger.info(
+            "Catalog upload completed: client=%s size_bytes=%s duration_ms=%s content_type=%s",
+            client_name,
+            size_bytes,
+            int((time.perf_counter() - started_at) * 1000),
+            content_type,
+        )
         return result
 
     def metadata(self, client_name: str) -> dict:
@@ -609,7 +670,11 @@ def current_si(client_name: str = Query(min_length=1), github: GitHubAdapter = D
         raise HTTPException(422, str(exc))
     try:
         existing = github.get_file(path)
-        return {"system_instruction": decode_github_file_content(existing)}
+        return {
+            "system_instruction": decode_github_file_content(existing),
+            "client_name": config.BUSINESS_ID,
+            "path": path,
+        }
     except HTTPException:
         raise
     except Exception as exc:
@@ -677,10 +742,18 @@ def dashboard_health(
         checks["gemini"] = {"ok": True, "detail": "Gemini está accesible"}
     except Exception as exc:
         checks["gemini"] = {"ok": False, "detail": str(exc)}
+    try:
+        configured_si_path = system_instruction_path(config.BUSINESS_ID)
+        path_matches_business = True
+    except ValueError as exc:
+        configured_si_path = str(exc)
+        path_matches_business = False
     checks["configuration"] = {
         "ok": all((config.GITHUB_TOKEN, config.GITHUB_OWNER, config.GITHUB_REPO,
-                   config.GITHUB_BRANCH, config.GITHUB_SI_PATH, config.GEMINI_API_KEY)),
+                   config.GITHUB_BRANCH, config.GEMINI_API_KEY)) and path_matches_business,
         "detail": "Presencia de variables; los valores secretos no se exponen",
+        "business_id": config.BUSINESS_ID,
+        "system_instruction_path": configured_si_path,
         "present": {
             name: bool(getattr(config, name, None))
             for name in ("GITHUB_TOKEN", "GITHUB_OWNER", "GITHUB_REPO", "GITHUB_BRANCH",

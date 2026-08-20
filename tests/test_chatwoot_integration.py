@@ -201,7 +201,7 @@ def test_account_path_and_configured_inbox_creation(monkeypatch):
 
     def fake_post(url, **kwargs):
         captured.update(url=url, json=kwargs["json"])
-        return Response(200, {"id": 88})
+        return Response(200, {"id": 88, "assignee": {"id": 31}})
 
     monkeypatch.setattr(chatwoot_api, "post", fake_post)
     assert chatwoot_api.create_conversation(77) == 88
@@ -212,6 +212,25 @@ def test_account_path_and_configured_inbox_creation(monkeypatch):
         "status": "open",
         "assignee_id": 31,
     }
+
+
+def test_conversation_creation_falls_back_to_assignment_action(monkeypatch):
+    calls = []
+    monkeypatch.setattr(chatwoot_api.config, "CHATWOOT_ASSIGNEE_ID", "31")
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs["json"]))
+        if url.endswith("/conversations"):
+            return Response(200, {"id": 88})
+        return Response(200, {"id": 31})
+
+    monkeypatch.setattr(chatwoot_api, "post", fake_post)
+
+    assert chatwoot_api.create_conversation(77) == 88
+    assert calls[1] == (
+        "https://app.chatwoot.com/api/v1/accounts/10/conversations/88/assignments",
+        {"assignee_id": 31},
+    )
 
 
 def test_conversation_creation_keeps_inbox_policy_when_no_assignee(monkeypatch):
@@ -225,6 +244,23 @@ def test_conversation_creation_keeps_inbox_policy_when_no_assignee(monkeypatch):
 
     assert chatwoot_api.create_conversation(77) == 88
     assert "assignee_id" not in captured["json"]
+
+
+def test_resolved_event_supports_nested_conversation_status(monkeypatch):
+    event = payload(event="conversation_status_changed")
+    event.pop("status", None)
+    event["conversation"]["status"] = "resolved"
+    resumed = []
+    sent = []
+    monkeypatch.setattr(main, "resume_bot_state", lambda conv_id: resumed.append(conv_id) or "57300")
+    monkeypatch.setattr(main, "save_message_log", lambda *args: None)
+    monkeypatch.setattr(main, "send_whatsapp_message", lambda *args: sent.append(args) or True)
+    monkeypatch.setattr(main, "mark_webhook_event_processed", lambda *args, **kwargs: None)
+
+    main.process_chatwoot_event(event, event_id="resolved:44")
+
+    assert resumed == [44]
+    assert sent == [("57300", "✅ Tu solicitud ha sido resuelta. Si necesitas algo más, envíame un mensaje.")]
 
 
 def test_image_catalog_is_uploaded_and_sent_as_whatsapp_image(monkeypatch):

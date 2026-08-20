@@ -530,8 +530,15 @@ def process_chatwoot_event(data: dict, event_id: str = None):
         if account_id != str(config.CHATWOOT_ACCOUNT_ID) or inbox_id != str(config.CHATWOOT_INBOX_ID):
             raise ValueError("Chatwoot event scope does not match this deployment")
         event = data.get("event")
+        conversation = data.get("conversation") if isinstance(data.get("conversation"), dict) else {}
+        event_status = data.get("status") or conversation.get("status")
+        event_conv_id = conversation.get("id") or data.get("id")
+        print(
+            f"[CHATWOOT EVENT] event={event} conversation_id={event_conv_id} "
+            f"status={event_status} account_id={account_id} inbox_id={inbox_id}"
+        )
         if event == "message_created" and data.get("message_type") == "outgoing" and not data.get("private", False):
-            conv_id = data.get("conversation", {}).get("id")
+            conv_id = event_conv_id
             content = data.get("content")
             attachments = data.get("attachments")
             phone = get_phone_by_chatwoot_id(conv_id) if conv_id else None
@@ -552,12 +559,15 @@ def process_chatwoot_event(data: dict, event_id: str = None):
                         send_whatsapp_media(phone, meta_media_id, whatsapp_media_type, content, attachment_filename)
                 if content and not attachments:
                     send_whatsapp_message(phone, content)
-        elif event == "conversation_status_changed" and data.get("status") == "resolved":
-            conv_id = data.get("id")
+        elif event == "conversation_status_changed" and event_status == "resolved":
+            conv_id = event_conv_id
             phone = resume_bot_state(conv_id) if conv_id else None
             if phone:
                 save_message_log(phone, "system", "RESOLVED: Conversación cerrada por el asesor.")
                 send_whatsapp_message(phone, "✅ Tu solicitud ha sido resuelta. Si necesitas algo más, envíame un mensaje.")
+                print(f"[CHATWOOT EVENT] Bot resumed phone={phone} conversation_id={conv_id}")
+            else:
+                print(f"[CHATWOOT EVENT WARN] No paused customer found for resolved conversation_id={conv_id}")
         duration_ms = int((time.perf_counter() - started_at) * 1000)
         print(f"[METRIC] chatwoot_event_processed event_id={event_id} event={event} duration_ms={duration_ms}")
         mark_webhook_event_processed("chatwoot", event_id)
@@ -673,6 +683,10 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
         print(f"[WEBHOOK DEBUG] Chatwoot duplicado ignorado: {event_id}")
         return {"status": "success", "duplicate": True}
     mode = _dispatch(background_tasks, process_chatwoot_event, data, event_id=event_id)
+    print(
+        f"[CHATWOOT WEBHOOK] accepted event={data.get('event')} "
+        f"conversation_id={conv_id} event_id={event_id} mode={mode}"
+    )
     return {"status": "success", "mode": mode}
 
 

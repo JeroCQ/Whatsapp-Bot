@@ -107,7 +107,11 @@ def test_successful_endpoints_and_catalog_path():
     assert response.status_code == 200
 
     response = client.get("/api/current-si?client_name=client_1", headers=headers)
-    assert response.json() == {"system_instruction": "current system instruction"}
+    assert response.json() == {
+        "system_instruction": "current system instruction",
+        "client_name": "client_1",
+        "path": "src/clients/client_1/system_instruction.txt",
+    }
 
     response = client.get("/api/si-history?client_name=client_1", headers=headers)
     assert response.json() == [{"date": "2026-08-04T00:00:00Z", "message": "Update", "sha": "abc"}]
@@ -118,6 +122,9 @@ def test_successful_endpoints_and_catalog_path():
     assert health["github"]["status"] == 200
     assert health["supabase_storage"]["ok"] is True
     assert health["supabase_storage"]["object"] == "client_1.pdf"
+    assert health["configuration"]["business_id"] == "client_1"
+    assert health["configuration"]["system_instruction_path"] == "src/clients/client_1/system_instruction.txt"
+
     assert health["gemini"]["ok"] is True
     assert "GITHUB_TOKEN" in health["configuration"]["present"]
 
@@ -129,6 +136,19 @@ def test_successful_endpoints_and_catalog_path():
         "contentType": "application/pdf",
         "filename": "client_1.pdf",
     }
+
+
+def test_explicit_si_path_cannot_cross_business(monkeypatch):
+    monkeypatch.setattr(api.config, "GITHUB_SI_PATH", "src/clients/memos/system_instruction.txt")
+
+    with pytest.raises(ValueError, match="no corresponde a BUSINESS_ID=client_1"):
+        api.system_instruction_path("client_1")
+
+
+def test_explicit_si_path_may_match_deployment_business(monkeypatch):
+    monkeypatch.setattr(api.config, "GITHUB_SI_PATH", "src/clients/client_1/system_instruction.txt")
+
+    assert api.system_instruction_path("client_1") == "src/clients/client_1/system_instruction.txt"
 
     response = client.post("/api/upload-catalog?client_name=client_1", headers=headers,
                            files={"file": ("ignored.pdf", b"%PDF-1.7\nbody", "application/pdf")})
@@ -314,6 +334,86 @@ def test_catalog_storage_maps_already_exists_to_409():
     except Exception as exc:
         assert exc.status_code == 409
         assert "already exists" in exc.detail
+
+
+def test_catalog_storage_explains_cross_project_service_role():
+    class Response:
+        status_code = 403
+        text = '{"message":"Invalid JWT"}'
+
+    adapter = object.__new__(api.CatalogStorageAdapter)
+    adapter.bucket = "catalogos"
+    with pytest.raises(HTTPException) as error:
+        adapter.check_upload_response(Response(), "tanaka", 10)
+
+    assert error.value.status_code == 502
+    assert "SUPABASE_SERVICE_ROLE_KEY" in error.value.detail
+    assert "SUPABASE_URL" in error.value.detail
+
+
+def test_catalog_storage_explains_missing_bucket():
+    class Response:
+        status_code = 404
+        text = '{"message":"Bucket not found"}'
+
+    adapter = object.__new__(api.CatalogStorageAdapter)
+    adapter.bucket = "catalogos"
+    with pytest.raises(HTTPException) as error:
+        adapter.check_upload_response(Response(), "tanaka", 10)
+
+    assert error.value.status_code == 502
+    assert "catalogos" in error.value.detail
+
+
+def test_catalog_storage_maps_tus_creation_transport_error(monkeypatch):
+    adapter = object.__new__(api.CatalogStorageAdapter)
+    adapter.base_url = "https://project.supabase.co"
+    adapter.bucket = "catalogos"
+    adapter.headers = {"Authorization": "Bearer secret", "apikey": "secret"}
+    monkeypatch.setattr(api.requests, "post", lambda *args, **kwargs: (_ for _ in ()).throw(api.requests.ConnectionError()))
+
+    with pytest.raises(HTTPException) as error:
+        adapter.create_tus_upload("tanaka", 10, "pdf", "application/pdf")
+
+    assert error.value.status_code == 502
+    assert "iniciar la carga" in error.value.detail
+
+
+def test_catalog_delete_treats_embedded_no_such_key_as_absent(monkeypatch):
+    class Response:
+        status_code = 400
+        text = '{"statusCode":"404","message":"Object not found","code":"NoSuchKey"}'
+
+    adapter = object.__new__(api.CatalogStorageAdapter)
+    adapter.base_url = "https://project.supabase.co"
+    adapter.bucket = "catalogos"
+    adapter.headers = {"Authorization": "Bearer secret", "apikey": "secret"}
+    monkeypatch.setattr(api.requests, "delete", lambda *args, **kwargs: Response())
+
+    assert adapter.delete_existing("tanaka", "pdf") is None
+
+
+def test_catalog_upload_retries_after_conflict_and_absent_delete(monkeypatch):
+    from io import BytesIO
+
+    adapter = object.__new__(api.CatalogStorageAdapter)
+    calls = []
+    deleted = []
+
+    def upload_once(*args):
+        calls.append(args)
+        if len(calls) == 1:
+            raise HTTPException(409, "already exists")
+        return {"filename": "tanaka.pdf"}
+
+    monkeypatch.setattr(adapter, "upload_once", upload_once)
+    monkeypatch.setattr(adapter, "delete_existing", lambda client, extension="pdf": deleted.append((client, extension)))
+
+    result = adapter.upload("tanaka", BytesIO(b"%PDF-test"), 9, "pdf", "application/pdf")
+
+    assert result == {"filename": "tanaka.pdf"}
+    assert len(calls) == 2
+    assert deleted[0] == ("tanaka", "pdf")
 
 
 def test_catalog_tus_metadata_preserves_image_content_type(monkeypatch):

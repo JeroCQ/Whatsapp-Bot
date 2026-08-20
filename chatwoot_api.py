@@ -91,7 +91,43 @@ def create_conversation(contact_id: int):
     try:
         res = post(url, headers=get_headers(), json=data, allow_redirects=False)
         _checked(res, "create_conversation", (200, 201))
-        return res.json()["id"]
+        payload = res.json()
+        conversation_id = payload["id"]
+        expected_assignee = int(config.CHATWOOT_ASSIGNEE_ID) if config.CHATWOOT_ASSIGNEE_ID else None
+        response_assignee = payload.get("assignee") or payload.get("meta", {}).get("assignee") or {}
+        response_assignee_id = response_assignee.get("id") if isinstance(response_assignee, dict) else None
+        if expected_assignee and response_assignee_id != expected_assignee:
+            # Some self-hosted Chatwoot versions accept assignee_id during
+            # creation but do not apply/return it. Use the documented assignment
+            # action as a bounded fallback so notifications target the agent.
+            assignment_url = f"{get_base_url()}/conversations/{conversation_id}/assignments"
+            try:
+                assignment_res = post(
+                    assignment_url,
+                    headers=get_headers(),
+                    json={"assignee_id": expected_assignee},
+                    allow_redirects=False,
+                )
+                _checked(assignment_res, "assign_conversation", (200, 201))
+                print(
+                    f"[CHATWOOT] Conversation {conversation_id} assigned via fallback "
+                    f"to agent_id={expected_assignee}"
+                )
+            except (ProviderError, requests.exceptions.RequestException) as exc:
+                # The handoff conversation already exists. Keep the bot paused
+                # and surface the assignment problem instead of creating an
+                # orphan ticket while incorrectly resuming the AI.
+                print(f"[PROVIDER ERROR] {exc}")
+                print(
+                    f"[CHATWOOT WARN] Conversation {conversation_id} exists but "
+                    f"agent_id={expected_assignee} could not be confirmed"
+                )
+        else:
+            print(
+                f"[CHATWOOT] Conversation {conversation_id} created "
+                f"assignee_id={response_assignee_id or 'inbox-policy'}"
+            )
+        return conversation_id
     except (ProviderError, requests.exceptions.RequestException, ValueError, TypeError, AttributeError, KeyError) as e:
         print(f"[PROVIDER ERROR] {e}")
     return None
