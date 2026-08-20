@@ -365,12 +365,25 @@ class CatalogStorageAdapter:
         except requests.RequestException as exc:
             logger.error("Catalog delete transport error before retry: client=%s error=%s", client_name, exc)
             raise HTTPException(502, "No fue posible reemplazar el catálogo existente")
-        if response.status_code not in (200, 204, 404):
+        provider_body = response.text[:500]
+        # Supabase can return HTTP 400 while embedding its actual Storage status
+        # as 404/NoSuchKey. Deleting an already absent object is successful for
+        # replacement purposes, so continue to the one bounded TUS retry.
+        object_is_absent = response.status_code == 404 or (
+            response.status_code == 400
+            and (
+                '"statusCode":"404"' in provider_body
+                or '"statusCode":404' in provider_body
+                or "NoSuchKey" in provider_body
+                or "Object not found" in provider_body
+            )
+        )
+        if response.status_code not in (200, 204) and not object_is_absent:
             logger.error(
                 "Catalog delete provider error before retry: client=%s status=%s body=%s",
                 client_name,
                 response.status_code,
-                response.text[:500],
+                provider_body,
             )
             raise HTTPException(502, "El almacenamiento no permitió reemplazar el catálogo existente")
 
@@ -455,6 +468,7 @@ class CatalogStorageAdapter:
         }
 
     def upload(self, client_name: str, file_obj, size_bytes: int, extension: str, content_type: str) -> dict:
+        started_at = time.perf_counter()
         try:
             result = self.upload_once(client_name, file_obj, size_bytes, extension, content_type)
         except HTTPException as exc:
@@ -467,6 +481,13 @@ class CatalogStorageAdapter:
         for stale_extension in self.CATALOG_FORMATS:
             if stale_extension != extension:
                 self.delete_existing(client_name, stale_extension)
+        logger.info(
+            "Catalog upload completed: client=%s size_bytes=%s duration_ms=%s content_type=%s",
+            client_name,
+            size_bytes,
+            int((time.perf_counter() - started_at) * 1000),
+            content_type,
+        )
         return result
 
     def metadata(self, client_name: str) -> dict:

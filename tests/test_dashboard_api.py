@@ -379,6 +379,43 @@ def test_catalog_storage_maps_tus_creation_transport_error(monkeypatch):
     assert "iniciar la carga" in error.value.detail
 
 
+def test_catalog_delete_treats_embedded_no_such_key_as_absent(monkeypatch):
+    class Response:
+        status_code = 400
+        text = '{"statusCode":"404","message":"Object not found","code":"NoSuchKey"}'
+
+    adapter = object.__new__(api.CatalogStorageAdapter)
+    adapter.base_url = "https://project.supabase.co"
+    adapter.bucket = "catalogos"
+    adapter.headers = {"Authorization": "Bearer secret", "apikey": "secret"}
+    monkeypatch.setattr(api.requests, "delete", lambda *args, **kwargs: Response())
+
+    assert adapter.delete_existing("tanaka", "pdf") is None
+
+
+def test_catalog_upload_retries_after_conflict_and_absent_delete(monkeypatch):
+    from io import BytesIO
+
+    adapter = object.__new__(api.CatalogStorageAdapter)
+    calls = []
+    deleted = []
+
+    def upload_once(*args):
+        calls.append(args)
+        if len(calls) == 1:
+            raise HTTPException(409, "already exists")
+        return {"filename": "tanaka.pdf"}
+
+    monkeypatch.setattr(adapter, "upload_once", upload_once)
+    monkeypatch.setattr(adapter, "delete_existing", lambda client, extension="pdf": deleted.append((client, extension)))
+
+    result = adapter.upload("tanaka", BytesIO(b"%PDF-test"), 9, "pdf", "application/pdf")
+
+    assert result == {"filename": "tanaka.pdf"}
+    assert len(calls) == 2
+    assert deleted[0] == ("tanaka", "pdf")
+
+
 def test_catalog_tus_metadata_preserves_image_content_type(monkeypatch):
     class Response:
         status_code = 201

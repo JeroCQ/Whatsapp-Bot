@@ -342,3 +342,25 @@ No cambies `PRESAVED_FILES_JSON` para reparar la subida: esa variable describe e
 archivo para Gemini; el upload utiliza `SUPABASE_URL`,
 `SUPABASE_SERVICE_ROLE_KEY`, `CATALOG_STORAGE_BUCKET` y los límites
 `DASHBOARD_MAX_CATALOG_MB`/Storage del proyecto.
+
+### Caso exacto: TUS responde 409 y DELETE responde 400 con `NoSuchKey`
+
+No es un límite de 40 MB ni una caída del worker. El backend ya transmite el archivo
+desde `UploadFile.file` en chunks de 6 MiB mediante TUS; nunca hace `await file.read()`
+del catálogo completo. El 409 activa un único reemplazo: DELETE y luego un retry.
+Supabase puede responder al DELETE con HTTP 400 pero incluir
+`statusCode=404`/`NoSuchKey`, lo cual significa que el objeto ya está ausente. Esa
+respuesta debe tratarse como éxito idempotente para permitir el retry, no como 502.
+
+El nombre final permanece fijo (`tanaka.pdf`, `tanaka.png`, etc.) y el upload registra
+`size_bytes`, duración total y MIME sin registrar contenido o secretos. El launcher
+usa keep-alive 120 segundos por defecto, configurable con
+`UVICORN_TIMEOUT_KEEP_ALIVE`; este ajuste no sustituye el timeout activo de Storage,
+que sigue controlado por `DASHBOARD_STORAGE_TIMEOUT_SECONDS` (default 300).
+
+Railway recibió completamente el request de 40 MB en el incidente observado, porque
+el backend registró `size_bytes=40652515` y llegó hasta Supabase. Por tanto, ese caso
+concreto no demuestra un límite de body inferior en el proxy Railway. Los límites del
+plan/plataforma pueden cambiar: confirma el límite vigente en la documentación o
+soporte Railway antes de aumentar `DASHBOARD_MAX_CATALOG_MB`; no se afirma aquí un
+valor global no verificado.
