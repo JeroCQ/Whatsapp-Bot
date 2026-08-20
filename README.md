@@ -84,7 +84,7 @@ Existing required variables are still needed:
 - `WA_TOKEN`
 - `WA_PHONE_NUMBER_ID`
 - `GEMINI_API_KEY`
-- Chatwoot variables used by handoff: `CHATWOOT_BASE_URL`, `CHATWOOT_API_TOKEN`, `CHATWOOT_ACCOUNT_ID`, `CHATWOOT_INBOX_ID`
+- Chatwoot variables used by handoff: `CHATWOOT_BASE_URL`, `CHATWOOT_API_TOKEN`, `CHATWOOT_ACCOUNT_ID`, `CHATWOOT_INBOX_ID`; optional `CHATWOOT_ASSIGNEE_ID` assigns every new handoff directly to one agent
 - Chatwoot webhook/media security: `CHATWOOT_WEBHOOK_SECRET`, optional `CHATWOOT_MAX_ATTACHMENT_BYTES` (default 25 MiB)
 
 ### Isolated Chatwoot configuration
@@ -94,6 +94,13 @@ Each bot deployment must use its own Chatwoot account, inbox, agent API token, w
 Create an **account webhook** for only `message_created` and `conversation_status_changed`, targeting `https://BOT-DOMAIN/chatwoot-webhook`. Chatwoot v4.16.2 signs account webhooks with the webhook's generated secret using `X-Chatwoot-Timestamp` and `X-Chatwoot-Signature`; copy that secret into `CHATWOOT_WEBHOOK_SECRET`. The signature is `sha256=HMAC-SHA256(secret, "<timestamp>.<raw JSON body>")` and requests older than five minutes are rejected. Missing or invalid signatures return 401; account/inbox mismatches return 403. The Meta callback remains `https://BOT-DOMAIN/webhook`; do not route Meta through Chatwoot's native WhatsApp channel.
 
 Never place webhook secrets or API tokens in URLs. Rotate a Chatwoot webhook secret by updating the Railway secret and the corresponding account webhook together during a controlled window. Provider logs contain only sanitized status/code/message fields. Mobile push notifications are configured on the Chatwoot installation, not in this bot.
+
+Chatwoot Cloud and a self-hosted Chatwoot are separate systems even when an
+agent uses the same email address in both. For Memo's, the mobile client must be
+logged into the custom server `https://chat.briosos.org`; a session connected to
+`app.chatwoot.com` cannot receive its conversations or notifications. See the
+[Memo's mobile-app runbook](SETUP_MEMOS.md#app-móvil-no-mezclar-chatwoot-cloud-con-el-self-hosted)
+before changing bot or webhook settings.
 
 For scalable queued processing, also set:
 

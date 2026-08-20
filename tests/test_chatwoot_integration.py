@@ -197,13 +197,34 @@ def test_attachment_size_limit(monkeypatch):
 
 def test_account_path_and_configured_inbox_creation(monkeypatch):
     captured = {}
+    monkeypatch.setattr(chatwoot_api.config, "CHATWOOT_ASSIGNEE_ID", "31")
+
     def fake_post(url, **kwargs):
         captured.update(url=url, json=kwargs["json"])
         return Response(200, {"id": 88})
+
     monkeypatch.setattr(chatwoot_api, "post", fake_post)
     assert chatwoot_api.create_conversation(77) == 88
     assert captured["url"] == "https://app.chatwoot.com/api/v1/accounts/10/conversations"
-    assert captured["json"]["inbox_id"] == 20
+    assert captured["json"] == {
+        "inbox_id": 20,
+        "contact_id": 77,
+        "status": "open",
+        "assignee_id": 31,
+    }
+
+
+def test_conversation_creation_keeps_inbox_policy_when_no_assignee(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(chatwoot_api.config, "CHATWOOT_ASSIGNEE_ID", None)
+    monkeypatch.setattr(
+        chatwoot_api,
+        "post",
+        lambda url, **kwargs: captured.update(json=kwargs["json"]) or Response(200, {"id": 88}),
+    )
+
+    assert chatwoot_api.create_conversation(77) == 88
+    assert "assignee_id" not in captured["json"]
 
 
 def test_image_catalog_is_uploaded_and_sent_as_whatsapp_image(monkeypatch):

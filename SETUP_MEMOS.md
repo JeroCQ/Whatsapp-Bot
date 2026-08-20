@@ -66,6 +66,7 @@ No conviertas el Railway de Tanaka en Memo's. Déjalo intacto y crea un segundo 
 | `CHATWOOT_INBOX_ID` | **Cambiar** | Inbox exclusivo de Memo's. |
 | `CHATWOOT_ACCOUNT_ID` | **Cambiar** | Cuenta exclusiva de Memo's. Nunca compartir la cuenta de Tanaka. |
 | `CHATWOOT_API_TOKEN` | **Cambiar** | Token del agente/integración exclusivo de Memo's. |
+| `CHATWOOT_ASSIGNEE_ID` | **Agregar** | ID numérico del agente `memos@briosos.org`; fuerza la asignación al crear cada handoff y evita depender de la política Default. |
 | `CHATWOOT_WEBHOOK_SECRET` | **Agregar/cambiar** | Secreto generado por el account webhook exclusivo de Memo's. |
 | `CHATWOOT_MAX_ATTACHMENT_BYTES` | **Agregar opcional** | Máximo de descarga; default `26214400` (25 MiB). |
 | `CHATWOOT_BASE_URL` | **Cambiar** | Raíz HTTPS de Chatwoot self-hosted, sin `/api/v1` ni `/app`. |
@@ -159,6 +160,61 @@ Orden obligatorio:
 10. Conserva Chatwoot Cloud y sus recursos durante una ventana de rollback.
 
 Las notificaciones push móviles se configuran en el stack Chatwoot, no en el bot. Como pruebas finales, confirma además que un Meta 400/401/429/5xx no programa follow-up y que ningún token aparece en logs.
+
+### App móvil: no mezclar Chatwoot Cloud con el self-hosted
+
+El correo de un agente **no une instalaciones de Chatwoot**. Una sesión de
+`app.chatwoot.com` y una sesión de `https://chat.briosos.org` son cuentas en dos
+bases de datos independientes, aunque ambas muestren `memos@briosos.org`. Por
+eso un handoff visible en `chat.briosos.org` nunca aparecerá en una app que siga
+conectada a Chatwoot Cloud; no es un problema del webhook ni del bot.
+
+La corrección más simple para Memo's es:
+
+1. Cerrar la sesión Cloud de la app móvil (o agregar otra cuenta si la versión
+   instalada permite mantener varias).
+2. En la pantalla de acceso elegir **Custom server / Self-hosted** e introducir
+   solo `https://chat.briosos.org`, sin `/app`, `/api/v1` ni el dominio Railway
+   del bot.
+3. Iniciar sesión con el usuario y la contraseña creados dentro de esa
+   instalación self-hosted. Tener el mismo correo en Cloud no reutiliza la
+   contraseña ni la sesión Cloud.
+4. Abrir la cuenta **Quesos Memo's**, habilitar las notificaciones del inbox y
+   conceder a Chatwoot el permiso de notificaciones del sistema operativo.
+5. Con la app cerrada, provocar un handoff nuevo. Confirmar primero que la
+   conversación aparece en la app y luego que llega el push.
+
+Para que la asignación no dependa del estado disponible ni de la política
+Default del inbox, configura en Railway `CHATWOOT_ASSIGNEE_ID` con el ID numérico
+del agente `memos@briosos.org`. El bot lo envía en la misma operación que crea la
+conversación: no hay una segunda llamada ni una carrera entre “creada” y
+“asignada”. Si se elimina la variable, se conserva el comportamiento anterior y
+Chatwoot vuelve a decidir la asignación.
+
+Con esa asignación determinista, la configuración menos invasiva en la app es:
+
+* **Activar:** “A conversation is assigned to you” y “A new message is created
+  in an assigned conversation”.
+* **Desactivar:** “A new conversation is created”, porque generaría un segundo
+  aviso del mismo handoff.
+* Mantener menciones y SLA solo si se usan operativamente; no son necesarios
+  para garantizar el aviso inicial.
+
+Así cada handoff genera un aviso dirigido al responsable, mientras los mensajes
+posteriores de ese cliente siguen notificándose sin alertar por conversaciones
+ajenas o duplicar la notificación de creación.
+
+Si la app instalada no ofrece servidor personalizado, o abre siempre
+`app.chatwoot.com`, no se debe mover el bot a Cloud para solucionarlo. La salida
+inmediata y de menor riesgo es instalar `https://chat.briosos.org` como PWA
+desde Chrome/Safari y habilitar sus notificaciones. Esto conserva una sola
+fuente de conversaciones y no requiere cambiar ninguna variable de Railway.
+
+Si la conversación ya aparece en la app self-hosted pero el push no llega, la
+conexión de la app quedó corregida y el problema restante pertenece al servicio
+de push de la instalación Chatwoot. Revisar su configuración móvil/push y los
+logs de Chatwoot; modificar `CHATWOOT_BASE_URL`, los webhooks de Meta o este bot
+no puede reparar esa segunda capa.
 
 ## Rollback
 
