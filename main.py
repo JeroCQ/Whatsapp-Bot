@@ -1,7 +1,8 @@
 import hashlib
+import json
 import os
 import time
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import requests
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
@@ -22,6 +23,7 @@ from database import (
     invalidate_follow_up,
     register_follow_up,
     reset_client_history,
+    recover_failed_handoff,
     resume_bot_state,
     save_message_log,
     update_chatwoot_conversation_id,
@@ -39,6 +41,8 @@ from queue_client import (
     register_follow_up,
 )
 from webhook_utils import chatwoot_event_identity, is_restart_command
+from chatwoot_security import chatwoot_scope, verify_chatwoot_signature
+from provider_errors import ProviderError, provider_error, sanitize_text
 from dashboard_api import router as dashboard_router
 
 app = FastAPI()
@@ -56,6 +60,13 @@ DEPLOYMENT_COMMIT_SHA = os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_CO
 print(f"[BOOT] WhatsApp bot code loaded. Commit: {DEPLOYMENT_COMMIT_SHA}. Scalable queue build: 2026-07-24.2")
 
 WHATSAPP_MEDIA_TYPES = {"audio", "document", "image", "sticker", "video"}
+CATALOG_FORMATS = (
+    ("pdf", "application/pdf", "document"),
+    ("jpg", "image/jpeg", "image"),
+    ("jpeg", "image/jpeg", "image"),
+    ("png", "image/png", "image"),
+    ("webp", "image/webp", "image"),
+)
 
 
 @app.get("/")
@@ -118,9 +129,12 @@ def send_whatsapp_message(to_number: str, text: str):
         "text": {"preview_url": False, "body": text},
     }
     try:
-        post(url, headers=headers, json=payload).raise_for_status()
+        response = post(url, headers=headers, json=payload)
+        if not 200 <= response.status_code < 300:
+            raise provider_error("meta", "send_text", response, (config.WA_TOKEN,))
+        return True
     except requests.exceptions.RequestException as e:
-        print(f"Error enviando WhatsApp de texto a {to_number}: {e}")
+        raise ProviderError("meta", "send_text", getattr(getattr(e, "response", None), "status_code", None), message="transport error") from e
 
 
 def send_scheduled_follow_up(phone_number: str, token: str, message: str):
@@ -174,15 +188,18 @@ def send_whatsapp_media(to_number: str, media_id: str, media_type: str, caption:
         media_type: media_payload,
     }
     try:
-        post(url, headers=headers, json=payload).raise_for_status()
+        response = post(url, headers=headers, json=payload)
+        if not 200 <= response.status_code < 300:
+            raise provider_error("meta", f"send_{media_type}", response, (config.WA_TOKEN,))
+        return True
     except requests.exceptions.RequestException as e:
-        print(f"Error enviando WhatsApp de {media_type} a {to_number}: {e}")
+        raise ProviderError("meta", f"send_{media_type}", getattr(getattr(e, "response", None), "status_code", None), message="transport error") from e
 
 
 
 def catalog_link_for_whatsapp(file_id: str, link: str) -> str:
     """Add a cache-busting query to dashboard-managed catalog links sent through Meta."""
-    if file_id != "catalogo_pdf" or link != config.catalog_public_url():
+    if file_id != "catalogo_pdf":
         return link
     try:
         response = requests.head(link, timeout=MEDIA_TIMEOUT, allow_redirects=True)
@@ -195,6 +212,24 @@ def catalog_link_for_whatsapp(file_id: str, link: str) -> str:
     query = dict(parse_qsl(parts.query, keep_blank_values=True))
     query["v"] = str(version or int(time.time()))
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+
+def current_catalog_for_whatsapp() -> tuple[str, str, str, str] | None:
+    """Find this deployment's active PDF/image catalog from public Storage metadata."""
+    for extension, expected_content_type, media_type in CATALOG_FORMATS:
+        link = config.catalog_public_url(extension=extension)
+        try:
+            response = requests.head(link, timeout=MEDIA_TIMEOUT, allow_redirects=True)
+        except requests.exceptions.RequestException:
+            continue
+        if not 200 <= response.status_code < 300:
+            continue
+        content_type = (response.headers.get("Content-Type") or expected_content_type).split(";", 1)[0].lower()
+        if content_type != expected_content_type:
+            print("[FILE CATALOG] Stored catalog has an unexpected content type")
+            return None
+        return link, content_type, media_type, extension
+    return None
 
 
 
@@ -230,68 +265,111 @@ def send_presaved_file(to_number: str, file_id: str):
         print(f"[FILE CATALOG] Ignoring unknown file id requested by AI: {file_id}")
         return
     resolved_filename = item.filename
+    media_type = item.media_type
+    catalog_content_type = "application/pdf"
     if item.media_id:
         media_reference = {"id": item.media_id}
     else:
-        resolved_link = catalog_link_for_whatsapp(file_id, item.link)
+        source_link = item.link
+        catalog_extension = "pdf"
+        if file_id == "catalogo_pdf":
+            current_catalog = current_catalog_for_whatsapp()
+            if not current_catalog:
+                print("[FILE CATALOG] No active PDF/image catalog exists for this deployment")
+                return False
+            source_link, catalog_content_type, media_type, catalog_extension = current_catalog
+        resolved_link = catalog_link_for_whatsapp(file_id, source_link)
         media_reference = {"link": resolved_link}
-        if file_id == "catalogo_pdf" and item.media_type == "document":
+        if file_id == "catalogo_pdf":
             version = dict(parse_qsl(urlsplit(resolved_link).query, keep_blank_values=True)).get("v", "")
             digest = hashlib.sha256(version.encode("utf-8")).hexdigest()[:12] if version else str(int(time.time()))
-            resolved_filename = f"catalogo-{config.BUSINESS_ID}-{digest}.pdf"
-            print(f"[FILE CATALOG] Sending dashboard catalog link={resolved_link} filename={resolved_filename}")
-            media_id = upload_public_url_to_meta_media(resolved_link, resolved_filename, "application/pdf")
-            if media_id:
-                media_reference = {"id": media_id}
-    if item.default_caption and item.media_type in {"document", "image", "video"}:
+            resolved_filename = f"catalogo-{config.BUSINESS_ID}-{digest}.{catalog_extension}"
+            print(f"[FILE CATALOG] Uploading current {media_type} catalog to Meta")
+            media_id = upload_public_url_to_meta_media(resolved_link, resolved_filename, catalog_content_type)
+            if not media_id:
+                print("[FILE CATALOG] Catalog delivery stopped because Meta upload failed")
+                return False
+            media_reference = {"id": media_id}
+    if item.default_caption and media_type in {"document", "image", "video"}:
         media_reference["caption"] = item.default_caption
-    if resolved_filename and item.media_type == "document":
+    if resolved_filename and media_type == "document":
         media_reference["filename"] = resolved_filename
     payload = {
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
         "to": to_number,
-        "type": item.media_type,
-        item.media_type: media_reference,
+        "type": media_type,
+        media_type: media_reference,
     }
     url = f"https://graph.facebook.com/v20.0/{config.WA_PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {config.WA_TOKEN}", "Content-Type": "application/json"}
     try:
-        post(url, headers=headers, json=payload).raise_for_status()
+        response = post(url, headers=headers, json=payload)
+        if not 200 <= response.status_code < 300:
+            raise provider_error("meta", "send_catalog", response, (config.WA_TOKEN,))
         print(f"[FILE CATALOG] Sent file id={file_id} to={to_number}")
+        return True
     except requests.exceptions.RequestException as exc:
-        print(f"[FILE CATALOG] Error sending file id={file_id} to={to_number}: {exc}")
+        raise ProviderError("meta", "send_catalog", getattr(getattr(exc, "response", None), "status_code", None), message="transport error") from exc
 
 
 def upload_chatwoot_attachment_to_meta(attachment_url: str, fallback_mime_type: str = "application/octet-stream", filename: str = "archivo") -> str:
     """Download a Chatwoot attachment and upload it to Meta's temporary media store."""
     try:
-        if attachment_url.startswith("/"):
-            attachment_url = f"{config.CHATWOOT_BASE_URL.rstrip('/')}{attachment_url}"
-
+        attachment_url = urljoin(config.CHATWOOT_BASE_URL + "/", attachment_url)
+        configured = urlsplit(config.CHATWOOT_BASE_URL)
+        target = urlsplit(attachment_url)
+        if target.username or target.password or target.fragment or target.scheme != "https" or target.netloc != configured.netloc:
+            raise ValueError("Chatwoot attachment URL is not on the configured HTTPS origin")
         chatwoot_headers = {"api_access_token": config.CHATWOOT_API_TOKEN}
-        res = get(attachment_url, headers=chatwoot_headers, timeout=MEDIA_TIMEOUT)
+        current_url = attachment_url
+        for _ in range(4):
+            res = get(current_url, headers=chatwoot_headers, timeout=MEDIA_TIMEOUT, allow_redirects=False, stream=True)
+            if not 300 <= res.status_code < 400:
+                break
+            redirected = urljoin(current_url, res.headers.get("Location", ""))
+            redirect_target = urlsplit(redirected)
+            if (redirect_target.username or redirect_target.password or redirect_target.fragment or
+                    redirect_target.netloc != configured.netloc or redirect_target.scheme != configured.scheme):
+                raise ValueError("Cross-origin Chatwoot attachment redirect rejected")
+            res.close()
+            current_url = redirected
+        else:
+            raise ValueError("Too many Chatwoot attachment redirects")
         res.raise_for_status()
+        declared_size = int(res.headers.get("Content-Length", "0") or 0)
+        if declared_size > config.CHATWOOT_MAX_ATTACHMENT_BYTES:
+            res.close()
+            raise ValueError("Chatwoot attachment exceeds configured size limit")
+        chunks = []
+        size = 0
+        for chunk in res.iter_content(64 * 1024):
+            size += len(chunk)
+            if size > config.CHATWOOT_MAX_ATTACHMENT_BYTES:
+                res.close()
+                raise ValueError("Chatwoot attachment exceeds configured size limit")
+            chunks.append(chunk)
+        media_bytes = b"".join(chunks)
+        res.close()
         mime_type = (res.headers.get("Content-Type") or fallback_mime_type or "application/octet-stream").split(";")[0]
 
         url = f"https://graph.facebook.com/v20.0/{config.WA_PHONE_NUMBER_ID}/media"
         headers = {"Authorization": f"Bearer {config.WA_TOKEN}"}
-        files = {"file": (filename, res.content, mime_type)}
+        files = {"file": (filename, media_bytes, mime_type)}
         data = {"messaging_product": "whatsapp"}
         response = post(url, headers=headers, files=files, data=data, timeout=MEDIA_TIMEOUT)
         print(f"[META DEBUG] Respuesta POST Media ({mime_type}) - Status: {response.status_code}")
         response.raise_for_status()
         media_id = response.json().get("id")
         if not media_id:
-            print(f"[META DEBUG] Meta no devolvió media id para adjunto de Chatwoot: {response.text}")
+            raise ProviderError("meta", "upload_chatwoot_attachment", response.status_code, message="missing media id")
         return media_id
     except requests.exceptions.RequestException as e:
         response = getattr(e, "response", None)
-        detail = response.text if response is not None else str(e)
-        print(f"Error al subir adjunto transitorio a Meta: {detail}")
+        print(f"[PROVIDER ERROR] provider=chatwoot operation=download_attachment status={getattr(response, 'status_code', None)} message=transport_error")
         return None
     except Exception as e:
-        print(f"Error al subir adjunto transitorio a Meta: {e}")
+        print(f"[PROVIDER ERROR] provider=chatwoot operation=download_attachment status=none message={sanitize_text(e, (config.CHATWOOT_API_TOKEN, config.WA_TOKEN))}")
         return None
 
 
@@ -307,10 +385,12 @@ def _create_handoff_ticket_if_needed(sender_phone: str, sender_name: str, new_st
     display_name = f"{sender_name} (+{sender_phone})"
     contact_id = chatwoot_api.get_or_create_contact(sender_phone, name=display_name)
     if not contact_id:
+        recover_failed_handoff(sender_phone)
         return
 
     conv_id = chatwoot_api.create_conversation(contact_id)
     if not conv_id:
+        recover_failed_handoff(sender_phone)
         return
 
     update_chatwoot_conversation_id(sender_phone, conv_id)
@@ -413,11 +493,13 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
     print("[DEBUG] 6. Respuesta IA generada")
 
     if ai_turn:
+        primary_delivered = not bool(ai_turn.response)
         if ai_turn.send_files_before_response:
             for file_id in ai_turn.requested_files:
                 send_presaved_file(sender_phone, file_id)
         if ai_turn.response:
             send_whatsapp_message(sender_phone, ai_turn.response)
+            primary_delivered = True
         if not ai_turn.send_files_before_response:
             for file_id in ai_turn.requested_files:
                 send_presaved_file(sender_phone, file_id)
@@ -425,7 +507,7 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
             save_message_log(sender_phone, "system", f"Archivos enviados: {', '.join(ai_turn.requested_files)}")
         new_state = get_or_create_customer_state(sender_phone)
         _create_handoff_ticket_if_needed(sender_phone, sender_name, new_state, effective_media_id, message_body, mime_type, filename)
-        if not new_state.get("is_paused"):
+        if primary_delivered and not new_state.get("is_paused"):
             schedule_follow_up(sender_phone, ai_turn.follow_up_message, ai_turn.follow_up_delay_minutes)
 
 
@@ -433,6 +515,9 @@ def process_chatwoot_event(data: dict, event_id: str = None):
     """Process a Chatwoot webhook event from the queue/worker."""
     started_at = time.perf_counter()
     try:
+        account_id, inbox_id = chatwoot_scope(data)
+        if account_id != str(config.CHATWOOT_ACCOUNT_ID) or inbox_id != str(config.CHATWOOT_INBOX_ID):
+            raise ValueError("Chatwoot event scope does not match this deployment")
         event = data.get("event")
         if event == "message_created" and data.get("message_type") == "outgoing" and not data.get("private", False):
             conv_id = data.get("conversation", {}).get("id")
@@ -551,7 +636,21 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
 
 @app.post("/chatwoot-webhook")
 async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
-    data = await request.json()
+    raw_body = await request.body()
+    if not verify_chatwoot_signature(
+        raw_body,
+        request.headers.get("X-Chatwoot-Timestamp", ""),
+        request.headers.get("X-Chatwoot-Signature", ""),
+        config.CHATWOOT_WEBHOOK_SECRET or "",
+    ):
+        raise HTTPException(status_code=401, detail="Invalid Chatwoot webhook signature")
+    try:
+        data = json.loads(raw_body)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    account_id, inbox_id = chatwoot_scope(data)
+    if account_id != str(config.CHATWOOT_ACCOUNT_ID) or inbox_id != str(config.CHATWOOT_INBOX_ID):
+        raise HTTPException(status_code=403, detail="Chatwoot account or inbox mismatch")
     event_id = chatwoot_event_identity(data)
     conv_id = data.get("conversation", {}).get("id") or data.get("id")
     if not claim_webhook_event("chatwoot", event_id, str(conv_id) if conv_id else None):
@@ -563,11 +662,11 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
 
 @app.post("/")
 async def root_webhook_dispatcher(request: Request, background_tasks: BackgroundTasks):
-    """Accept webhook POSTs sent to root and dispatch them to the proper handler."""
+    """Retain only the legacy Meta root callback; Chatwoot has an authenticated route."""
     data = await request.json()
     if data.get("object") == "whatsapp_business_account":
         return await receive_webhook(request, background_tasks)
     if data.get("event"):
-        return await chatwoot_webhook(request, background_tasks)
+        raise HTTPException(status_code=404, detail="Use /chatwoot-webhook")
     print(f"[WEBHOOK DEBUG] POST / payload no reconocido: keys={list(data.keys())}")
     return {"status": "ignored", "reason": "unrecognized_root_webhook_payload"}

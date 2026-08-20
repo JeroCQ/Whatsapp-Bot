@@ -32,11 +32,11 @@ No conviertas el Railway de Tanaka en Memo's. Déjalo intacto y crea un segundo 
 
 ## 3. Chatwoot
 
-1. En la instalación de Chatwoot crea un inbox/API channel exclusivo para Memo's. No uses el inbox de Tanaka.
+1. En la instalación de Chatwoot crea una **cuenta separada** y un inbox/API channel exclusivo para Memo's. No uses la cuenta, inbox ni agentes de Tanaka.
 2. Copia el ID numérico de la cuenta → `CHATWOOT_ACCOUNT_ID` y el ID numérico del inbox nuevo → `CHATWOOT_INBOX_ID`.
-3. Desde el perfil del agente/integración que atenderá Memo's copia el access token → `CHATWOOT_API_TOKEN`.
+3. Desde el perfil de un agente/integración exclusivo de Memo's copia el access token → `CHATWOOT_API_TOKEN`.
 4. Usa la raíz de la instalación, sin `/api/v1` al final, como `CHATWOOT_BASE_URL`.
-5. Configura en Chatwoot el webhook del inbox hacia `https://DOMINIO-MEMOS/chatwoot-webhook` para que las respuestas humanas y el cierre del ticket regresen al bot.
+5. Crea un account webhook suscrito a `message_created` y `conversation_status_changed` hacia `https://DOMINIO-MEMOS/chatwoot-webhook`. Copia su secreto generado a `CHATWOOT_WEBHOOK_SECRET`; no lo pongas en la URL.
 
 ## 4. Railway nuevo
 
@@ -64,9 +64,11 @@ No conviertas el Railway de Tanaka en Memo's. Déjalo intacto y crea un segundo 
 | `WA_PHONE_NUMBER_ID`, `WA_TOKEN` | **Cambiar** | Número y token nuevos de Meta. |
 | `WA_VERIFY_TOKEN` | **Cambiar** | Secreto aleatorio nuevo; debe coincidir con Meta. |
 | `CHATWOOT_INBOX_ID` | **Cambiar** | Inbox exclusivo de Memo's. |
-| `CHATWOOT_ACCOUNT_ID` | **Revisar** | Igual solo si usan la misma cuenta Chatwoot; si no, cambiar. |
-| `CHATWOOT_API_TOKEN` | **Revisar/cambiar recomendado** | Token del agente/integración con acceso al inbox Memo's. |
-| `CHATWOOT_BASE_URL` | **Conservar** | Igual si sigue siendo la misma instalación Chatwoot. |
+| `CHATWOOT_ACCOUNT_ID` | **Cambiar** | Cuenta exclusiva de Memo's. Nunca compartir la cuenta de Tanaka. |
+| `CHATWOOT_API_TOKEN` | **Cambiar** | Token del agente/integración exclusivo de Memo's. |
+| `CHATWOOT_WEBHOOK_SECRET` | **Agregar/cambiar** | Secreto generado por el account webhook exclusivo de Memo's. |
+| `CHATWOOT_MAX_ATTACHMENT_BYTES` | **Agregar opcional** | Máximo de descarga; default `26214400` (25 MiB). |
+| `CHATWOOT_BASE_URL` | **Cambiar** | Raíz HTTPS de Chatwoot self-hosted, sin `/api/v1` ni `/app`. |
 | `GEMINI_API_KEY` | **Conservar o cambiar** | Puede compartirse; una clave/proyecto separado aísla cuota y facturación. |
 | `GEMINI_DASHBOARD_MODEL` | **Conservar** | Puede omitirse para usar el default del código. |
 | `GITHUB_TOKEN` | **Conservar o cambiar** | Token con permiso de contenido sobre este repo; queda solo en Railway. |
@@ -88,13 +90,13 @@ También puedes agregar `DASHBOARD_FORMAT_TIMEOUT_SECONDS=90`. No configures `RU
 
 ### `PRESAVED_FILES_JSON` para Memo's
 
-La URL es un placeholder válido porque el backend la reemplaza en runtime por `SUPABASE_URL/storage/v1/object/public/catalogos/memos.pdf`:
+La URL es un placeholder válido porque el backend busca en runtime el único catálogo vigente como `catalogos/memos.{pdf|jpg|jpeg|png|webp}` y usa su MIME real para enviarlo como documento o imagen:
 
 ```json
 [{"id":"catalogo_pdf","description":"Catálogo de Quesos Memo's; enviarlo cuando pidan el catálogo, precios generales o quieran ver todos los productos.","type":"document","link":"https://example.com/catalogo.pdf","filename":"catalogo-quesos-memos.pdf","caption":"Patrón, aquí tienes el catálogo de Quesos Memo's 🧀"}]
 ```
 
-Después del primer deploy, entra al perfil Memo's de Lovable y sube el PDF real. Verifica en Supabase Storage que quede exactamente como `catalogos/memos.pdf`.
+Después del primer deploy, entra al perfil Memo's de Lovable y sube el PDF o imagen real. Verifica en Supabase Storage que exista exactamente un objeto `catalogos/memos.{ext}` con la extensión correcta.
 
 ## 5. Prompt para Lovable
 
@@ -126,8 +128,8 @@ En los secretos server-side de Lovable asigna:
 ## 6. Pruebas de aceptación y orden seguro
 
 1. Desde Lovable/Memo's, lee la instrucción y confirma que menciona Quesos Memo's; desde Tanaka confirma que sigue mostrando Tanaka.
-2. Sube el catálogo Memo's y comprueba `catalogos/memos.pdf`; confirma que el catálogo Tanaka no cambió.
-3. Escribe al WhatsApp Memo's “¿qué productos tienen?” y confirma que llega el PDF Memo's.
+2. Sube el catálogo Memo's y comprueba que solo exista `catalogos/memos.{pdf|jpg|jpeg|png|webp}`; confirma que el catálogo Tanaka no cambió.
+3. Escribe al WhatsApp Memo's “¿qué productos tienen?” y confirma que llega el PDF o imagen Memo's con el MIME correcto.
 4. Prueba una cotización menor a $400.000: no debe hacer handoff.
 5. Prueba una cotización igual/superior a $400.000: debe crear conversación en el inbox Memo's.
 6. Envía una imagen: debe ir al inbox Memo's, nunca al de Tanaka.
@@ -135,6 +137,29 @@ En los secretos server-side de Lovable asigna:
 8. Prueba follow-up con `FOLLOW_UP_TEST_DELAY_SECONDS=10`; después elimina esa variable.
 9. Solo cuando todo pase anuncia el número Memo's. No hagas ningún redeploy de Tanaka durante esta transición.
 
+## 7. Migración segura a Chatwoot self-hosted
+
+| Despliegue | Base URL | Cuenta / inbox / token / webhook secret |
+|---|---|---|
+| Tanaka durante transición | `https://app.chatwoot.com` | Recursos Cloud actuales de Tanaka; registrar los cuatro valores antes de migrar. |
+| Memo's self-hosted | Raíz HTTPS Railway self-hosted | Todos exclusivos de Memo's. |
+| Tanaka self-hosted | La misma raíz HTTPS Railway | Cuenta, inbox, agente/token y webhook exclusivos de Tanaka. |
+
+Orden obligatorio:
+
+1. Despliega y valida Chatwoot self-hosted fuera de este repositorio.
+2. Crea la cuenta, inbox, agente/token y account webhook aislados de Memo's.
+3. Despliega esta versión endurecida del bot con todos los secretos de Memo's.
+4. Apunta solo el bot Memo's a la raíz self-hosted.
+5. Valida texto, imagen, respuesta del agente, adjunto y resolución/reanudación de Memo's; prueba también firma inválida y cuenta/inbox cruzados.
+6. Crea recursos self-hosted separados para Tanaka.
+7. Registra de forma segura las variables Cloud actuales de Tanaka: raíz, account ID, inbox ID, API token y webhook secret.
+8. Cambia únicamente las variables Chatwoot del Railway Tanaka.
+9. Valida el flujo completo de Tanaka y confirma que Memo's no recibió datos.
+10. Conserva Chatwoot Cloud y sus recursos durante una ventana de rollback.
+
+Las notificaciones push móviles se configuran en el stack Chatwoot, no en el bot. Como pruebas finales, confirma además que un Meta 400/401/429/5xx no programa follow-up y que ningún token aparece en logs.
+
 ## Rollback
 
-Si algo falla, desconecta temporalmente solo el webhook de Meta Memo's o revierte el último deploy del Railway Memo's. No cambies Tanaka. Supabase Memo's y su inbox pueden conservarse mientras corriges y vuelves a desplegar.
+Si Memo's falla, desconecta temporalmente solo su webhook de Meta o revierte su último deploy. Si Tanaka falla después de migrar, restaura únicamente sus variables Cloud registradas y su account webhook Cloud; no borres ni revoques recursos Cloud durante la ventana. No cambies las variables, Supabase, Redis, cola ni webhooks del otro negocio.

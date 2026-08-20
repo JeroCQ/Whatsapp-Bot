@@ -48,14 +48,17 @@ warns that it may prefer it. Full-system-instruction formatting can take longer
 than proposal generation; use `DASHBOARD_FORMAT_TIMEOUT_SECONDS` (default `90`)
 to control the save endpoint timeout separately from other dashboard calls.
 
-Catalog PDFs are stored outside GitHub in Supabase Storage because real catalogs can
+Catalog PDFs and images are stored outside GitHub in Supabase Storage because real catalogs can
 be tens of megabytes. Create a public Supabase Storage bucket named `catalogos`
 (or set `CATALOG_STORAGE_BUCKET`) and let the dashboard upload to the fixed key
-`{client_name}.pdf`, for example `tanaka.pdf`. The API uses Supabase resumable/TUS
+`{client_name}.{ext}`, for example `tanaka.pdf` or `memos.png`. Accepted formats are
+PDF, JPEG, PNG, and WebP. Replacing the format removes the previous client object so
+only one active catalog remains. The API uses Supabase resumable/TUS
 uploads through the direct `*.storage.supabase.co` hostname so files larger than
 the standard upload limit can succeed. The API returns the stable public URL from
 `/api/upload-catalog` and `/api/current-catalog`; the bot also resolves
-`catalogo_pdf` to that same deterministic URL, so the old Railway `catalogo_tanaka`
+`catalogo_pdf` to the active deterministic URL and sends it as a WhatsApp document
+or image according to its stored MIME type, so the old Railway `catalogo_tanaka`
 link is no longer the source of truth. Keep `catalogo_tanaka` only to declare the
 file id/description/caption for Gemini; its `link` field may remain as any valid
 HTTPS placeholder because the bot overrides the `catalogo_pdf` link at runtime with
@@ -82,6 +85,15 @@ Existing required variables are still needed:
 - `WA_PHONE_NUMBER_ID`
 - `GEMINI_API_KEY`
 - Chatwoot variables used by handoff: `CHATWOOT_BASE_URL`, `CHATWOOT_API_TOKEN`, `CHATWOOT_ACCOUNT_ID`, `CHATWOOT_INBOX_ID`
+- Chatwoot webhook/media security: `CHATWOOT_WEBHOOK_SECRET`, optional `CHATWOOT_MAX_ATTACHMENT_BYTES` (default 25 MiB)
+
+### Isolated Chatwoot configuration
+
+Each bot deployment must use its own Chatwoot account, inbox, agent API token, webhook secret, Supabase project, Redis instance, and `QUEUE_NAME`. `CHATWOOT_BASE_URL` may point to the shared installation, but it must be the HTTPS installation root (for example `https://app.chatwoot.com` or `https://chatwoot-production-example.up.railway.app`), with no `/api/v1`, `/app`, query, fragment, credentials, or trailing path.
+
+Create an **account webhook** for only `message_created` and `conversation_status_changed`, targeting `https://BOT-DOMAIN/chatwoot-webhook`. Chatwoot v4.16.2 signs account webhooks with the webhook's generated secret using `X-Chatwoot-Timestamp` and `X-Chatwoot-Signature`; copy that secret into `CHATWOOT_WEBHOOK_SECRET`. The signature is `sha256=HMAC-SHA256(secret, "<timestamp>.<raw JSON body>")` and requests older than five minutes are rejected. Missing or invalid signatures return 401; account/inbox mismatches return 403. The Meta callback remains `https://BOT-DOMAIN/webhook`; do not route Meta through Chatwoot's native WhatsApp channel.
+
+Never place webhook secrets or API tokens in URLs. Rotate a Chatwoot webhook secret by updating the Railway secret and the corresponding account webhook together during a controlled window. Provider logs contain only sanitized status/code/message fields. Mobile push notifications are configured on the Chatwoot installation, not in this bot.
 
 For scalable queued processing, also set:
 
