@@ -1,5 +1,7 @@
 import mimetypes
+import subprocess
 
+import imageio_ffmpeg
 import requests
 from config import config
 from http_client import MEDIA_TIMEOUT, get, post, put
@@ -184,14 +186,60 @@ def extension_from_mime(mime_type: str, default: str = ".ogg"):
     return mimetypes.guess_extension(mime_type.split(";")[0].strip()) or default
 
 
-def send_audio_to_chatwoot(conversation_id: int, audio_bytes: bytes, mime_type: str = "audio/ogg"):
-    """Sube un audio de WhatsApp como mensaje entrante visible al asesor humano."""
-    extension = extension_from_mime(mime_type)
-    return send_media_to_chatwoot(
-        conversation_id,
-        "🎙️ Nota de voz del cliente",
-        audio_bytes,
-        mime_type or "audio/ogg",
-        f"nota_de_voz{extension}",
-        False,
-    )
+def _prepare_audio_for_chatwoot(audio_bytes: bytes, mime_type: str) -> tuple[bytes, str, str]:
+    """Return audio in a format browsers can play reliably.
+
+    WhatsApp voice notes are commonly Ogg/Opus. Chatwoot can store those files,
+    but browser playback support is inconsistent, so transcode unsupported input
+    to MP3 with ffmpeg. Keeping this helper byte-oriented also lets callers reuse
+    media already downloaded for transcription.
+    """
+    source_mime = (mime_type or "audio/ogg").split(";", 1)[0].strip().lower()
+    compatible = {
+        "audio/mpeg": ".mp3",
+        "audio/mp3": ".mp3",
+        "audio/mp4": ".m4a",
+        "audio/x-m4a": ".m4a",
+        "audio/aac": ".aac",
+    }
+    if source_mime in compatible:
+        normalized_mime = "audio/mpeg" if source_mime == "audio/mp3" else source_mime
+        return audio_bytes, normalized_mime, compatible[source_mime]
+
+    ffmpeg_executable = imageio_ffmpeg.get_ffmpeg_exe()
+    converted = subprocess.run(
+        [ffmpeg_executable, "-hide_banner", "-loglevel", "error", "-i", "pipe:0",
+         "-vn", "-codec:a", "libmp3lame", "-f", "mp3", "pipe:1"],
+        input=audio_bytes,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    ).stdout
+    if not converted:
+        raise ValueError("ffmpeg produced empty audio")
+    return converted, "audio/mpeg", ".mp3"
+
+
+def send_audio_to_chatwoot(conversation_id: int, audio_bytes: bytes, mime_type: str = "audio/ogg",
+                           content: str = "🎙️ Nota de voz del cliente", is_private: bool = False):
+    """Prepare and upload a voice note without ever dropping the original audio."""
+    source_mime = (mime_type or "audio/ogg").split(";", 1)[0].strip().lower()
+    try:
+        prepared_bytes, prepared_mime, extension = _prepare_audio_for_chatwoot(audio_bytes, source_mime)
+        return send_media_to_chatwoot(
+            conversation_id, content, prepared_bytes, prepared_mime,
+            f"nota_de_voz{extension}", is_private,
+        )
+    except (OSError, RuntimeError, subprocess.SubprocessError, ValueError) as exc:
+        print(f"[CHATWOOT AUDIO] No se pudo convertir la nota de voz: {exc}")
+        extension = extension_from_mime(source_mime, ".ogg")
+        response = send_media_to_chatwoot(
+            conversation_id, content, audio_bytes, source_mime,
+            f"nota_de_voz_original{extension}", is_private,
+        )
+        send_message_to_chatwoot(
+            conversation_id,
+            "⚠️ La nota de voz se adjuntó en su formato original. La reproducción en línea puede no estar disponible; descárgala para escucharla.",
+            is_private=is_private,
+        )
+        return response

@@ -122,6 +122,99 @@ def test_handoff_summary_and_media_alert_are_private(monkeypatch):
     assert events[1][2]["is_private"] is True
 
 
+def test_audio_handoff_reuses_transcription_download_and_uploads_playable_private_audio(monkeypatch):
+    _mock_handoff_dependencies(monkeypatch)
+    uploads = []
+    monkeypatch.setattr(
+        chatwoot_api, "download_meta_media",
+        lambda media_id: pytest.fail("handoff downloaded audio a second time"),
+    )
+    monkeypatch.setattr(chatwoot_api, "send_message_to_chatwoot", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        chatwoot_api, "_prepare_audio_for_chatwoot",
+        lambda data, mime: (b"converted-mp3", "audio/mpeg", ".mp3"),
+    )
+    monkeypatch.setattr(
+        chatwoot_api, "send_media_to_chatwoot",
+        lambda *args, **kwargs: uploads.append((args, kwargs)) or Response(200),
+    )
+
+    main._create_handoff_ticket_if_needed(
+        "57300", "Cliente", {"is_paused": True, "handoff_reason": "Escuchar audio"},
+        "audio-1", "transcripción", "audio/ogg; codecs=opus", None,
+        effective_media_type="audio", media_bytes=b"original-ogg",
+        downloaded_mime_type="audio/ogg; codecs=opus",
+    )
+
+    assert uploads[0][0][2] == b"converted-mp3"
+    assert uploads[0][0][3] == "audio/mpeg"
+    assert uploads[0][0][4].endswith(".mp3")
+    assert uploads[0][0][5] is True
+
+
+def test_audio_conversion_failure_preserves_original_and_visibility(monkeypatch):
+    uploads = []
+    notices = []
+    monkeypatch.setattr(
+        chatwoot_api, "_prepare_audio_for_chatwoot",
+        lambda *args: (_ for _ in ()).throw(OSError("ffmpeg unavailable")),
+    )
+    monkeypatch.setattr(
+        chatwoot_api, "send_media_to_chatwoot",
+        lambda *args, **kwargs: uploads.append((args, kwargs)) or Response(200),
+    )
+    monkeypatch.setattr(
+        chatwoot_api, "send_message_to_chatwoot",
+        lambda *args, **kwargs: notices.append((args, kwargs)),
+    )
+
+    chatwoot_api.send_audio_to_chatwoot(
+        34, b"original-ogg", "audio/ogg; codecs=opus", content="voice", is_private=False
+    )
+
+    assert uploads[0][0][2:4] == (b"original-ogg", "audio/ogg")
+    assert uploads[0][0][4].startswith("nota_de_voz_original.")
+    assert uploads[0][0][5] is False
+    assert "reproducción en línea puede no estar disponible" in notices[0][0][1]
+    assert notices[0][1]["is_private"] is False
+
+
+def test_audio_conversion_uses_bundled_ffmpeg(monkeypatch):
+    command = []
+    monkeypatch.setattr(chatwoot_api.imageio_ffmpeg, "get_ffmpeg_exe", lambda: "/bundled/ffmpeg")
+    monkeypatch.setattr(
+        chatwoot_api.subprocess, "run",
+        lambda args, **kwargs: command.extend(args) or types.SimpleNamespace(stdout=b"mp3"),
+    )
+
+    prepared, mime_type, extension = chatwoot_api._prepare_audio_for_chatwoot(
+        b"ogg-opus", "audio/ogg; codecs=opus"
+    )
+
+    assert command[0] == "/bundled/ffmpeg"
+    assert prepared == b"mp3"
+    assert mime_type == "audio/mpeg"
+    assert extension == ".mp3"
+
+
+def test_paused_conversation_routes_audio_through_audio_uploader(monkeypatch):
+    sent = []
+    monkeypatch.setattr(main, "invalidate_follow_up", lambda *args: None)
+    monkeypatch.setattr(main, "get_or_create_customer_state", lambda *args: {"is_paused": True, "chatwoot_conversation_id": 44})
+    monkeypatch.setattr(main, "save_message_log", lambda *args: None)
+    monkeypatch.setattr(chatwoot_api, "download_meta_media", lambda media_id: (b"ogg", "audio/ogg; codecs=opus"))
+    monkeypatch.setattr(chatwoot_api, "send_media_to_chatwoot", lambda *args, **kwargs: pytest.fail("generic uploader used"))
+    monkeypatch.setattr(chatwoot_api, "send_audio_to_chatwoot", lambda *args, **kwargs: sent.append((args, kwargs)))
+
+    main._process_whatsapp_message_unlocked(
+        "57300", "Cliente", "", media_id="audio-1", is_audio=True,
+        audio_media_id="audio-1", media_type="audio", mime_type="audio/ogg; codecs=opus",
+    )
+
+    assert sent[0][0][0:3] == (44, b"ogg", "audio/ogg; codecs=opus")
+    assert sent[0][1]["is_private"] is False
+
+
 class Response:
     def __init__(self, status, body=None, headers=None, chunks=None):
         self.status_code = status

@@ -400,7 +400,7 @@ def upload_chatwoot_attachment_to_meta(attachment_url: str, fallback_mime_type: 
         return None
 
 
-def _create_handoff_ticket_if_needed(sender_phone: str, sender_name: str, new_state: dict, effective_media_id: str, message_body: str, mime_type: str, filename: str):
+def _create_handoff_ticket_if_needed(sender_phone: str, sender_name: str, new_state: dict, effective_media_id: str, message_body: str, mime_type: str, filename: str, effective_media_type: str = None, media_bytes: bytes = None, downloaded_mime_type: str = None):
     if not new_state["is_paused"] or new_state.get("chatwoot_conversation_id"):
         return
 
@@ -433,12 +433,17 @@ def _create_handoff_ticket_if_needed(sender_phone: str, sender_name: str, new_st
     context_details = f"**Resumen de últimos mensajes:**\n{context_str}"
 
     if effective_media_id:
-        file_bytes, downloaded_mime = chatwoot_api.download_meta_media(effective_media_id)
-        final_mime_type = mime_type or downloaded_mime or "application/octet-stream"
+        file_bytes, downloaded_mime = (media_bytes, downloaded_mime_type) if media_bytes is not None else chatwoot_api.download_meta_media(effective_media_id)
+        final_mime_type = (downloaded_mime or mime_type or "audio/ogg") if effective_media_type == "audio" else (mime_type or downloaded_mime or "application/octet-stream")
         extension = chatwoot_api.extension_from_mime(final_mime_type, ".bin")
         chatwoot_api.send_message_to_chatwoot(conv_id, context_details, is_private=True)
         if file_bytes:
-            chatwoot_api.send_media_to_chatwoot(conv_id, short_alert, file_bytes, final_mime_type, filename or f"archivo_cliente{extension}", is_private=True)
+            if effective_media_type == "audio":
+                chatwoot_api.send_audio_to_chatwoot(
+                    conv_id, file_bytes, final_mime_type, content=short_alert, is_private=True
+                )
+            else:
+                chatwoot_api.send_media_to_chatwoot(conv_id, short_alert, file_bytes, final_mime_type, filename or f"archivo_cliente{extension}", is_private=True)
         else:
             chatwoot_api.send_message_to_chatwoot(conv_id, short_alert + " *(Error descargando el adjunto)*", is_private=True)
     else:
@@ -490,7 +495,7 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
             return
         if effective_media_id:
             file_bytes, downloaded_mime = chatwoot_api.download_meta_media(effective_media_id)
-            final_mime_type = mime_type or downloaded_mime or "application/octet-stream"
+            final_mime_type = (downloaded_mime or mime_type or "audio/ogg") if effective_media_type == "audio" else (mime_type or downloaded_mime or "application/octet-stream")
             extension = chatwoot_api.extension_from_mime(final_mime_type, ".bin")
             final_filename = filename or f"archivo_cliente{extension}"
             label = "📎 El usuario envió un archivo"
@@ -502,13 +507,20 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
                 label = "🎥 El usuario envió un video"
             texto_chatwoot = f"{label}: {message_body}" if message_body else label
             if file_bytes:
-                chatwoot_api.send_media_to_chatwoot(conv_id, texto_chatwoot, file_bytes, final_mime_type, final_filename, is_private=False)
+                if effective_media_type == "audio":
+                    chatwoot_api.send_audio_to_chatwoot(
+                        conv_id, file_bytes, final_mime_type, content=texto_chatwoot, is_private=False
+                    )
+                else:
+                    chatwoot_api.send_media_to_chatwoot(conv_id, texto_chatwoot, file_bytes, final_mime_type, final_filename, is_private=False)
             else:
                 chatwoot_api.send_message_to_chatwoot(conv_id, f"{label} [Error al descargar adjunto]. Texto: {message_body}", is_private=False)
         else:
             chatwoot_api.send_message_to_chatwoot(conv_id, message_body, is_private=False)
         return
 
+    audio_bytes = None
+    downloaded_mime_type = None
     if is_audio:
         print("[DEBUG] 5. Audio recibido con bot activo. Descargando y transcribiendo...")
         audio_bytes, downloaded_mime_type = chatwoot_api.download_meta_media(effective_media_id) if effective_media_id else (None, None)
@@ -537,7 +549,10 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
         if ai_turn.requested_files:
             save_message_log(sender_phone, "system", f"Archivos enviados: {', '.join(ai_turn.requested_files)}")
         new_state = get_or_create_customer_state(sender_phone)
-        _create_handoff_ticket_if_needed(sender_phone, sender_name, new_state, effective_media_id, message_body, mime_type, filename)
+        _create_handoff_ticket_if_needed(
+            sender_phone, sender_name, new_state, effective_media_id, message_body,
+            mime_type, filename, effective_media_type, audio_bytes, downloaded_mime_type,
+        )
         if primary_delivered and not new_state.get("is_paused"):
             schedule_follow_up(sender_phone, ai_turn.follow_up_message, ai_turn.follow_up_delay_minutes)
 
