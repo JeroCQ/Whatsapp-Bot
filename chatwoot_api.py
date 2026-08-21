@@ -1,6 +1,7 @@
 import mimetypes
 import subprocess
 
+import imageio_ffmpeg
 import requests
 from config import config
 from http_client import MEDIA_TIMEOUT, get, post, put
@@ -205,8 +206,9 @@ def _prepare_audio_for_chatwoot(audio_bytes: bytes, mime_type: str) -> tuple[byt
         normalized_mime = "audio/mpeg" if source_mime == "audio/mp3" else source_mime
         return audio_bytes, normalized_mime, compatible[source_mime]
 
+    ffmpeg_executable = imageio_ffmpeg.get_ffmpeg_exe()
     converted = subprocess.run(
-        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "pipe:0",
+        [ffmpeg_executable, "-hide_banner", "-loglevel", "error", "-i", "pipe:0",
          "-vn", "-codec:a", "libmp3lame", "-f", "mp3", "pipe:1"],
         input=audio_bytes,
         stdout=subprocess.PIPE,
@@ -228,7 +230,7 @@ def send_audio_to_chatwoot(conversation_id: int, audio_bytes: bytes, mime_type: 
             conversation_id, content, prepared_bytes, prepared_mime,
             f"nota_de_voz{extension}", is_private,
         )
-    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+    except (OSError, RuntimeError, subprocess.SubprocessError, ValueError) as exc:
         print(f"[CHATWOOT AUDIO] No se pudo convertir la nota de voz: {exc}")
         extension = extension_from_mime(source_mime, ".ogg")
         response = send_media_to_chatwoot(

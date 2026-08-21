@@ -179,6 +179,24 @@ def test_audio_conversion_failure_preserves_original_and_visibility(monkeypatch)
     assert notices[0][1]["is_private"] is False
 
 
+def test_audio_conversion_uses_bundled_ffmpeg(monkeypatch):
+    command = []
+    monkeypatch.setattr(chatwoot_api.imageio_ffmpeg, "get_ffmpeg_exe", lambda: "/bundled/ffmpeg")
+    monkeypatch.setattr(
+        chatwoot_api.subprocess, "run",
+        lambda args, **kwargs: command.extend(args) or types.SimpleNamespace(stdout=b"mp3"),
+    )
+
+    prepared, mime_type, extension = chatwoot_api._prepare_audio_for_chatwoot(
+        b"ogg-opus", "audio/ogg; codecs=opus"
+    )
+
+    assert command[0] == "/bundled/ffmpeg"
+    assert prepared == b"mp3"
+    assert mime_type == "audio/mpeg"
+    assert extension == ".mp3"
+
+
 def test_paused_conversation_routes_audio_through_audio_uploader(monkeypatch):
     sent = []
     monkeypatch.setattr(main, "invalidate_follow_up", lambda *args: None)
