@@ -559,6 +559,13 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
             schedule_follow_up(sender_phone, ai_turn.follow_up_message, ai_turn.follow_up_delay_minutes)
 
 
+def resolved_customer_message() -> str:
+    """Return the closing message for the business served by this deployment."""
+    if config.BUSINESS_ID == "tanaka":
+        return "Gracias por elegirnos, quedo por aquí super pendiente de lo que necesites ☺️"
+    return "✅ Tu solicitud ha sido resuelta. Si necesitas algo más, envíame un mensaje."
+
+
 def process_chatwoot_event(data: dict, event_id: str = None):
     """Process a Chatwoot webhook event from the queue/worker."""
     started_at = time.perf_counter()
@@ -601,7 +608,7 @@ def process_chatwoot_event(data: dict, event_id: str = None):
             phone = resume_bot_state(conv_id) if conv_id else None
             if phone:
                 save_message_log(phone, "system", "RESOLVED: Conversación cerrada por el asesor.")
-                send_whatsapp_message(phone, "✅ Tu solicitud ha sido resuelta. Si necesitas algo más, envíame un mensaje.")
+                send_whatsapp_message(phone, resolved_customer_message())
                 print(f"[CHATWOOT EVENT] Bot resumed phone={phone} conversation_id={conv_id}")
             else:
                 print(f"[CHATWOOT EVENT WARN] No paused customer found for resolved conversation_id={conv_id}")
