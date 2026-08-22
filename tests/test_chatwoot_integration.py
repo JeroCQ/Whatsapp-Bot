@@ -20,6 +20,7 @@ os.environ.setdefault("CHATWOOT_BASE_URL", "https://app.chatwoot.com")
 os.environ.setdefault("CHATWOOT_API_TOKEN", "chatwoot-secret-token")
 os.environ.setdefault("CHATWOOT_ACCOUNT_ID", "10")
 os.environ.setdefault("CHATWOOT_INBOX_ID", "20")
+os.environ.setdefault("CHATWOOT_ASSIGNMENT_MODE", "automatic")
 os.environ.setdefault("CHATWOOT_WEBHOOK_SECRET", "webhook-secret")
 
 fake_bot = types.ModuleType("bot")
@@ -344,6 +345,7 @@ def test_attachment_size_limit(monkeypatch):
 
 def test_account_path_and_configured_inbox_creation(monkeypatch, capsys):
     captured = {}
+    monkeypatch.setattr(chatwoot_api.config, "CHATWOOT_ASSIGNMENT_MODE", "fixed")
     monkeypatch.setattr(chatwoot_api.config, "CHATWOOT_ASSIGNEE_ID", "31")
 
     def fake_post(url, **kwargs):
@@ -359,12 +361,14 @@ def test_account_path_and_configured_inbox_creation(monkeypatch, capsys):
         "status": "open",
         "assignee_id": 31,
     }
-    assert "requested_assignee_id=31 response_assignee_id=31" in capsys.readouterr().out
+    assert "assignment_mode=fixed requested_assignee_id=31 response_assignee_id=31" in capsys.readouterr().out
 
 
-def test_conversation_creation_keeps_inbox_policy_when_no_assignee(monkeypatch):
+@pytest.mark.parametrize("rollback_assignee", [None, "31"])
+def test_automatic_conversation_creation_uses_inbox_policy(monkeypatch, capsys, rollback_assignee):
     captured = {}
-    monkeypatch.setattr(chatwoot_api.config, "CHATWOOT_ASSIGNEE_ID", None)
+    monkeypatch.setattr(chatwoot_api.config, "CHATWOOT_ASSIGNMENT_MODE", "automatic")
+    monkeypatch.setattr(chatwoot_api.config, "CHATWOOT_ASSIGNEE_ID", rollback_assignee)
     monkeypatch.setattr(
         chatwoot_api,
         "post",
@@ -373,6 +377,7 @@ def test_conversation_creation_keeps_inbox_policy_when_no_assignee(monkeypatch):
 
     assert chatwoot_api.create_conversation(77) == 88
     assert "assignee_id" not in captured["json"]
+    assert "assignment_mode=automatic requested_assignee_id=inbox-policy" in capsys.readouterr().out
 
 
 def test_resolved_event_supports_nested_conversation_status(monkeypatch):

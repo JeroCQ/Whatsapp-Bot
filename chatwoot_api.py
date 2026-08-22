@@ -84,10 +84,9 @@ def create_conversation(contact_id: int):
         "contact_id": int(contact_id),
         "status": "open"
     }
-    # Passing the assignee during creation is atomic. Letting the inbox default
-    # policy assign it afterwards can leave conversations unassigned when the
-    # agent is unavailable or the round-robin policy does not select anyone.
-    if config.CHATWOOT_ASSIGNEE_ID:
+    # Automatic mode deliberately leaves staffing and eligibility to Chatwoot.
+    # Keep a configured assignee as a rollback value without sending it.
+    if config.CHATWOOT_ASSIGNMENT_MODE == "fixed":
         data["assignee_id"] = int(config.CHATWOOT_ASSIGNEE_ID)
     
     try:
@@ -99,6 +98,7 @@ def create_conversation(contact_id: int):
         response_assignee_id = response_assignee.get("id") if isinstance(response_assignee, dict) else None
         print(
             f"[CHATWOOT] Conversation {conversation_id} created "
+            f"assignment_mode={config.CHATWOOT_ASSIGNMENT_MODE} "
             f"requested_assignee_id={data.get('assignee_id') or 'inbox-policy'} "
             f"response_assignee_id={response_assignee_id or 'not-returned'}"
         )
