@@ -89,20 +89,24 @@ Storage `catalogos`, sus políticas o el estado de RLS.
 
 ## 4. Crear Tanaka dentro de Chatwoot self-hosted
 
-El correo aún no creado es un prerrequisito para `CHATWOOT_ASSIGNEE_ID`, pero no
-requiere un cambio de código.
+Los agentes y su elegibilidad se administran en Chatwoot, no en el código del bot.
 
 1. Desde Super Admin crea una cuenta/workspace **Tanaka** separada.
-2. Invita o crea `tanaka@briosos.org` dentro de esa cuenta y asígnalo como agente.
-   El usuario debe aceptar/activar la invitación antes de la prueba móvil.
+2. Invita o crea los agentes, actívalos y agrégalos como colaboradores del inbox.
+   Chatwoot decide cuáles son elegibles según su disponibilidad y política.
 3. Dentro de la cuenta Tanaka crea un **API inbox** exclusivo. No uses el canal
    nativo de WhatsApp de Chatwoot: Meta entrega mensajes a este bot.
 4. Registra los IDs numéricos de cuenta e inbox como `CHATWOOT_ACCOUNT_ID` y
    `CHATWOOT_INBOX_ID`.
 5. Desde el perfil del agente/integración exclusivo genera el access token que será
    `CHATWOOT_API_TOKEN`. Dale acceso a la cuenta Tanaka.
-6. Obtén el ID numérico del usuario `tanaka@briosos.org` y úsalo como
-   `CHATWOOT_ASSIGNEE_ID`. No escribas el correo en esa variable.
+6. Configura `CHATWOOT_ASSIGNMENT_MODE=automatic` para omitir `assignee_id`.
+   Activa la asignación automática del inbox y administra allí los colaboradores.
+   Opcionalmente conserva el ID anterior en `CHATWOOT_ASSIGNEE_ID` como rollback;
+   el modo automatic nunca lo envía.
+   Durante una migración, define esta variable en Railway antes de desplegar el
+   código. Si falta, el runtime conserva `fixed` cuando encuentra un assignee antiguo
+   para evitar un crash loop; sin assignee, usa `automatic`.
 7. Cuando Railway tenga dominio, crea un **account webhook** hacia
    `https://DOMINIO-TANAKA/chatwoot-webhook`, suscrito únicamente a
    `message_created` y `conversation_status_changed`. Copia el secreto generado a
@@ -142,10 +146,11 @@ requiere un cambio de código.
 | `WA_VERIFY_TOKEN` | **Cambiar** | Secreto aleatorio nuevo, idéntico al configurado en Meta |
 | `GITHUB_SI_PATH` | **Fijar/verificar** | `src/clients/tanaka/system_instruction.txt` |
 | `GITHUB_TOKEN` | **Conservar o cambiar** | Conservar solo si tiene el permiso mínimo de contenido para este repo; uno separado aísla permisos |
-| `CHATWOOT_ASSIGNEE_ID` | **Cambiar después de crear el agente** | ID numérico de `tanaka@briosos.org`, no correo, nombre ni inbox ID |
+| `CHATWOOT_ASSIGNMENT_MODE` | **Fijar** | `automatic`; Chatwoot controla colaboradores, disponibilidad y round robin |
+| `CHATWOOT_ASSIGNEE_ID` | **Conservar solo para rollback** | ID numérico anterior; se ignora en `automatic` y es obligatorio en `fixed` |
 
 Por tanto, cambian obligatoriamente `QUEUE_NAME`, `REDIS_URL`, las tres variables
-de WhatsApp y `CHATWOOT_ASSIGNEE_ID`. Las dos variables Supabase deben apuntar al
+de WhatsApp y `CHATWOOT_ASSIGNMENT_MODE`. Las dos variables Supabase deben apuntar al
 proyecto Tanaka pagado existente: cámbialas solo si los valores actuales pertenecen
 a otro proyecto. `RUN_WORKER_IN_WEB` se elimina o queda `true`;
 `GITHUB_SI_PATH` se verifica y `GITHUB_TOKEN` puede conservarse conscientemente.
@@ -370,23 +375,24 @@ valor global no verificado.
 Estos dos síntomas dependen de recursos Chatwoot distintos:
 
 * Durante el handoff, tanto el resumen como la alerta inicial permanecen como notas
-  privadas. La notificación móvil esperada es la de asignación, generada al crear la
-  conversación con `assignee_id`; no depende de fabricar un mensaje público.
+  privadas. En modo `automatic`, el bot crea la conversación sin `assignee_id` y
+  Chatwoot genera la asignación según la política del inbox.
 * Compara los valores efectivos de `CHATWOOT_ACCOUNT_ID` y `CHATWOOT_INBOX_ID` que
   muestra `[CHATWOOT CONFIG]` con la cuenta y el inbox Tanaka. Si el payload muestra
   otra marca (aunque el nombre pueda ser histórico), revisa esos IDs; no filtres por
   el nombre de la cuenta.
-* El `assignee_id` registrado es el valor efectivo: si Railway muestra `4`, se está
-  usando `4` aunque el panel o un reporte indique `3`. El agente efectivo debe
-  pertenecer al inbox efectivo.
-* La notificación requiere que la conversación quede asignada al ID numérico de
-  `tanaka@briosos.org` y que el agente tenga activada “conversation assigned to you”.
+* El log registra `assignment_mode`, `requested_assignee_id` y el assignee devuelto.
+  `requested_assignee_id=inbox-policy` confirma que automatic omitió el campo; un
+  número confirma que fixed lo envió.
+* La notificación requiere que Chatwoot asigne efectivamente la conversación y que
+  el agente seleccionado tenga activada “conversation assigned to you”.
 * La reactivación requiere un **account webhook** Tanaka que entregue
   `conversation_status_changed` a `https://DOMINIO-TANAKA/chatwoot-webhook` con el
   mismo secreto configurado en `CHATWOOT_WEBHOOK_SECRET`.
 
-En un handoff sano, la respuesta de creación de Chatwoot debe mostrar la conversación
-asignada al agente configurado. Al resolver, los logs deben mostrar un acceso
+En un handoff sano, la respuesta de creación debe mostrar la conversación asignada
+por la política del inbox (o sin asignar si nadie es elegible). Al resolver, los logs
+deben mostrar un acceso
 `POST /chatwoot-webhook`, seguido de
 `[CHATWOOT WEBHOOK] accepted`, `[CHATWOOT EVENT] ... status=resolved` y
 `Bot resumed`. Si no aparece ningún POST a `/chatwoot-webhook`, el problema está en
@@ -394,8 +400,8 @@ la URL/suscripción del account webhook de Chatwoot, no en Redis ni en la lógic
 estado. Si aparece 401, el secreto/firma no coincide; si aparece 403, account o inbox
 están cruzados.
 
-El backend envía `assignee_id` en la misma creación de la conversación, que es la
-semántica conocida que genera la notificación de asignación. Para Resolve acepta
+El backend solo envía `assignee_id` en modo `fixed`. En `automatic` lo omite y deja
+que Chatwoot aplique colaboradores, disponibilidad y round robin. Para Resolve acepta
 `id/status` tanto en la raíz como dentro de `conversation`, porque la forma del
 payload varía entre eventos/versiones.
 
@@ -404,10 +410,11 @@ payload varía entre eventos/versiones.
 * `PRESAVED_FILES_JSON` puede declarar `catalogo_pdf` sin `link`: el runtime resuelve
   el objeto activo de `catalogos/tanaka.*` en Supabase Storage. Esto no interviene en
   la notificación de Chatwoot.
-* `BUSINESS_ID=tanaka`, `CHATWOOT_ACCOUNT_ID`, `CHATWOOT_INBOX_ID` y
-  `CHATWOOT_ASSIGNEE_ID` deben pertenecer todos al despliegue Tanaka. Comprueba los
-  miembros efectivos con `GET /api/v1/accounts/{account_id}/inbox_members/{inbox_id}`;
-  no basta con que el agente exista en la cuenta.
+* `BUSINESS_ID=tanaka`, `CHATWOOT_ACCOUNT_ID` y `CHATWOOT_INBOX_ID` deben pertenecer
+  al despliegue Tanaka. Con `CHATWOOT_ASSIGNMENT_MODE=automatic`, agrega o elimina
+  colaboradores y configura disponibilidad/política dentro de Chatwoot; el bot no
+  contiene ni consulta esa lista. Si nadie es elegible, Chatwoot puede dejar la
+  conversación sin asignar y no se debe reintroducir lógica por agente en el bot.
 * `REDIS_URL` no debe referenciar un servicio llamado o perteneciente a Memo's. Usa
   el Redis propio del proyecto Tanaka (normalmente `${{Redis.REDIS_URL}}`) y conserva
   `QUEUE_NAME=whatsapp-events-tanaka`. Redis no genera la notificación móvil, pero una

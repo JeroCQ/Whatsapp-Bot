@@ -407,7 +407,9 @@ def _create_handoff_ticket_if_needed(sender_phone: str, sender_name: str, new_st
     print("[DEBUG] 8. Bot decidió pausarse, creando ticket...")
     print(
         f"[CHATWOOT CONFIG] account_id={config.CHATWOOT_ACCOUNT_ID} "
-        f"inbox_id={config.CHATWOOT_INBOX_ID} assignee_id={config.CHATWOOT_ASSIGNEE_ID}"
+        f"inbox_id={config.CHATWOOT_INBOX_ID} "
+        f"assignment_mode={config.CHATWOOT_ASSIGNMENT_MODE} "
+        f"assignee_id={config.CHATWOOT_ASSIGNEE_ID or 'not-configured'}"
     )
     state_check = get_or_create_customer_state(sender_phone)
     if state_check.get("chatwoot_conversation_id"):

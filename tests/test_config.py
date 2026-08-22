@@ -91,3 +91,62 @@ class SupabaseKeyConfigTests(TestCase):
     def test_dashboard_storage_timeout_default_supports_large_catalogs(self):
         with mock.patch.dict(os.environ, REQUIRED_ENV, clear=True):
             self.assertEqual(load_config().DASHBOARD_STORAGE_TIMEOUT_SECONDS, 300)
+
+
+class ChatwootAssignmentConfigTests(TestCase):
+    CHATWOOT_ENV = {
+        **REQUIRED_ENV,
+        "CHATWOOT_BASE_URL": "https://chatwoot.example.com",
+        "CHATWOOT_API_TOKEN": "secret",
+        "CHATWOOT_ACCOUNT_ID": "2",
+        "CHATWOOT_INBOX_ID": "2",
+        "CHATWOOT_WEBHOOK_SECRET": "webhook-secret",
+    }
+
+    def test_automatic_mode_accepts_missing_assignee(self):
+        with mock.patch.dict(os.environ, {**self.CHATWOOT_ENV, "CHATWOOT_ASSIGNMENT_MODE": "automatic"}, clear=True):
+            self.assertIsNone(load_config().CHATWOOT_ASSIGNEE_ID)
+
+    def test_automatic_mode_retains_rollback_assignee(self):
+        env = {**self.CHATWOOT_ENV, "CHATWOOT_ASSIGNMENT_MODE": " Automatic ", "CHATWOOT_ASSIGNEE_ID": "4"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            config = load_config()
+            self.assertEqual(config.CHATWOOT_ASSIGNMENT_MODE, "automatic")
+            self.assertEqual(config.CHATWOOT_ASSIGNEE_ID, "4")
+
+    def test_fixed_mode_requires_assignee(self):
+        with mock.patch.dict(os.environ, {**self.CHATWOOT_ENV, "CHATWOOT_ASSIGNMENT_MODE": "fixed"}, clear=True):
+            with self.assertRaisesRegex(ValueError, "required.*fixed"):
+                load_config()
+
+    def test_fixed_mode_accepts_positive_assignee(self):
+        env = {**self.CHATWOOT_ENV, "CHATWOOT_ASSIGNMENT_MODE": "fixed", "CHATWOOT_ASSIGNEE_ID": "4"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(load_config().CHATWOOT_ASSIGNEE_ID, "4")
+
+    def test_rejects_invalid_assignee_in_every_mode(self):
+        for assignee in ("0", "-1", "agent-four"):
+            env = {**self.CHATWOOT_ENV, "CHATWOOT_ASSIGNMENT_MODE": "automatic", "CHATWOOT_ASSIGNEE_ID": assignee}
+            with self.subTest(assignee=assignee), mock.patch.dict(os.environ, env, clear=True):
+                with self.assertRaisesRegex(ValueError, "positive integer"):
+                    load_config()
+
+    def test_missing_mode_preserves_legacy_fixed_assignee(self):
+        env = {**self.CHATWOOT_ENV, "CHATWOOT_ASSIGNEE_ID": "4"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(load_config().CHATWOOT_ASSIGNMENT_MODE, "fixed")
+
+    def test_missing_mode_without_assignee_defaults_to_automatic(self):
+        with mock.patch.dict(os.environ, self.CHATWOOT_ENV, clear=True):
+            self.assertEqual(load_config().CHATWOOT_ASSIGNMENT_MODE, "automatic")
+
+    def test_blank_mode_uses_compatibility_default(self):
+        env = {**self.CHATWOOT_ENV, "CHATWOOT_ASSIGNMENT_MODE": "", "CHATWOOT_ASSIGNEE_ID": "4"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(load_config().CHATWOOT_ASSIGNMENT_MODE, "fixed")
+
+    def test_rejects_invalid_assignment_mode(self):
+        env = {**self.CHATWOOT_ENV, "CHATWOOT_ASSIGNMENT_MODE": "round-robin"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            with self.assertRaisesRegex(ValueError, "automatic.*fixed"):
+                load_config()

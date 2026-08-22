@@ -88,7 +88,7 @@ Existing required variables are still needed:
 - `WA_TOKEN`
 - `WA_PHONE_NUMBER_ID`
 - `GEMINI_API_KEY`
-- Chatwoot variables used by handoff: `CHATWOOT_BASE_URL`, `CHATWOOT_API_TOKEN`, `CHATWOOT_ACCOUNT_ID`, `CHATWOOT_INBOX_ID`; optional `CHATWOOT_ASSIGNEE_ID` assigns every new handoff directly to one agent
+- Chatwoot variables used by handoff: `CHATWOOT_BASE_URL`, `CHATWOOT_API_TOKEN`, `CHATWOOT_ACCOUNT_ID`, `CHATWOOT_INBOX_ID`, and `CHATWOOT_ASSIGNMENT_MODE`. Set the mode to `automatic` to omit `assignee_id` and let Chatwoot's inbox collaborators, availability, and assignment policy control distribution. Set it to `fixed` only for an intentional rollback or single-agent deployment; fixed mode requires a positive numeric `CHATWOOT_ASSIGNEE_ID`.
 - Chatwoot webhook/media security: `CHATWOOT_WEBHOOK_SECRET`, optional `CHATWOOT_MAX_ATTACHMENT_BYTES` (default 25 MiB)
 
 ### Isolated Chatwoot configuration
@@ -98,6 +98,20 @@ Each bot deployment must use its own Chatwoot account, inbox, agent API token, w
 Create an **account webhook** for only `message_created` and `conversation_status_changed`, targeting `https://BOT-DOMAIN/chatwoot-webhook`. Chatwoot v4.16.2 signs account webhooks with the webhook's generated secret using `X-Chatwoot-Timestamp` and `X-Chatwoot-Signature`; copy that secret into `CHATWOOT_WEBHOOK_SECRET`. The signature is `sha256=HMAC-SHA256(secret, "<timestamp>.<raw JSON body>")` and requests older than five minutes are rejected. Missing or invalid signatures return 401; account/inbox mismatches return 403. The Meta callback remains `https://BOT-DOMAIN/webhook`; do not route Meta through Chatwoot's native WhatsApp channel.
 
 Never place webhook secrets or API tokens in URLs. Rotate a Chatwoot webhook secret by updating the Railway secret and the corresponding account webhook together during a controlled window. Provider logs contain only sanitized status/code/message fields. Mobile push notifications are configured on the Chatwoot installation, not in this bot.
+
+`CHATWOOT_ASSIGNMENT_MODE` supports these values:
+
+- `automatic`: conversation creation omits `assignee_id`. Add or remove agents in
+  the Chatwoot inbox; the bot neither contains nor retrieves a collaborator list.
+  A retained `CHATWOOT_ASSIGNEE_ID` is ignored and may be kept for rapid rollback.
+- `fixed`: conversation creation includes the configured `CHATWOOT_ASSIGNEE_ID`.
+  This bypasses automatic distribution and is rejected when that ID is missing.
+
+For deployment compatibility, a missing mode defaults to `fixed` when
+`CHATWOOT_ASSIGNEE_ID` exists and to `automatic` otherwise. This prevents an existing
+service from crash-looping if code is deployed before its new Railway variable. Set
+the mode explicitly in production; unknown values still fail validation. Existing
+conversations are never reassigned by changing this setting.
 
 Chatwoot Cloud and a self-hosted Chatwoot are separate systems even when an
 agent uses the same email address in both. For Memo's, the mobile client must be

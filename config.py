@@ -50,10 +50,16 @@ class Settings:
     CHATWOOT_API_TOKEN = os.getenv("CHATWOOT_API_TOKEN")
     CHATWOOT_ACCOUNT_ID = os.getenv("CHATWOOT_ACCOUNT_ID")
     CHATWOOT_INBOX_ID = os.getenv("CHATWOOT_INBOX_ID")
-    # Assign handoffs atomically when the conversation is created. This avoids
-    # relying on Chatwoot's availability/round-robin policy for a single-agent
-    # inbox and makes the mobile "assigned to you" notification deterministic.
+    # Retained in automatic mode only as an immediate rollback value. It is
+    # included in creation requests exclusively when the mode is fixed.
     CHATWOOT_ASSIGNEE_ID = os.getenv("CHATWOOT_ASSIGNEE_ID")
+    # Preserve existing fixed-assignee deployments during rolling deploys where
+    # the code may start before the new variable is added. New configurations
+    # without an assignee safely default to Chatwoot-managed assignment.
+    CHATWOOT_ASSIGNMENT_MODE = (
+        os.getenv("CHATWOOT_ASSIGNMENT_MODE")
+        or ("fixed" if CHATWOOT_ASSIGNEE_ID else "automatic")
+    ).strip().lower()
     CHATWOOT_WEBHOOK_SECRET = os.getenv("CHATWOOT_WEBHOOK_SECRET")
     CHATWOOT_MAX_ATTACHMENT_BYTES = int(os.getenv("CHATWOOT_MAX_ATTACHMENT_BYTES", str(25 * 1024 * 1024)))
     APP_ENV = os.getenv("APP_ENV", "production").strip().lower()
@@ -132,11 +138,15 @@ class Settings:
             for name in ("CHATWOOT_ACCOUNT_ID", "CHATWOOT_INBOX_ID"):
                 if not str(getattr(cls, name)).isdigit() or int(getattr(cls, name)) <= 0:
                     raise ValueError(f"{name} must be a positive integer")
+            if cls.CHATWOOT_ASSIGNMENT_MODE not in {"automatic", "fixed"}:
+                raise ValueError("CHATWOOT_ASSIGNMENT_MODE must be 'automatic' or 'fixed'")
             if cls.CHATWOOT_ASSIGNEE_ID and (
                 not str(cls.CHATWOOT_ASSIGNEE_ID).isdigit()
                 or int(cls.CHATWOOT_ASSIGNEE_ID) <= 0
             ):
                 raise ValueError("CHATWOOT_ASSIGNEE_ID must be a positive integer")
+            if cls.CHATWOOT_ASSIGNMENT_MODE == "fixed" and not cls.CHATWOOT_ASSIGNEE_ID:
+                raise ValueError("CHATWOOT_ASSIGNEE_ID is required when CHATWOOT_ASSIGNMENT_MODE=fixed")
             if cls.CHATWOOT_MAX_ATTACHMENT_BYTES <= 0:
                 raise ValueError("CHATWOOT_MAX_ATTACHMENT_BYTES must be positive")
 
