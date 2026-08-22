@@ -397,6 +397,25 @@ def test_resolved_event_supports_nested_conversation_status(monkeypatch):
     assert sent == [("57300", "✅ Tu solicitud ha sido resuelta. Si necesitas algo más, envíame un mensaje.")]
 
 
+def test_resolved_event_uses_warm_tanaka_closing(monkeypatch):
+    event = payload(event="conversation_status_changed")
+    event["status"] = "resolved"
+    resumed = []
+    sent = []
+    monkeypatch.setattr(main.config, "BUSINESS_ID", "tanaka")
+    monkeypatch.setattr(main, "resume_bot_state", lambda conv_id: resumed.append(conv_id) or "57300")
+    monkeypatch.setattr(main, "save_message_log", lambda *args: None)
+    monkeypatch.setattr(main, "send_whatsapp_message", lambda *args: sent.append(args) or True)
+    monkeypatch.setattr(main, "mark_webhook_event_processed", lambda *args, **kwargs: None)
+
+    main.process_chatwoot_event(event, event_id="resolved:tanaka:44")
+
+    assert resumed == [44]
+    assert sent == [
+        ("57300", "Gracias por elegirnos, quedo por aquí super pendiente de lo que necesites ☺️")
+    ]
+
+
 def test_image_catalog_is_uploaded_and_sent_as_whatsapp_image(monkeypatch):
     sent_payloads = []
     item = types.SimpleNamespace(
