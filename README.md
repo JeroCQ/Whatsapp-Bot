@@ -99,7 +99,7 @@ Create an **account webhook** for only `message_created` and `conversation_statu
 
 Never place webhook secrets or API tokens in URLs. Rotate a Chatwoot webhook secret by updating the Railway secret and the corresponding account webhook together during a controlled window. Provider logs contain only sanitized status/code/message fields. Mobile push notifications are configured on the Chatwoot installation, not in this bot.
 
-`CHATWOOT_ASSIGNMENT_MODE` has no implicit default when Chatwoot is configured:
+`CHATWOOT_ASSIGNMENT_MODE` supports these values:
 
 - `automatic`: conversation creation omits `assignee_id`. Add or remove agents in
   the Chatwoot inbox; the bot neither contains nor retrieves a collaborator list.
@@ -107,9 +107,11 @@ Never place webhook secrets or API tokens in URLs. Rotate a Chatwoot webhook sec
 - `fixed`: conversation creation includes the configured `CHATWOOT_ASSIGNEE_ID`.
   This bypasses automatic distribution and is rejected when that ID is missing.
 
-Missing or unknown modes fail configuration validation rather than silently assigning
-new customer conversations to an unexpected agent. Existing conversations are never
-reassigned by changing this setting.
+For deployment compatibility, a missing mode defaults to `fixed` when
+`CHATWOOT_ASSIGNEE_ID` exists and to `automatic` otherwise. This prevents an existing
+service from crash-looping if code is deployed before its new Railway variable. Set
+the mode explicitly in production; unknown values still fail validation. Existing
+conversations are never reassigned by changing this setting.
 
 Chatwoot Cloud and a self-hosted Chatwoot are separate systems even when an
 agent uses the same email address in both. For Memo's, the mobile client must be

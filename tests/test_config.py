@@ -131,10 +131,19 @@ class ChatwootAssignmentConfigTests(TestCase):
                 with self.assertRaisesRegex(ValueError, "positive integer"):
                     load_config()
 
-    def test_rejects_missing_assignment_mode(self):
+    def test_missing_mode_preserves_legacy_fixed_assignee(self):
+        env = {**self.CHATWOOT_ENV, "CHATWOOT_ASSIGNEE_ID": "4"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(load_config().CHATWOOT_ASSIGNMENT_MODE, "fixed")
+
+    def test_missing_mode_without_assignee_defaults_to_automatic(self):
         with mock.patch.dict(os.environ, self.CHATWOOT_ENV, clear=True):
-            with self.assertRaisesRegex(ValueError, "ASSIGNMENT_MODE"):
-                load_config()
+            self.assertEqual(load_config().CHATWOOT_ASSIGNMENT_MODE, "automatic")
+
+    def test_blank_mode_uses_compatibility_default(self):
+        env = {**self.CHATWOOT_ENV, "CHATWOOT_ASSIGNMENT_MODE": "", "CHATWOOT_ASSIGNEE_ID": "4"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(load_config().CHATWOOT_ASSIGNMENT_MODE, "fixed")
 
     def test_rejects_invalid_assignment_mode(self):
         env = {**self.CHATWOOT_ENV, "CHATWOOT_ASSIGNMENT_MODE": "round-robin"}

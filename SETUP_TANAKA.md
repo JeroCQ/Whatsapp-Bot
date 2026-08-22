@@ -104,6 +104,9 @@ Los agentes y su elegibilidad se administran en Chatwoot, no en el código del b
    Activa la asignación automática del inbox y administra allí los colaboradores.
    Opcionalmente conserva el ID anterior en `CHATWOOT_ASSIGNEE_ID` como rollback;
    el modo automatic nunca lo envía.
+   Durante una migración, define esta variable en Railway antes de desplegar el
+   código. Si falta, el runtime conserva `fixed` cuando encuentra un assignee antiguo
+   para evitar un crash loop; sin assignee, usa `automatic`.
 7. Cuando Railway tenga dominio, crea un **account webhook** hacia
    `https://DOMINIO-TANAKA/chatwoot-webhook`, suscrito únicamente a
    `message_created` y `conversation_status_changed`. Copia el secreto generado a
