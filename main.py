@@ -544,6 +544,7 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
                 send_presaved_file(sender_phone, file_id)
         if ai_turn.response:
             send_whatsapp_message(sender_phone, ai_turn.response)
+            save_message_log(sender_phone, "model", ai_turn.response)
             primary_delivered = True
         if not ai_turn.send_files_before_response:
             for file_id in ai_turn.requested_files:
@@ -562,7 +563,7 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
 def resolved_customer_message() -> str:
     """Return the closing message for the business served by this deployment."""
     if config.BUSINESS_ID == "tanaka":
-        return "Gracias por elegirnos, quedo por aquí super pendiente de lo que necesites ☺️"
+        return "Gracias por elegirnos. Cuando necesites algo más, escríbenos ☺️"
     return "✅ Tu solicitud ha sido resuelta. Si necesitas algo más, envíame un mensaje."
 
 

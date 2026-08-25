@@ -2,8 +2,9 @@ import logging
 import os
 import re
 import uuid
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
@@ -24,13 +25,22 @@ return 0
 """
 
 
-def follow_up_delay_seconds(delay_minutes: int, environ=None) -> int:
-    """Resolve follow-up delay, allowing an explicit staging-only fast override."""
+def follow_up_delay_seconds(delay_minutes: int, environ=None, now=None) -> int:
+    """Resolve a follow-up delay inside the daily 08:00-18:00 Colombia window."""
     environ = os.environ if environ is None else environ
     override = str(environ.get("FOLLOW_UP_TEST_DELAY_SECONDS", "")).strip()
     if override:
         return max(1, int(override))
-    return max(1, int(delay_minutes)) * 60
+    colombia_tz = ZoneInfo("America/Bogota")
+    current = now or datetime.now(colombia_tz)
+    current = current.replace(tzinfo=colombia_tz) if current.tzinfo is None else current.astimezone(colombia_tz)
+    target = current + timedelta(minutes=max(1, int(delay_minutes)))
+
+    if target.time() < time(8, 0):
+        target = target.replace(hour=8, minute=0, second=0, microsecond=0)
+    elif target.time() >= time(18, 0):
+        target = (target + timedelta(days=1)).replace(hour=8, minute=0, second=0, microsecond=0)
+    return max(1, int((target - current).total_seconds()))
 
 
 def _follow_up_key(phone_number: str) -> str:
@@ -69,15 +79,6 @@ def claim_follow_up(phone_number: str, token: str) -> bool:
     except Exception as exc:
         logger.warning("Could not claim follow-up for %s: %s", phone_number, exc)
         return False
-
-
-def follow_up_delay_seconds(delay_minutes: int, environ=None) -> int:
-    """Resolve follow-up delay, allowing an explicit staging-only fast override."""
-    environ = os.environ if environ is None else environ
-    override = str(environ.get("FOLLOW_UP_TEST_DELAY_SECONDS", "")).strip()
-    if override:
-        return max(1, int(override))
-    return max(1, int(delay_minutes)) * 60
 
 
 def queue_enabled() -> bool:

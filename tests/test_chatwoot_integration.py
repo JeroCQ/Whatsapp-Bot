@@ -254,10 +254,13 @@ def test_failed_primary_response_suppresses_followup(monkeypatch):
     monkeypatch.setattr(main, "process_message_logic", lambda *a: turn)
     monkeypatch.setattr(main, "send_whatsapp_message", lambda *a: (_ for _ in ()).throw(ProviderError("meta", "send", 400)))
     scheduled = []
+    logged = []
     monkeypatch.setattr(main, "schedule_follow_up", lambda *a: scheduled.append(a))
+    monkeypatch.setattr(main, "save_message_log", lambda *a: logged.append(a))
     with pytest.raises(ProviderError):
         main._process_whatsapp_message_unlocked("57300", "Name", "hello")
     assert scheduled == []
+    assert not any(entry[1] == "model" for entry in logged)
 
 
 def test_agent_text_forwarding_is_scoped(monkeypatch):

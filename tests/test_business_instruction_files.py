@@ -9,3 +9,31 @@ def test_memos_instruction_is_available_to_the_selected_deployment():
     assert "Quesos Memo's" in instruction
     assert "829-0002441-2" in instruction
     assert "follow_up_delay_minutes = 120" in instruction
+
+
+def test_tanaka_instruction_limits_same_day_delivery_by_local_time():
+    instruction = (ROOT / "src/clients/tanaka/system_instruction.txt").read_text(encoding="utf-8")
+    assert "fecha y hora local de Colombia" in instruction
+    assert "lunes a viernes antes de las 5:00 p.m." in instruction
+    assert "no garantices una hora de llegada" in instruction
+    assert "productos incluidos en el catálogo están disponibles" in instruction
+
+
+def test_tanaka_instruction_answers_before_using_catalog_and_limits_follow_up():
+    instruction = (ROOT / "src/clients/tanaka/system_instruction.txt").read_text(encoding="utf-8")
+    assert "El catálogo apoya la respuesta, pero no la reemplaza" in instruction
+    assert 'escribe solamente "precio"' in instruction
+    assert "ya eligió al menos un producto" in instruction
+    assert "envío de catálogo sin selección de producto" in instruction
+    assert "Pregunta repetida o corrección" in instruction
+    assert "súper pendiente" in instruction
+    assert "Si el cliente no responde a ese seguimiento, no generes otro" in instruction
+    assert "entre las 8:00 a.m. y las 6:00 p.m." in instruction
+
+
+def test_tanaka_instruction_uses_confirmed_product_facts():
+    instruction = (ROOT / "src/clients/tanaka/system_instruction.txt").read_text(encoding="utf-8")
+    assert "40 días" not in instruction
+    assert instruction.count("45 días") == 2
+    assert instruction.count("avena certificada sin gluten") == 2
+    assert "Los combos se consideran disponibles bajo la misma regla del catálogo" in instruction

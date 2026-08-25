@@ -1,6 +1,8 @@
 import unittest
-from datetime import timedelta
+from datetime import datetime, timedelta
+from pathlib import Path
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 from queue_client import (
     claim_follow_up,
@@ -10,6 +12,11 @@ from queue_client import (
     register_follow_up,
     web_queue_mode,
 )
+
+
+def test_follow_up_delay_helper_has_one_definition():
+    source = Path("queue_client.py").read_text(encoding="utf-8")
+    assert source.count("def follow_up_delay_seconds(") == 1
 
 
 class WebQueueModeTests(unittest.TestCase):
@@ -26,7 +33,16 @@ class WebQueueModeTests(unittest.TestCase):
 
 class FollowUpDelayTests(unittest.TestCase):
     def test_converts_model_minutes_to_seconds(self):
-        self.assertEqual(follow_up_delay_seconds(120, {}), 7200)
+        now = datetime(2026, 8, 25, 10, 0, tzinfo=ZoneInfo("America/Bogota"))
+        self.assertEqual(follow_up_delay_seconds(120, {}, now), 7200)
+
+    def test_moves_evening_follow_up_to_next_day_at_eight(self):
+        now = datetime(2026, 8, 28, 17, 0, tzinfo=ZoneInfo("America/Bogota"))
+        self.assertEqual(follow_up_delay_seconds(120, {}, now), 15 * 60 * 60)
+
+    def test_moves_early_follow_up_to_same_day_at_eight(self):
+        now = datetime(2026, 8, 25, 5, 0, tzinfo=ZoneInfo("America/Bogota"))
+        self.assertEqual(follow_up_delay_seconds(60, {}, now), 3 * 60 * 60)
 
     def test_test_override_avoids_waiting_two_hours(self):
         environment = {"FOLLOW_UP_TEST_DELAY_SECONDS": "5"}
