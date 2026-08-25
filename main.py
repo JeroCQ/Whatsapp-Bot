@@ -566,6 +566,34 @@ def resolved_customer_message() -> str:
     return "✅ Tu solicitud ha sido resuelta. Si necesitas algo más, envíame un mensaje."
 
 
+def _chatwoot_flag(value, default: bool = False) -> bool:
+    """Normalize booleans from Chatwoot webhook payloads.
+
+    Chatwoot normally emits JSON booleans, but integrations and webhook relays can
+    serialize them as strings.  In particular, ``bool("false")`` is true in
+    Python and used to make a public agent reply look like a private note.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes"}:
+            return True
+        if normalized in {"false", "0", "no", "", "null"}:
+            return False
+    if value is None:
+        return default
+    return bool(value)
+
+
+def _chatwoot_sender_label(data: dict) -> str:
+    """Return a non-PII sender identifier useful for delivery diagnostics."""
+    sender = data.get("sender") if isinstance(data.get("sender"), dict) else {}
+    sender_id = sender.get("id")
+    sender_type = sender.get("type") or sender.get("role") or "unknown"
+    return f"{sender_type}:{sender_id if sender_id is not None else 'unknown'}"
+
+
 def process_chatwoot_event(data: dict, event_id: str = None):
     """Process a Chatwoot webhook event from the queue/worker."""
     started_at = time.perf_counter()
@@ -581,7 +609,9 @@ def process_chatwoot_event(data: dict, event_id: str = None):
             f"[CHATWOOT EVENT] event={event} conversation_id={event_conv_id} "
             f"status={event_status} account_id={account_id} inbox_id={inbox_id}"
         )
-        if event == "message_created" and data.get("message_type") == "outgoing" and not data.get("private", False):
+        message_type = str(data.get("message_type") or "").strip().lower()
+        is_private = _chatwoot_flag(data.get("private"), default=False)
+        if event == "message_created" and message_type == "outgoing" and not is_private:
             conv_id = event_conv_id
             content = data.get("content")
             attachments = data.get("attachments")
@@ -603,6 +633,24 @@ def process_chatwoot_event(data: dict, event_id: str = None):
                         send_whatsapp_media(phone, meta_media_id, whatsapp_media_type, content, attachment_filename)
                 if content and not attachments:
                     send_whatsapp_message(phone, content)
+                print(
+                    f"[CHATWOOT DELIVERY] forwarded event_id={event_id} conversation_id={conv_id} "
+                    f"sender={_chatwoot_sender_label(data)} has_content={bool(content)} "
+                    f"attachment_count={len(attachments or [])}"
+                )
+            else:
+                print(
+                    f"[CHATWOOT EVENT WARN] Public outgoing message not forwarded: "
+                    f"reason=conversation_not_mapped event_id={event_id} conversation_id={conv_id} "
+                    f"sender={_chatwoot_sender_label(data)}"
+                )
+        elif event == "message_created":
+            reason = "private_note" if is_private else f"message_type_{message_type or 'missing'}"
+            print(
+                f"[CHATWOOT EVENT] Message intentionally not forwarded: reason={reason} "
+                f"event_id={event_id} conversation_id={event_conv_id} "
+                f"sender={_chatwoot_sender_label(data)}"
+            )
         elif event == "conversation_status_changed" and event_status == "resolved":
             conv_id = event_conv_id
             phone = resume_bot_state(conv_id) if conv_id else None

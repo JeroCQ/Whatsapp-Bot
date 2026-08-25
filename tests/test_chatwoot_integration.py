@@ -273,6 +273,46 @@ def test_agent_text_forwarding_is_scoped(monkeypatch):
     assert sent == []
 
 
+def test_string_false_private_flag_is_forwarded(monkeypatch):
+    event = payload()
+    event["private"] = "false"
+    sent = []
+    monkeypatch.setattr(main, "get_phone_by_chatwoot_id", lambda value: "57300")
+    monkeypatch.setattr(main, "save_message_log", lambda *a: None)
+    monkeypatch.setattr(main, "send_whatsapp_message", lambda *a: sent.append(a) or True)
+    monkeypatch.setattr(main, "mark_webhook_event_processed", lambda *a, **k: None)
+
+    main.process_chatwoot_event(event, event_id="message_created:91")
+
+    assert sent == [("57300", "agent reply")]
+
+
+@pytest.mark.parametrize(
+    ("changes", "reason"),
+    [({"private": True}, "reason=private_note"), ({"message_type": "incoming"}, "reason=message_type_incoming")],
+)
+def test_non_forwarded_chatwoot_message_logs_reason(monkeypatch, capsys, changes, reason):
+    event = payload()
+    event.update(changes)
+    monkeypatch.setattr(main, "mark_webhook_event_processed", lambda *a, **k: None)
+    monkeypatch.setattr(main, "send_whatsapp_message", lambda *a: pytest.fail("message must not be forwarded"))
+
+    main.process_chatwoot_event(event, event_id="message_created:91")
+
+    assert reason in capsys.readouterr().out
+
+
+def test_unmapped_public_reply_logs_delivery_warning(monkeypatch, capsys):
+    monkeypatch.setattr(main, "get_phone_by_chatwoot_id", lambda value: None)
+    monkeypatch.setattr(main, "mark_webhook_event_processed", lambda *a, **k: None)
+
+    main.process_chatwoot_event(payload(), event_id="message_created:91")
+
+    output = capsys.readouterr().out
+    assert "reason=conversation_not_mapped" in output
+    assert "event_id=message_created:91" in output
+
+
 def test_agent_attachment_forwarding(monkeypatch):
     event = payload()
     event["attachments"] = [{"data_url": "/rails/active_storage/file.png", "content_type": "image/png", "file_name": "proof.png"}]
