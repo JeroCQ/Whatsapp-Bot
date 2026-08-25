@@ -4,8 +4,10 @@ import json
 import time
 import threading
 from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import Path
 from typing import List
+from zoneinfo import ZoneInfo
 from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
@@ -124,6 +126,8 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> BotT
     history = get_message_logs(phone, limit=50)
     formatted_history = [f"{'Usuario' if msg['role'] == 'user' else 'Bot'}: {msg['content']}" for msg in history]
     context_str = "\n".join(formatted_history)
+    colombia_now = datetime.now(ZoneInfo("America/Bogota"))
+    colombia_time = colombia_now.strftime("%A %Y-%m-%d, %H:%M")
 
     # CORREGIDO: Presentamos las variables de forma transparente sin ocultar el texto real
     prompt = f"""
@@ -131,6 +135,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> BotT
     {context_str}
 
     Indicaciones estrictas de este turno actual:
+    - Fecha y hora local actual en Colombia: {colombia_time}.
     - ¿El usuario envió una imagen en este mensaje?: {"SÍ" if is_image else "NO"}.
     - Texto enviado por el usuario junto al mensaje: "{text}"
 
