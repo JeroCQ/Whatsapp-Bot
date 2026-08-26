@@ -43,7 +43,7 @@ from queue_client import (
 from webhook_utils import chatwoot_event_identity, is_restart_command
 from chatwoot_security import chatwoot_scope, verify_chatwoot_signature
 from provider_errors import ProviderError, provider_error, sanitize_text
-from dashboard_api import router as dashboard_router
+from dashboard_api import log_dashboard_startup_configuration, router as dashboard_router
 
 app = FastAPI()
 app.add_middleware(
@@ -91,6 +91,7 @@ async def health_alias():
 async def log_deployment_version():
     """Log the Railway commit so deployments can be verified."""
     print(f"[STARTUP] WhatsApp bot running commit: {DEPLOYMENT_COMMIT_SHA}. Queue enabled: {queue_enabled()}")
+    log_dashboard_startup_configuration()
 
 
 def _attachment_url(attachment: dict) -> str:

@@ -19,3 +19,16 @@ def test_existing_tanaka_upgrade_is_non_destructive():
     assert "drop table" not in sql
     assert "truncate " not in sql
     assert "delete from" not in sql
+
+
+def test_new_and_existing_projects_accept_all_runtime_message_roles():
+    bootstrap = (ROOT / "supabase" / "bootstrap.sql").read_text(encoding="utf-8").lower()
+    migration = (
+        ROOT / "supabase" / "migrations" / "20260826000000_message_log_roles.sql"
+    ).read_text(encoding="utf-8").lower()
+
+    for role in ("'user'", "'model'", "'system'", "'asesor'"):
+        assert role in bootstrap
+        assert role in migration
+    assert "drop constraint if exists message_logs_role_check" in migration
+    assert "add constraint message_logs_role_check" in migration

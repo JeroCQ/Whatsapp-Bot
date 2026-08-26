@@ -1,5 +1,10 @@
 # Puesta en producción de Quesos Memo's sin tocar Tanaka
 
+> Este documento conserva los valores específicos de Memo's. Para el algoritmo
+> completo, incluidos el bootstrap de Meta, Redis, diferencias entre secretos de
+> Chatwoot, asignación, variables y prompt genérico de Lovable, usa primero
+> [`DEPLOY_NEW_BUSINESS.md`](DEPLOY_NEW_BUSINESS.md).
+
 ## Arquitectura final
 
 No conviertas el Railway de Tanaka en Memo's. Déjalo intacto y crea un segundo proyecto Railway desde este mismo repositorio. Cada despliegue ejecuta una sola marca mediante `BUSINESS_ID`; el backend rechaza cualquier `client_name` distinto al de ese despliegue. Cada marca tiene su propio WhatsApp, Supabase, Redis, inbox de Chatwoot, secretos y URL. Lovable es el único frontend compartido y actúa como enrutador de perfiles.
@@ -32,16 +37,16 @@ No conviertas el Railway de Tanaka en Memo's. Déjalo intacto y crea un segundo 
 
 ## 3. Chatwoot
 
-1. En la instalación de Chatwoot crea una **cuenta separada** y un inbox/API channel exclusivo para Memo's. No uses la cuenta, inbox ni agentes de Tanaka.
+1. En la instalación de Chatwoot crea una **cuenta separada** y un inbox/API channel exclusivo para Memo's. No uses la cuenta, inbox, agente ni access token de Tanaka.
 2. Copia el ID numérico de la cuenta → `CHATWOOT_ACCOUNT_ID` y el ID numérico del inbox nuevo → `CHATWOOT_INBOX_ID`.
-3. Desde el perfil de un agente/integración exclusivo de Memo's copia el access token → `CHATWOOT_API_TOKEN`.
+3. Desde el perfil de un agente/integración exclusivo de Memo's copia el access token → `CHATWOOT_API_TOKEN`. No es el token/secreto del inbox.
 4. Usa la raíz de la instalación, sin `/api/v1` al final, como `CHATWOOT_BASE_URL`.
-5. Crea un account webhook suscrito a `message_created` y `conversation_status_changed` hacia `https://DOMINIO-MEMOS/chatwoot-webhook`. Copia su secreto generado a `CHATWOOT_WEBHOOK_SECRET`; no lo pongas en la URL.
+5. En **Integrations → Webhooks** crea un account webhook suscrito a `message_created` y `conversation_status_changed` hacia `https://DOMINIO-MEMOS/chatwoot-webhook`. Copia el secreto de esa integración a `CHATWOOT_WEBHOOK_SECRET`; no uses el secreto del inbox ni lo pongas en la URL.
 
 ## 4. Railway nuevo
 
 1. Crea **New Project → Deploy from GitHub repo** y selecciona este repositorio y rama. No clones el servicio de Tanaka si Railway arrastrará secretos compartidos.
-2. Agrega Redis dentro del proyecto Memo's.
+2. Agrega Redis con **New → Database → Redis**, sin Custom Start Command. Después crea `REDIS_URL` como referencia en las variables del servicio web; crear Redis no conecta automáticamente el bot.
 3. Usa un solo servicio web inicialmente. `railway.json` ejecuta web + worker embebido; no crees un worker separado todavía.
 4. Carga las variables de la tabla siguiente. En Railway usa referencias del proyecto Memo's, por ejemplo `${{Redis.REDIS_URL}}`; no dejes referencias `${{powerful-stillness.*}}`, pues apuntan al proyecto anterior.
 5. Despliega, abre `/` y exige: `status=ok`, `queue_enabled=true`, `queue.workers_seen>=1`.
@@ -66,13 +71,15 @@ No conviertas el Railway de Tanaka en Memo's. Déjalo intacto y crea un segundo 
 | `CHATWOOT_INBOX_ID` | **Cambiar** | Inbox exclusivo de Memo's. |
 | `CHATWOOT_ACCOUNT_ID` | **Cambiar** | Cuenta exclusiva de Memo's. Nunca compartir la cuenta de Tanaka. |
 | `CHATWOOT_API_TOKEN` | **Cambiar** | Token del agente/integración exclusivo de Memo's. |
-| `CHATWOOT_ASSIGNEE_ID` | **Agregar** | ID numérico del agente `memos@briosos.org`; fuerza la asignación al crear cada handoff y evita depender de la política Default. |
+| `CHATWOOT_ASSIGNEE_ID` | **Omitir en automático / cambiar en fixed** | En `automatic`, elimínala y deja que Chatwoot distribuya. En `fixed`, usa el ID del agente Memo's. |
+| `CHATWOOT_ASSIGNMENT_MODE` | **Configurar explícitamente** | `automatic` para replicar la distribución de Tanaka; `fixed` solo para un responsable único. |
 | `CHATWOOT_WEBHOOK_SECRET` | **Agregar/cambiar** | Secreto generado por el account webhook exclusivo de Memo's. |
 | `CHATWOOT_MAX_ATTACHMENT_BYTES` | **Agregar opcional** | Máximo de descarga; default `26214400` (25 MiB). |
-| `CHATWOOT_BASE_URL` | **Cambiar** | Raíz HTTPS de Chatwoot self-hosted, sin `/api/v1` ni `/app`. |
+| `CHATWOOT_BASE_URL` | **Conservar/cambiar** | Puede compartirse si es la misma instalación; usa la raíz HTTPS sin `/api/v1` ni `/app`. |
 | `GEMINI_API_KEY` | **Conservar o cambiar** | Puede compartirse; una clave/proyecto separado aísla cuota y facturación. |
 | `GEMINI_DASHBOARD_MODEL` | **Conservar** | Puede omitirse para usar el default del código. |
 | `GITHUB_TOKEN` | **Conservar o cambiar** | Token con permiso de contenido sobre este repo; queda solo en Railway. |
+| `GITHUB_SI_PATH` | **Cambiar u omitir** | `src/clients/memos/system_instruction.txt`; si se omite se deriva de `BUSINESS_ID`. |
 | `CATALOG_STORAGE_BUCKET` | **Conservar** | `catalogos`. |
 | `PRESAVED_FILES_JSON` | **Cambiar** | Usa el JSON exacto mostrado abajo. |
 | `REDIS_URL` | **Cambiar** | Referencia al Redis del proyecto Memo's: `${{Redis.REDIS_URL}}`. |
@@ -88,6 +95,11 @@ No conviertas el Railway de Tanaka en Memo's. Déjalo intacto y crea un segundo 
 | `DASHBOARD_STORAGE_TIMEOUT_SECONDS` | **Conservar** | Default `300`. |
 
 También puedes agregar `DASHBOARD_FORMAT_TIMEOUT_SECONDS=90`. No configures `RUN_WORKER_IN_WEB=false` mientras uses el worker embebido.
+
+En Railway escribe `GITHUB_SI_PATH` sin comillas ni `/` inicial y confirma que el
+archivo exista exactamente, respetando rama y mayúsculas. Antes de subir catálogo,
+un 404 `catalog_not_found` es normal; un 502 debe mostrar status/mensaje de Supabase,
+bucket y path para detectar URL/service-role cruzados o un bucket inexistente.
 
 ### `PRESAVED_FILES_JSON` para Memo's
 
@@ -184,25 +196,18 @@ La corrección más simple para Memo's es:
 5. Con la app cerrada, provocar un handoff nuevo. Confirmar primero que la
    conversación aparece en la app y luego que llega el push.
 
-Para que la asignación no dependa del estado disponible ni de la política
-Default del inbox, configura en Railway `CHATWOOT_ASSIGNEE_ID` con el ID numérico
-del agente `memos@briosos.org`. El bot lo envía en la misma operación que crea la
-conversación: no hay una segunda llamada ni una carrera entre “creada” y
-“asignada”. Si se elimina la variable, se conserva el comportamiento anterior y
-Chatwoot vuelve a decidir la asignación.
+Para replicar Tanaka y permitir que varios miembros del inbox atiendan, usa
+`CHATWOOT_ASSIGNMENT_MODE=automatic` y elimina `CHATWOOT_ASSIGNEE_ID`. El bot no
+asigna una persona: Chatwoot aplica colaboradores, disponibilidad, round-robin y
+preferencias de notificación del inbox. Prueba en cada móvil tanto “nueva
+conversación” como “nuevo mensaje”; pertenecer al inbox permite atender, pero no
+garantiza por sí solo todas las notificaciones push.
 
-Con esa asignación determinista, la configuración menos invasiva en la app es:
-
-* **Activar:** “A conversation is assigned to you” y “A new message is created
-  in an assigned conversation”.
-* **Desactivar:** “A new conversation is created”, porque generaría un segundo
-  aviso del mismo handoff.
-* Mantener menciones y SLA solo si se usan operativamente; no son necesarios
-  para garantizar el aviso inicial.
-
-Así cada handoff genera un aviso dirigido al responsable, mientras los mensajes
-posteriores de ese cliente siguen notificándose sin alertar por conversaciones
-ajenas o duplicar la notificación de creación.
+Usa `CHATWOOT_ASSIGNMENT_MODE=fixed` junto con el ID numérico de
+`memos@briosos.org` únicamente si se decide que todos los handoffs deben tener un
+responsable único. En ese modo conviene activar “A conversation is assigned to
+you” y “A new message is created in an assigned conversation”, y desactivar la
+notificación general de conversación nueva si produce duplicados.
 
 Si la app instalada no ofrece servidor personalizado, o abre siempre
 `app.chatwoot.com`, no se debe mover el bot a Cloud para solucionarlo. La salida

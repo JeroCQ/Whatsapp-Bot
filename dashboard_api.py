@@ -99,23 +99,55 @@ def client_path(client_name: str, filename: str) -> str:
     return str(path)
 
 
+def normalize_github_si_path(value: str | None) -> str:
+    """Normalize Railway's common quoting/path artifacts without hiding traversal."""
+    configured = (value or "").strip()
+    if len(configured) >= 2 and configured[0] == configured[-1] and configured[0] in {"'", '"'}:
+        configured = configured[1:-1].strip()
+    configured = configured.replace("\\", "/").lstrip("/")
+    if not configured:
+        return ""
+    path = PurePosixPath(configured)
+    if ".." in path.parts:
+        raise ValueError("GITHUB_SI_PATH inválido: no se permite '..'")
+    return str(path)
+
+
+def masked_configuration_value(value: str | None) -> str:
+    """Return a useful but bounded hint for API errors; the raw value stays in logs."""
+    raw = value or ""
+    if not raw:
+        return "<vacío>"
+    if len(raw) <= 8:
+        return f"{raw[0]}***{raw[-1]} (len={len(raw)})"
+    return f"{raw[:4]}…{raw[-4:]} (len={len(raw)})"
+
+
+def log_dashboard_startup_configuration() -> None:
+    """Expose non-secret path artifacts with repr while keeping API responses masked."""
+    logger.info(
+        "Dashboard startup configuration: GITHUB_SI_PATH raw=%r branch=%r BUSINESS_ID=%r",
+        config.GITHUB_SI_PATH,
+        config.GITHUB_BRANCH,
+        config.BUSINESS_ID,
+    )
+
+
 def system_instruction_path(client_name: str) -> str:
     """Resolve the deployment's explicitly configured SI path, if present."""
     validate_client_name(client_name)
     expected = client_path(client_name, "system_instruction.txt")
-    configured = (config.GITHUB_SI_PATH or "").strip().lstrip("/")
+    raw_configured = config.GITHUB_SI_PATH
+    configured = normalize_github_si_path(raw_configured)
     if not configured:
         return expected
-    path = PurePosixPath(configured)
-    if not configured or ".." in path.parts:
-        raise ValueError("GITHUB_SI_PATH inválido")
-    normalized = str(path)
-    if normalized != expected:
+    if configured != expected:
         raise ValueError(
             f"GITHUB_SI_PATH no corresponde a BUSINESS_ID={client_name}; "
-            f"debe ser {expected}"
+            f"recibido={masked_configuration_value(raw_configured)}, "
+            f"rama={config.GITHUB_BRANCH!r}; debe ser {expected}"
         )
-    return normalized
+    return configured
 
 
 def decode_github_file_content(file_info: dict) -> str:
@@ -314,6 +346,31 @@ class CatalogStorageAdapter:
         validate_client_name(client_name)
         return f"{self.base_url}/storage/v1/object/public/{self.bucket}/{self.key(client_name, extension)}"
 
+    def object_info_url(self, client_name: str, extension: str = "pdf") -> str:
+        return f"{self.base_url}/storage/v1/object/info/{self.bucket}/{self.key(client_name, extension)}"
+
+    @staticmethod
+    def provider_message(response: requests.Response) -> str:
+        try:
+            body = response.json()
+        except (ValueError, TypeError):
+            message = (response.text or "").strip()[:500] or f"HTTP {response.status_code}"
+            return message.replace(config.SUPABASE_KEY or "\0", "[REDACTED]")
+        if isinstance(body, dict):
+            message = body.get("message") or body.get("error") or body.get("code")
+            if message:
+                return str(message)[:500].replace(config.SUPABASE_KEY or "\0", "[REDACTED]")
+        return json.dumps(body, ensure_ascii=False)[:500].replace(config.SUPABASE_KEY or "\0", "[REDACTED]")
+
+    def catalog_error_detail(self, code: str, status: int, message: str, path: str) -> dict:
+        return {
+            "error": code,
+            "message": message,
+            "provider_status": status,
+            "bucket": self.bucket,
+            "path": path,
+        }
+
     def storage_hostname(self) -> str:
         parsed = urlparse(self.base_url)
         if parsed.netloc.endswith(".supabase.co"):
@@ -492,24 +549,59 @@ class CatalogStorageAdapter:
 
     def metadata(self, client_name: str) -> dict:
         for extension, expected_content_type in self.CATALOG_FORMATS.items():
+            path = self.key(client_name, extension)
             public_url = self.public_url(client_name, extension)
             try:
-                response = requests.head(public_url, timeout=(5, config.DASHBOARD_EXTERNAL_TIMEOUT_SECONDS), allow_redirects=True)
-            except requests.RequestException:
-                raise HTTPException(502, "No fue posible consultar el catálogo")
-            if response.status_code in (400, 404):
+                response = requests.get(
+                    self.object_info_url(client_name, extension),
+                    headers=self.headers,
+                    timeout=(5, config.DASHBOARD_EXTERNAL_TIMEOUT_SECONDS),
+                )
+            except requests.RequestException as exc:
+                logger.error(
+                    "Catalog metadata transport error: bucket=%s path=%s error=%s",
+                    self.bucket, path, type(exc).__name__,
+                )
+                raise HTTPException(502, self.catalog_error_detail(
+                    "storage_transport_error", 0,
+                    "No fue posible consultar Supabase Storage", path,
+                )) from exc
+            message = self.provider_message(response)
+            absent = response.status_code == 404 or (
+                response.status_code == 400
+                and any(marker in message.lower() for marker in ("not found", "nosuchkey", "object not found"))
+            )
+            if absent:
                 continue
             if response.status_code >= 400:
-                raise HTTPException(502, "El almacenamiento rechazó la consulta del catálogo")
-            size = response.headers.get("content-length")
+                logger.error(
+                    "Catalog metadata provider error: status=%s message=%s bucket=%s path=%s",
+                    response.status_code, message, self.bucket, path,
+                )
+                raise HTTPException(502, self.catalog_error_detail(
+                    "storage_provider_error", response.status_code, message, path,
+                ))
+            try:
+                info = response.json()
+            except (ValueError, TypeError):
+                info = {}
+            metadata = info.get("metadata") if isinstance(info, dict) else {}
+            metadata = metadata if isinstance(metadata, dict) else {}
+            size = (metadata.get("size") or info.get("size")) if isinstance(info, dict) else None
+            content_type = metadata.get("mimetype") or metadata.get("contentType") or expected_content_type
+            updated_at = (info.get("updated_at") or info.get("updatedAt")) if isinstance(info, dict) else None
             return {
                 "publicUrl": public_url,
-                "updatedAt": response.headers.get("last-modified"),
-                "sizeBytes": int(size) if size and size.isdigit() else None,
-                "contentType": (response.headers.get("content-type") or expected_content_type).split(";", 1)[0],
-                "filename": self.key(client_name, extension),
+                "updatedAt": updated_at,
+                "sizeBytes": int(size) if str(size or "").isdigit() else None,
+                "contentType": str(content_type).split(";", 1)[0],
+                "filename": path,
             }
-        raise HTTPException(404, "El catálogo no existe en el almacenamiento")
+        missing_path = self.key(client_name, "{pdf|jpg|jpeg|png|webp}")
+        raise HTTPException(404, self.catalog_error_detail(
+            "catalog_not_found", 404,
+            "El catálogo todavía no existe en el almacenamiento", missing_path,
+        ))
 
     def health(self) -> None:
         """Check the configured bucket without uploading or modifying data."""

@@ -120,6 +120,11 @@ logged into the custom server `https://chat.briosos.org`; a session connected to
 [Memo's mobile-app runbook](SETUP_MEMOS.md#app-móvil-no-mezclar-chatwoot-cloud-con-el-self-hosted)
 before changing bot or webhook settings.
 
+For a complete, repeatable deployment of another brand—including the temporary
+Meta bootstrap, Railway Redis reference, Chatwoot token/secret distinction,
+assignment choice, full variable matrix, Lovable proxy prompt, catalog naming,
+and acceptance tests—follow [DEPLOY_NEW_BUSINESS.md](DEPLOY_NEW_BUSINESS.md).
+
 For scalable queued processing, also set:
 
 - `REDIS_URL` - enables durable RQ queue processing.

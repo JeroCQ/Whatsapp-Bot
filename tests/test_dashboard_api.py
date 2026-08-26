@@ -167,6 +167,49 @@ def test_explicit_si_path_may_match_deployment_business(monkeypatch):
     assert storage.uploaded == ("client_1", png, len(png), "png", "image/png")
 
 
+def test_si_path_normalizes_railway_quotes_whitespace_and_separators(monkeypatch):
+    monkeypatch.setattr(
+        api.config,
+        "GITHUB_SI_PATH",
+        '  "/src\\clients\\client_1\\system_instruction.txt"\r\n',
+    )
+
+    assert api.system_instruction_path("client_1") == "src/clients/client_1/system_instruction.txt"
+
+
+def test_si_path_mismatch_reports_masked_value_and_branch(monkeypatch):
+    raw = '"src/clients/tanaka/system_instruction.txt"'
+    monkeypatch.setattr(api.config, "GITHUB_SI_PATH", raw)
+    monkeypatch.setattr(api.config, "GITHUB_BRANCH", "production")
+
+    with pytest.raises(ValueError) as error:
+        api.system_instruction_path("client_1")
+
+    message = str(error.value)
+    assert "rama='production'" in message
+    assert "recibido=" in message
+    assert raw not in message
+    assert "src/clients/client_1/system_instruction.txt" in message
+
+
+def test_dashboard_startup_logs_raw_si_path_with_repr(monkeypatch, caplog):
+    monkeypatch.setattr(api.config, "GITHUB_SI_PATH", '"src/clients/memos/system_instruction.txt"\r\n')
+    monkeypatch.setattr(api.config, "GITHUB_BRANCH", "main")
+
+    with caplog.at_level("INFO", logger="dashboard_api"):
+        api.log_dashboard_startup_configuration()
+
+    assert "GITHUB_SI_PATH raw='\"src/clients/memos/system_instruction.txt\"\\r\\n'" in caplog.text
+    assert "branch='main'" in caplog.text
+
+
+def test_memos_system_instruction_exists_at_exact_validated_path():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    assert (root / "src/clients/memos/system_instruction.txt").is_file()
+
+
 def test_invalid_gemini_json_and_original_validation():
     client, headers = make_client(FakeGemini("not json"))
     payload = {"current_si": "one", "user_request": "change"}
@@ -458,22 +501,26 @@ def test_catalog_upload_removes_other_client_formats(monkeypatch):
 
 def test_catalog_metadata_finds_image_after_missing_pdf(monkeypatch):
     class Response:
-        def __init__(self, status_code, headers=None):
+        def __init__(self, status_code, body=None):
             self.status_code = status_code
-            self.headers = headers or {}
+            self._body = body or {"message": "Object not found"}
+            self.text = __import__("json").dumps(self._body)
+
+        def json(self):
+            return self._body
 
     monkeypatch.setattr(
         api.requests,
-        "head",
+        "get",
         lambda url, **kwargs: Response(200, {
-            "content-type": "image/png",
-            "content-length": "321",
-            "last-modified": "now",
+            "metadata": {"mimetype": "image/png", "size": 321},
+            "updated_at": "now",
         }) if url.endswith(".png") else Response(404),
     )
     adapter = object.__new__(api.CatalogStorageAdapter)
     adapter.base_url = "https://project.supabase.co"
     adapter.bucket = "catalogos"
+    adapter.headers = {"Authorization": "Bearer secret", "apikey": "secret"}
 
     assert adapter.metadata("client_1") == {
         "publicUrl": "https://project.supabase.co/storage/v1/object/public/catalogos/client_1.png",
@@ -482,3 +529,105 @@ def test_catalog_metadata_finds_image_after_missing_pdf(monkeypatch):
         "contentType": "image/png",
         "filename": "client_1.png",
     }
+
+
+def test_catalog_metadata_returns_explicit_404_when_all_objects_are_absent(monkeypatch):
+    class Response:
+        status_code = 404
+        text = '{"message":"Object not found"}'
+
+        def json(self):
+            return {"message": "Object not found"}
+
+    monkeypatch.setattr(api.requests, "get", lambda *args, **kwargs: Response())
+    adapter = object.__new__(api.CatalogStorageAdapter)
+    adapter.base_url = "https://project.supabase.co"
+    adapter.bucket = "catalogos"
+    adapter.headers = {"Authorization": "Bearer secret", "apikey": "secret"}
+
+    with pytest.raises(HTTPException) as error:
+        adapter.metadata("memos")
+
+    assert error.value.status_code == 404
+    assert error.value.detail == {
+        "error": "catalog_not_found",
+        "message": "El catálogo todavía no existe en el almacenamiento",
+        "provider_status": 404,
+        "bucket": "catalogos",
+        "path": "memos.{pdf|jpg|jpeg|png|webp}",
+    }
+
+
+def test_catalog_metadata_propagates_provider_status_message_bucket_and_path(monkeypatch, caplog):
+    class Response:
+        status_code = 403
+        text = '{"message":"Invalid JWT for project"}'
+
+        def json(self):
+            return {"message": "Invalid JWT for project"}
+
+    monkeypatch.setattr(api.requests, "get", lambda *args, **kwargs: Response())
+    adapter = object.__new__(api.CatalogStorageAdapter)
+    adapter.base_url = "https://project.supabase.co"
+    adapter.bucket = "catalogos"
+    adapter.headers = {"Authorization": "Bearer secret", "apikey": "secret"}
+
+    with caplog.at_level("ERROR", logger="dashboard_api"), pytest.raises(HTTPException) as error:
+        adapter.metadata("memos")
+
+    assert error.value.status_code == 502
+    assert error.value.detail == {
+        "error": "storage_provider_error",
+        "message": "Invalid JWT for project",
+        "provider_status": 403,
+        "bucket": "catalogos",
+        "path": "memos.pdf",
+    }
+    assert "status=403" in caplog.text
+    assert "message=Invalid JWT for project" in caplog.text
+    assert "bucket=catalogos" in caplog.text
+    assert "path=memos.pdf" in caplog.text
+
+
+def test_catalog_metadata_never_echoes_service_role(monkeypatch):
+    secret = "service-role-sensitive"
+
+    class Response:
+        status_code = 403
+        text = '{"message":"credential service-role-sensitive rejected"}'
+
+        def json(self):
+            return {"message": "credential service-role-sensitive rejected"}
+
+    monkeypatch.setattr(api.config, "SUPABASE_KEY", secret)
+    monkeypatch.setattr(api.requests, "get", lambda *args, **kwargs: Response())
+    adapter = object.__new__(api.CatalogStorageAdapter)
+    adapter.base_url = "https://project.supabase.co"
+    adapter.bucket = "catalogos"
+    adapter.headers = {"Authorization": f"Bearer {secret}", "apikey": secret}
+
+    with pytest.raises(HTTPException) as error:
+        adapter.metadata("memos")
+
+    assert secret not in str(error.value.detail)
+    assert "[REDACTED]" in error.value.detail["message"]
+
+
+def test_current_catalog_route_returns_explicit_not_found_json(monkeypatch):
+    class Response:
+        status_code = 404
+        text = '{"message":"Object not found"}'
+
+        def json(self):
+            return {"message": "Object not found"}
+
+    monkeypatch.setattr(api.requests, "get", lambda *args, **kwargs: Response())
+    storage = api.CatalogStorageAdapter()
+    client, headers = make_client(storage=storage)
+
+    response = client.get("/api/current-catalog?client_name=client_1", headers=headers)
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["error"] == "catalog_not_found"
+    assert response.json()["detail"]["bucket"] == "catalogos"
+    assert response.json()["detail"]["path"] == "client_1.{pdf|jpg|jpeg|png|webp}"
