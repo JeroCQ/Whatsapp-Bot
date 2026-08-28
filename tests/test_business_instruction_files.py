@@ -37,3 +37,17 @@ def test_tanaka_instruction_uses_confirmed_product_facts():
     assert instruction.count("45 días") == 2
     assert instruction.count("avena certificada sin gluten") == 2
     assert "Los combos se consideran disponibles bajo la misma regla del catálogo" in instruction
+
+
+def test_tanaka_instruction_defines_current_customer_and_shipping_rules():
+    instruction = (ROOT / "src/clients/tanaka/system_instruction.txt").read_text(encoding="utf-8")
+    assert "Año de nacimiento" in instruction
+    assert "Mes de cumpleaños" not in instruction
+    assert "Solo para estos destinos también puede pagar contraentrega la totalidad del pedido" in instruction
+    assert "entre $20.000 y $30.000 por kilo" in instruction
+    assert "nevera térmica de $20.000" in instruction
+    assert "ÚNICAMENTE a Medellín, Bogotá y Barranquilla" in instruction
+    assert "$2.150 por litro volumétrico a Medellín" in instruction
+    assert "$3.650 por litro volumétrico a Barranquilla" in instruction
+    assert "@tanakasaludable" in instruction
+    assert "etiquetarnos cuando recibas o pruebes tus productos" in instruction
