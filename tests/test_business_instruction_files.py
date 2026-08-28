@@ -51,3 +51,14 @@ def test_tanaka_instruction_defines_current_customer_and_shipping_rules():
     assert "$3.650 por litro volumétrico a Barranquilla" in instruction
     assert "@tanakasaludable" in instruction
     assert "etiquetarnos cuando recibas o pruebes tus productos" in instruction
+
+
+def test_tanaka_instruction_includes_official_business_contact_and_dispatch_details():
+    instruction = (ROOT / "src/clients/tanaka/system_instruction.txt").read_text(encoding="utf-8")
+    assert "Nombre legal:** Tanaka Saludable SAS" in instruction
+    assert "Celular:** 3025991292" in instruction
+    assert "Correo electrónico:** tanakasaludablecali@gmail.com" in instruction
+    assert "Manager:** María Camila" in instruction
+    assert "salen únicamente los lunes o martes" in instruction
+    assert "Tardan aproximadamente dos días en llegar" in instruction
+    assert "lunes a miércoles" not in instruction
