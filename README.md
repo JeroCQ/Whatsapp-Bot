@@ -314,15 +314,17 @@ You can also open the root endpoint in a browser. It returns queue diagnostics w
 
 En Railway agrega temporalmente la variable
 `GEMINI_OUTAGE_RECOVERY_SINCE=2026-08-29T00:00:00Z` y despliega nuevamente. Al
-arrancar, la aplicación encola una reparación única que busca conversaciones que
+arrancar, la aplicación ejecuta en segundo plano una reparación que busca conversaciones que
 solo recibieron el fallback de la caída y crea sus tickets en Chatwoot. El resumen
 privado del ticket indica explícitamente que Gemini no respondió porque no había
 créditos prepagados. Las conversaciones que ya recibieron una respuesta normal o
 ya tienen ticket se omiten.
 
-Cuando Railway muestre `[GEMINI RECOVERY] handoffs_pending=...` y los tickets
-aparezcan en Chatwoot, elimina la variable. El identificador determinista del job
-y la comprobación de tickets existentes evitan duplicarlos durante un redeploy.
+Cuando Railway muestre `[GEMINI RECOVERY] completed ...` y los tickets
+aparezcan en Chatwoot, elimina la variable. La comprobación de tickets existentes
+evita duplicarlos durante un redeploy.
+El endpoint `/health` expone `gemini_outage_recovery.status` y los contadores
+`candidates`, `tickets_created`, `skipped` y `failed`.
 
 Todo error de inferencia nuevo pausa el bot y crea un handoff. Cuando la causa es
 facturación, el motivo distingue expresamente `no hay créditos prepagados`.

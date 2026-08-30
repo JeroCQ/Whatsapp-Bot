@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 import os
@@ -61,6 +62,8 @@ app.mount("/public", StaticFiles(directory="public"), name="public")
 
 DEPLOYMENT_COMMIT_SHA = os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_COMMIT_SHA") or "unknown"
 print(f"[BOOT] WhatsApp bot code loaded. Commit: {DEPLOYMENT_COMMIT_SHA}. Scalable queue build: 2026-07-24.2")
+OUTAGE_RECOVERY_STATUS = {"status": "disabled"}
+_BACKGROUND_TASKS = set()
 
 WHATSAPP_MEDIA_TYPES = {"audio", "document", "image", "sticker", "video"}
 CATALOG_FORMATS = (
@@ -80,6 +83,7 @@ async def health_check():
         "commit": DEPLOYMENT_COMMIT_SHA,
         "queue_enabled": queue_enabled(),
         "queue": get_queue_stats(),
+        "gemini_outage_recovery": OUTAGE_RECOVERY_STATUS,
         "scalable_queue_build": "2026-07-24.2",
     }
 
@@ -95,15 +99,26 @@ async def log_deployment_version():
     """Log the Railway commit so deployments can be verified."""
     print(f"[STARTUP] WhatsApp bot running commit: {DEPLOYMENT_COMMIT_SHA}. Queue enabled: {queue_enabled()}")
     if config.GEMINI_OUTAGE_RECOVERY_SINCE:
-        try:
-            enqueue(
-                recover_gemini_outage_handoffs,
-                config.GEMINI_OUTAGE_RECOVERY_SINCE,
-                job_id=f"gemini-outage-handoffs-{config.GEMINI_OUTAGE_RECOVERY_SINCE}",
-            )
-            print("[STARTUP] Recuperación de handoffs Gemini encolada")
-        except Exception as exc:
-            print(f"[STARTUP WARN] No se pudo encolar recuperación de handoffs: {exc}")
+        OUTAGE_RECOVERY_STATUS.clear()
+        OUTAGE_RECOVERY_STATUS.update({"status": "scheduled", "since": config.GEMINI_OUTAGE_RECOVERY_SINCE})
+        task = asyncio.create_task(_run_outage_recovery(config.GEMINI_OUTAGE_RECOVERY_SINCE))
+        _BACKGROUND_TASKS.add(task)
+        task.add_done_callback(_BACKGROUND_TASKS.discard)
+        print("[STARTUP] Recuperación de handoffs Gemini programada en este servicio")
+
+
+async def _run_outage_recovery(since: str):
+    """Run locally so the repair cannot remain stuck behind a stale RQ job id."""
+    OUTAGE_RECOVERY_STATUS.update({"status": "running", "since": since})
+    try:
+        result = await asyncio.to_thread(recover_gemini_outage_handoffs, since)
+        OUTAGE_RECOVERY_STATUS.clear()
+        OUTAGE_RECOVERY_STATUS.update({"status": "completed", "since": since, **result})
+        print(f"[GEMINI RECOVERY] completed {result}")
+    except Exception as exc:
+        OUTAGE_RECOVERY_STATUS.clear()
+        OUTAGE_RECOVERY_STATUS.update({"status": "failed", "since": since, "error": sanitize_text(exc)})
+        print(f"[GEMINI RECOVERY ERROR] {sanitize_text(exc)}")
 
 
 def _attachment_url(attachment: dict) -> str:
@@ -487,23 +502,30 @@ def recover_gemini_outage_handoffs(since: str):
         or []
     )
     recoveries = find_recoveries(rows)
+    result = {"candidates": len(recoveries), "tickets_created": 0, "skipped": 0, "failed": 0}
     print(f"[GEMINI RECOVERY] handoffs_pending={len(recoveries)}")
     for recovery in recoveries:
-        state = get_or_create_customer_state(recovery.phone)
-        if not state or state.get("chatwoot_conversation_id"):
-            continue
-        reason = "Gemini no respondió: no había créditos prepagados"
-        pause_bot_for_handoff(recovery.phone, reason)
-        state = get_or_create_customer_state(recovery.phone)
-        _create_handoff_ticket_if_needed(
-            recovery.phone,
-            "Cliente",
-            state,
-            None,
-            "\n".join(recovery.questions),
-            None,
-            None,
-        )
+        try:
+            state = get_or_create_customer_state(recovery.phone)
+            if not state or state.get("chatwoot_conversation_id"):
+                result["skipped"] += 1
+                continue
+            reason = "Gemini no respondió: no había créditos prepagados"
+            pause_bot_for_handoff(recovery.phone, reason)
+            state = get_or_create_customer_state(recovery.phone)
+            _create_handoff_ticket_if_needed(
+                recovery.phone, "Cliente", state, None,
+                "\n".join(recovery.questions), None, None,
+            )
+            final_state = get_or_create_customer_state(recovery.phone)
+            if final_state and final_state.get("chatwoot_conversation_id"):
+                result["tickets_created"] += 1
+            else:
+                result["failed"] += 1
+        except Exception as exc:
+            result["failed"] += 1
+            print(f"[GEMINI RECOVERY ERROR] phone={recovery.phone} error={sanitize_text(exc)}")
+    return result
 
 
 def process_whatsapp_message(sender_phone: str, sender_name: str, message_body: str, is_image: bool = False, media_id: str = None, is_audio: bool = False, audio_media_id: str = None, media_type: str = None, mime_type: str = None, filename: str = None, event_id: str = None):
