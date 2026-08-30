@@ -102,6 +102,9 @@ class Settings:
     REDIS_URL = os.getenv("REDIS_URL")
     QUEUE_NAME = os.getenv("QUEUE_NAME", "whatsapp-events")
     GEMINI_MAX_CONCURRENT = int(os.getenv("GEMINI_MAX_CONCURRENT", "8"))
+    # Optional one-time Railway repair. When set to the outage start timestamp,
+    # deployment startup creates Chatwoot handoffs for still-unanswered turns.
+    GEMINI_OUTAGE_RECOVERY_SINCE = os.getenv("GEMINI_OUTAGE_RECOVERY_SINCE", "").strip()
     PHONE_LOCK_TTL_SECONDS = int(os.getenv("PHONE_LOCK_TTL_SECONDS", "180"))
     # JSON array of customer-facing files the model is allowed to request.
     PRESAVED_FILES_JSON = os.getenv("PRESAVED_FILES_JSON", "[]")
