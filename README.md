@@ -310,3 +310,25 @@ Search Railway logs for these markers:
 - `[METRIC] chatwoot_event_processed` - full Chatwoot webhook processing time.
 
 You can also open the root endpoint in a browser. It returns queue diagnostics without exposing secrets, including queued jobs, failed jobs, and how many RQ workers Redis can currently see.
+## Recuperar handoffs después de una caída de Gemini
+
+En Railway agrega temporalmente la variable
+`GEMINI_OUTAGE_RECOVERY_SINCE=2026-08-29T00:00:00Z` y despliega nuevamente. Al
+arrancar, la aplicación ejecuta en segundo plano una reparación que busca conversaciones que
+solo recibieron el fallback de la caída y crea sus tickets en Chatwoot. El resumen
+privado del ticket indica explícitamente que Gemini no respondió porque no había
+créditos prepagados. Las conversaciones que ya recibieron una respuesta normal o
+ya tienen ticket se omiten.
+
+Cuando Railway muestre `[GEMINI RECOVERY] completed ...` y los tickets
+aparezcan en Chatwoot, elimina la variable. La comprobación de tickets existentes
+evita duplicarlos durante un redeploy.
+El endpoint `/health` expone `gemini_outage_recovery.status` y los contadores
+`candidates`, `tickets_created`, `skipped` y `failed`.
+
+Todo error de inferencia nuevo pausa el bot y crea un handoff. Cuando la causa es
+facturación, el motivo distingue expresamente `no hay créditos prepagados`.
+
+Los follow-ups de texto libre que quedarían programados 24 horas o más después
+del mensaje del cliente se cancelan: no se intenta enviarlos fuera de la ventana
+permitida por WhatsApp.

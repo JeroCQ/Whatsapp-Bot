@@ -263,6 +263,20 @@ def test_failed_primary_response_suppresses_followup(monkeypatch):
     assert not any(entry[1] == "model" for entry in logged)
 
 
+def test_followup_at_or_after_24_hours_is_cancelled(monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(main, "queue_enabled", lambda: True)
+    monkeypatch.setattr(main, "follow_up_delay_seconds", lambda minutes: 24 * 60 * 60)
+    monkeypatch.setattr(main, "invalidate_follow_up", lambda phone: calls.append(("cancel", phone)))
+    monkeypatch.setattr(main, "register_follow_up", lambda *a: pytest.fail("must not register"))
+    monkeypatch.setattr(main, "enqueue_in", lambda *a, **k: pytest.fail("must not enqueue"))
+
+    main.schedule_follow_up("57300", "¿Sigues interesado?", 2880)
+
+    assert calls == [("cancel", "57300")]
+    assert "fuera de la ventana de 24 horas" in capsys.readouterr().out
+
+
 def test_agent_text_forwarding_is_scoped(monkeypatch):
     sent = []
     monkeypatch.setattr(main, "get_phone_by_chatwoot_id", lambda value: "57300")

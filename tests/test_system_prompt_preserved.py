@@ -31,3 +31,16 @@ def test_model_response_is_not_logged_before_transport_delivery():
     send_position = main_source.index("send_whatsapp_message(sender_phone, ai_turn.response)")
     log_position = main_source.index('save_message_log(sender_phone, "model", ai_turn.response)')
     assert send_position < log_position
+
+
+def test_every_gemini_inference_failure_hands_off_with_explicit_billing_reason():
+    source = Path("bot.py").read_text(encoding="utf-8")
+    assert 'pause_bot_for_handoff(phone, "Gemini no respondió: error de inferencia")' in source
+    assert 'pause_bot_for_handoff(phone, "Gemini no respondió: no hay créditos prepagados")' in source
+
+
+def test_outage_recovery_runs_locally_and_reports_health_status():
+    source = Path("main.py").read_text(encoding="utf-8")
+    assert "asyncio.to_thread(recover_gemini_outage_handoffs, since)" in source
+    assert '"gemini_outage_recovery": OUTAGE_RECOVERY_STATUS' in source
+    assert '"tickets_created": 0' in source

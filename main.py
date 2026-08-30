@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 import os
@@ -20,6 +21,7 @@ from database import (
     get_or_create_customer_state,
     get_phone_by_chatwoot_id,
     mark_webhook_event_processed,
+    pause_bot_for_handoff,
     invalidate_follow_up,
     register_follow_up,
     reset_client_history,
@@ -27,6 +29,7 @@ from database import (
     resume_bot_state,
     save_message_log,
     update_chatwoot_conversation_id,
+    supabase,
 )
 from http_client import MEDIA_TIMEOUT, get, post
 from processing_lock import phone_lock
@@ -43,6 +46,7 @@ from queue_client import (
 from webhook_utils import chatwoot_event_identity, is_restart_command
 from chatwoot_security import chatwoot_scope, verify_chatwoot_signature
 from provider_errors import ProviderError, provider_error, sanitize_text
+from outage_recovery import find_recoveries
 from dashboard_api import router as dashboard_router
 
 app = FastAPI()
@@ -58,6 +62,8 @@ app.mount("/public", StaticFiles(directory="public"), name="public")
 
 DEPLOYMENT_COMMIT_SHA = os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_COMMIT_SHA") or "unknown"
 print(f"[BOOT] WhatsApp bot code loaded. Commit: {DEPLOYMENT_COMMIT_SHA}. Scalable queue build: 2026-07-24.2")
+OUTAGE_RECOVERY_STATUS = {"status": "disabled"}
+_BACKGROUND_TASKS = set()
 
 WHATSAPP_MEDIA_TYPES = {"audio", "document", "image", "sticker", "video"}
 CATALOG_FORMATS = (
@@ -77,6 +83,7 @@ async def health_check():
         "commit": DEPLOYMENT_COMMIT_SHA,
         "queue_enabled": queue_enabled(),
         "queue": get_queue_stats(),
+        "gemini_outage_recovery": OUTAGE_RECOVERY_STATUS,
         "scalable_queue_build": "2026-07-24.2",
     }
 
@@ -91,6 +98,27 @@ async def health_alias():
 async def log_deployment_version():
     """Log the Railway commit so deployments can be verified."""
     print(f"[STARTUP] WhatsApp bot running commit: {DEPLOYMENT_COMMIT_SHA}. Queue enabled: {queue_enabled()}")
+    if config.GEMINI_OUTAGE_RECOVERY_SINCE:
+        OUTAGE_RECOVERY_STATUS.clear()
+        OUTAGE_RECOVERY_STATUS.update({"status": "scheduled", "since": config.GEMINI_OUTAGE_RECOVERY_SINCE})
+        task = asyncio.create_task(_run_outage_recovery(config.GEMINI_OUTAGE_RECOVERY_SINCE))
+        _BACKGROUND_TASKS.add(task)
+        task.add_done_callback(_BACKGROUND_TASKS.discard)
+        print("[STARTUP] Recuperación de handoffs Gemini programada en este servicio")
+
+
+async def _run_outage_recovery(since: str):
+    """Run locally so the repair cannot remain stuck behind a stale RQ job id."""
+    OUTAGE_RECOVERY_STATUS.update({"status": "running", "since": since})
+    try:
+        result = await asyncio.to_thread(recover_gemini_outage_handoffs, since)
+        OUTAGE_RECOVERY_STATUS.clear()
+        OUTAGE_RECOVERY_STATUS.update({"status": "completed", "since": since, **result})
+        print(f"[GEMINI RECOVERY] completed {result}")
+    except Exception as exc:
+        OUTAGE_RECOVERY_STATUS.clear()
+        OUTAGE_RECOVERY_STATUS.update({"status": "failed", "since": since, "error": sanitize_text(exc)})
+        print(f"[GEMINI RECOVERY ERROR] {sanitize_text(exc)}")
 
 
 def _attachment_url(attachment: dict) -> str:
@@ -161,6 +189,13 @@ def schedule_follow_up(phone_number: str, message: str, delay_minutes: int):
         return
     try:
         delay_seconds = follow_up_delay_seconds(delay_minutes)
+        if delay_seconds >= 24 * 60 * 60:
+            invalidate_follow_up(phone_number)
+            print(
+                f"[FOLLOW UP] Cancelado para {phone_number}: "
+                "quedaría fuera de la ventana de 24 horas de WhatsApp"
+            )
+            return
         token = register_follow_up(phone_number, delay_seconds)
         enqueue_in(delay_seconds, send_scheduled_follow_up, phone_number, token, message,
                    job_id=f"follow-up-{phone_number}-{token}")
@@ -451,6 +486,46 @@ def _create_handoff_ticket_if_needed(sender_phone: str, sender_name: str, new_st
     else:
         chatwoot_api.send_message_to_chatwoot(conv_id, context_details, is_private=True)
         chatwoot_api.send_message_to_chatwoot(conv_id, short_alert, is_private=True)
+
+
+def recover_gemini_outage_handoffs(since: str):
+    """Create missing Chatwoot tickets for unanswered turns from an old outage."""
+    rows = (
+        supabase.table("message_logs")
+        .select("phone_number,role,content,created_at,id")
+        .gte("created_at", since)
+        .order("created_at")
+        .order("id")
+        .limit(10000)
+        .execute()
+        .data
+        or []
+    )
+    recoveries = find_recoveries(rows)
+    result = {"candidates": len(recoveries), "tickets_created": 0, "skipped": 0, "failed": 0}
+    print(f"[GEMINI RECOVERY] handoffs_pending={len(recoveries)}")
+    for recovery in recoveries:
+        try:
+            state = get_or_create_customer_state(recovery.phone)
+            if not state or state.get("chatwoot_conversation_id"):
+                result["skipped"] += 1
+                continue
+            reason = "Gemini no respondió: no había créditos prepagados"
+            pause_bot_for_handoff(recovery.phone, reason)
+            state = get_or_create_customer_state(recovery.phone)
+            _create_handoff_ticket_if_needed(
+                recovery.phone, "Cliente", state, None,
+                "\n".join(recovery.questions), None, None,
+            )
+            final_state = get_or_create_customer_state(recovery.phone)
+            if final_state and final_state.get("chatwoot_conversation_id"):
+                result["tickets_created"] += 1
+            else:
+                result["failed"] += 1
+        except Exception as exc:
+            result["failed"] += 1
+            print(f"[GEMINI RECOVERY ERROR] phone={recovery.phone} error={sanitize_text(exc)}")
+    return result
 
 
 def process_whatsapp_message(sender_phone: str, sender_name: str, message_body: str, is_image: bool = False, media_id: str = None, is_audio: bool = False, audio_media_id: str = None, media_type: str = None, mime_type: str = None, filename: str = None, event_id: str = None):
