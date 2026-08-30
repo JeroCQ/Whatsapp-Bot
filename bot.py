@@ -13,6 +13,7 @@ from google import genai
 from google.genai import types
 from config import config
 from file_catalog import extend_system_instruction, load_file_catalog
+from gemini_errors import is_depleted_prepaid_credits
 from webhook_utils import is_simple_greeting
 from database import (
     get_or_create_customer_state, 
@@ -222,8 +223,19 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> BotT
         import traceback
         print(f"[ERROR GEMINI] Falló la inferencia con Gemini:")
         traceback.print_exc()
-        
-        if is_image:
-            pause_bot_for_handoff(phone, "Envío de imagen (Fallback)")
-            return BotTurn("¡Recibimos tu archivo! Un asesor lo va a revisar en este momento. Por favor espera un momento.", [])
-        return BotTurn("Disculpa, en este momento estoy teniendo un retraso en procesar tu mensaje. ¿Podrías escribir nuevamente?", [])
+
+        if is_depleted_prepaid_credits(e):
+            print("[CRITICAL GEMINI] Créditos prepagados agotados; revisa facturación en AI Studio.")
+            pause_bot_for_handoff(phone, "Gemini no respondió: no hay créditos prepagados")
+            return BotTurn(
+                "En este momento no puedo procesar tu solicitud automáticamente. "
+                "Ya la remití a un asesor para que pueda ayudarte.",
+                [],
+            )
+
+        pause_bot_for_handoff(phone, "Gemini no respondió: error de inferencia")
+        return BotTurn(
+            "No pude procesar tu solicitud automáticamente. "
+            "Ya la remití a un asesor para que pueda ayudarte.",
+            [],
+        )

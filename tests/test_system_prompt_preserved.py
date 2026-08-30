@@ -31,3 +31,9 @@ def test_model_response_is_not_logged_before_transport_delivery():
     send_position = main_source.index("send_whatsapp_message(sender_phone, ai_turn.response)")
     log_position = main_source.index('save_message_log(sender_phone, "model", ai_turn.response)')
     assert send_position < log_position
+
+
+def test_every_gemini_inference_failure_hands_off_with_explicit_billing_reason():
+    source = Path("bot.py").read_text(encoding="utf-8")
+    assert 'pause_bot_for_handoff(phone, "Gemini no respondió: error de inferencia")' in source
+    assert 'pause_bot_for_handoff(phone, "Gemini no respondió: no hay créditos prepagados")' in source

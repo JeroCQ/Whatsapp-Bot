@@ -20,6 +20,7 @@ from database import (
     get_or_create_customer_state,
     get_phone_by_chatwoot_id,
     mark_webhook_event_processed,
+    pause_bot_for_handoff,
     invalidate_follow_up,
     register_follow_up,
     reset_client_history,
@@ -27,6 +28,7 @@ from database import (
     resume_bot_state,
     save_message_log,
     update_chatwoot_conversation_id,
+    supabase,
 )
 from http_client import MEDIA_TIMEOUT, get, post
 from processing_lock import phone_lock
@@ -43,6 +45,7 @@ from queue_client import (
 from webhook_utils import chatwoot_event_identity, is_restart_command
 from chatwoot_security import chatwoot_scope, verify_chatwoot_signature
 from provider_errors import ProviderError, provider_error, sanitize_text
+from outage_recovery import find_recoveries
 from dashboard_api import router as dashboard_router
 
 app = FastAPI()
@@ -91,6 +94,16 @@ async def health_alias():
 async def log_deployment_version():
     """Log the Railway commit so deployments can be verified."""
     print(f"[STARTUP] WhatsApp bot running commit: {DEPLOYMENT_COMMIT_SHA}. Queue enabled: {queue_enabled()}")
+    if config.GEMINI_OUTAGE_RECOVERY_SINCE:
+        try:
+            enqueue(
+                recover_gemini_outage_handoffs,
+                config.GEMINI_OUTAGE_RECOVERY_SINCE,
+                job_id=f"gemini-outage-handoffs-{config.GEMINI_OUTAGE_RECOVERY_SINCE}",
+            )
+            print("[STARTUP] Recuperación de handoffs Gemini encolada")
+        except Exception as exc:
+            print(f"[STARTUP WARN] No se pudo encolar recuperación de handoffs: {exc}")
 
 
 def _attachment_url(attachment: dict) -> str:
@@ -161,6 +174,13 @@ def schedule_follow_up(phone_number: str, message: str, delay_minutes: int):
         return
     try:
         delay_seconds = follow_up_delay_seconds(delay_minutes)
+        if delay_seconds >= 24 * 60 * 60:
+            invalidate_follow_up(phone_number)
+            print(
+                f"[FOLLOW UP] Cancelado para {phone_number}: "
+                "quedaría fuera de la ventana de 24 horas de WhatsApp"
+            )
+            return
         token = register_follow_up(phone_number, delay_seconds)
         enqueue_in(delay_seconds, send_scheduled_follow_up, phone_number, token, message,
                    job_id=f"follow-up-{phone_number}-{token}")
@@ -451,6 +471,39 @@ def _create_handoff_ticket_if_needed(sender_phone: str, sender_name: str, new_st
     else:
         chatwoot_api.send_message_to_chatwoot(conv_id, context_details, is_private=True)
         chatwoot_api.send_message_to_chatwoot(conv_id, short_alert, is_private=True)
+
+
+def recover_gemini_outage_handoffs(since: str):
+    """Create missing Chatwoot tickets for unanswered turns from an old outage."""
+    rows = (
+        supabase.table("message_logs")
+        .select("phone_number,role,content,created_at,id")
+        .gte("created_at", since)
+        .order("created_at")
+        .order("id")
+        .limit(10000)
+        .execute()
+        .data
+        or []
+    )
+    recoveries = find_recoveries(rows)
+    print(f"[GEMINI RECOVERY] handoffs_pending={len(recoveries)}")
+    for recovery in recoveries:
+        state = get_or_create_customer_state(recovery.phone)
+        if not state or state.get("chatwoot_conversation_id"):
+            continue
+        reason = "Gemini no respondió: no había créditos prepagados"
+        pause_bot_for_handoff(recovery.phone, reason)
+        state = get_or_create_customer_state(recovery.phone)
+        _create_handoff_ticket_if_needed(
+            recovery.phone,
+            "Cliente",
+            state,
+            None,
+            "\n".join(recovery.questions),
+            None,
+            None,
+        )
 
 
 def process_whatsapp_message(sender_phone: str, sender_name: str, message_body: str, is_image: bool = False, media_id: str = None, is_audio: bool = False, audio_media_id: str = None, media_type: str = None, mime_type: str = None, filename: str = None, event_id: str = None):

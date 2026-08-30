@@ -47,8 +47,8 @@ def test_tanaka_instruction_defines_current_customer_and_shipping_rules():
     assert "entre $20.000 y $30.000 por kilo" in instruction
     assert "nevera térmica de $20.000" in instruction
     assert "ÚNICAMENTE a Medellín, Bogotá y Barranquilla" in instruction
-    assert "$2.150 por litro volumétrico a Medellín" in instruction
-    assert "$3.650 por litro volumétrico a Barranquilla" in instruction
+    assert "$13.850 por un litro volumétrico a Medellín y Bogotá" in instruction
+    assert "$15.350 por litro volumétrico a Barranquilla" in instruction
     assert "@tanakasaludable" in instruction
     assert "etiquetarnos cuando recibas o pruebes tus productos" in instruction
 
