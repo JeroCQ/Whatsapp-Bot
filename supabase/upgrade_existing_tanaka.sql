@@ -11,7 +11,9 @@ HAVING count(*) > 1;
 -- The current runtime stores one-time follow-up cancellation tokens here. Older
 -- Tanaka schemas predate this column, so CREATE TABLE IF NOT EXISTS is not enough.
 ALTER TABLE public.conversation_states
-  ADD COLUMN IF NOT EXISTS follow_up_token varchar;
+  ADD COLUMN IF NOT EXISTS follow_up_token varchar,
+  ADD COLUMN IF NOT EXISTS customer_data jsonb NOT NULL DEFAULT '{}'::jsonb,
+  ADD COLUMN IF NOT EXISTS order_summary text;
 
 CREATE INDEX IF NOT EXISTS idx_message_logs_phone_created_at
   ON public.message_logs(phone_number, created_at DESC, id DESC);
@@ -38,6 +40,12 @@ SELECT
       AND table_name = 'conversation_states'
       AND column_name = 'follow_up_token'
   ) AS has_follow_up_token,
+  EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'conversation_states'
+      AND column_name = 'customer_data'
+  ) AS has_customer_data,
   to_regclass('public.uq_conversation_states_active_chatwoot_conversation_id') IS NOT NULL
     AS has_unique_chatwoot_index,
   EXISTS (

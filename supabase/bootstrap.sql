@@ -23,7 +23,9 @@ CREATE TABLE IF NOT EXISTS public.conversation_states (
   retry_count integer DEFAULT 0,
   last_interaction timestamptz DEFAULT now(),
   chatwoot_conversation_id integer,
-  follow_up_token varchar
+  follow_up_token varchar,
+  customer_data jsonb NOT NULL DEFAULT '{}'::jsonb,
+  order_summary text
 );
 
 CREATE TABLE IF NOT EXISTS public.message_logs (

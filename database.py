@@ -114,6 +114,29 @@ def save_message_log(phone_number: str, role: str, content: str):
         print(f"Error guardando log de mensaje: {e}")
 
 
+def update_conversation_memory(phone_number: str, customer_data: dict, order_summary: str):
+    """Persist checkout facts so they survive context windows and handoffs."""
+    try:
+        supabase.table("conversation_states").update({
+            "customer_data": customer_data or {},
+            "order_summary": order_summary or None,
+        }).eq("phone_number", phone_number).execute()
+    except Exception as e:
+        print(f"[MEMORY WARN] No se pudo guardar memoria estructurada: {e}")
+
+
+def has_successful_file_delivery(phone_number: str, file_id: str) -> bool:
+    """Check the durable success marker instead of a limited prompt window."""
+    try:
+        result = supabase.table("message_logs").select("id").eq(
+            "phone_number", phone_number
+        ).eq("role", "system").ilike("content", f"Archivos enviados:%{file_id}%").limit(1).execute()
+        return bool(result.data)
+    except Exception as e:
+        print(f"[FILE DELIVERY WARN] No se pudo consultar entrega previa: {e}")
+        return False
+
+
 def register_follow_up(phone_number: str) -> str:
     """Replace any pending follow-up and return its one-time token."""
     token = uuid.uuid4().hex
