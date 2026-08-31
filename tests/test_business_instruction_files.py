@@ -53,6 +53,18 @@ def test_tanaka_instruction_defines_current_customer_and_shipping_rules():
     assert "etiquetarnos cuando recibas o pruebes tus productos" in instruction
 
 
+def test_tanaka_instruction_preserves_purchase_momentum_and_recognizes_returning_customers():
+    instruction = (ROOT / "src/clients/tanaka/system_instruction.txt").read_text(encoding="utf-8")
+    assert "Qué bueno tenerte de nuevo" in instruction
+    assert "está guardado su nombre" in instruction
+    assert "El momentum de compra es sagrado" in instruction
+    assert "ubicación general mínima necesaria" in instruction
+    assert "NO pidas todavía dirección exacta" in instruction
+    assert "facturación electrónica son completamente opcionales" in instruction
+    assert "https://www.instagram.com/tanakasaludable/?hl=es" in instruction
+    assert "al pie de ese mismo mensaje" in instruction
+
+
 def test_tanaka_instruction_includes_official_business_contact_and_dispatch_details():
     instruction = (ROOT / "src/clients/tanaka/system_instruction.txt").read_text(encoding="utf-8")
     assert "Nombre legal:** Tanaka Saludable SAS" in instruction
