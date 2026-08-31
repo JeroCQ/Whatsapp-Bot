@@ -40,3 +40,24 @@ def test_does_not_misclassify_a_transient_rate_limit():
 
 def test_does_not_classify_an_unstructured_exception():
     assert not is_depleted_prepaid_credits(RuntimeError("network unavailable"))
+
+
+def test_accepts_structured_http_response_payload_and_string_status_code():
+    class Response:
+        def json(self):
+            return {"error": {"status": "RESOURCE_EXHAUSTED", "message": "Prepaid credits depleted"}}
+
+    error = RuntimeError("request failed")
+    error.status_code = "429"
+    error.response = Response()
+
+    assert is_depleted_prepaid_credits(error)
+
+
+def test_other_structured_429_billing_messages_are_not_assumed_to_be_prepaid_depletion():
+    error = FakeGeminiError(
+        429,
+        {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "message": "Billing account unavailable"}},
+    )
+
+    assert not is_depleted_prepaid_credits(error)

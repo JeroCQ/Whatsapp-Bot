@@ -46,12 +46,11 @@ def find_recoveries(rows: list[dict]) -> list[Recovery]:
 
         questions = []
         for index in failed_indexes:
-            for previous in reversed(messages[:index]):
-                if previous.get("role") == "user":
-                    question = str(previous.get("content") or "").strip()
-                    if question and question not in questions:
-                        questions.append(question)
-                    break
+            if index == 0 or messages[index - 1].get("role") != "user":
+                continue
+            question = str(messages[index - 1].get("content") or "").strip()
+            if question and question not in questions:
+                questions.append(question)
         if questions:
             recoveries.append(Recovery(phone, tuple(questions)))
     return recoveries

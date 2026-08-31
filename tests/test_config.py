@@ -24,6 +24,20 @@ def load_config():
 
 
 class SupabaseKeyConfigTests(TestCase):
+    def test_outage_recovery_delay_defaults_to_one(self):
+        with mock.patch.dict(os.environ, REQUIRED_ENV, clear=True):
+            self.assertEqual(load_config().GEMINI_OUTAGE_RECOVERY_DELAY_SECONDS, 1)
+
+    def test_outage_recovery_delay_accepts_zero_and_rejects_invalid_values(self):
+        with mock.patch.dict(os.environ, {**REQUIRED_ENV, "GEMINI_OUTAGE_RECOVERY_DELAY_SECONDS": "0"}, clear=True):
+            self.assertEqual(load_config().GEMINI_OUTAGE_RECOVERY_DELAY_SECONDS, 0)
+        for value in ("-1", "later"):
+            with self.subTest(value=value), mock.patch.dict(
+                os.environ, {**REQUIRED_ENV, "GEMINI_OUTAGE_RECOVERY_DELAY_SECONDS": value}, clear=True
+            ):
+                with self.assertRaisesRegex(ValueError, "non-negative number"):
+                    load_config()
+
     def test_prefers_service_role_key(self):
         env = {**REQUIRED_ENV, "SUPABASE_SERVICE_ROLE_KEY": "service-role-key"}
         with mock.patch.dict(os.environ, env, clear=True):

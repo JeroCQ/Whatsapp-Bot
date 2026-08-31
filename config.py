@@ -5,6 +5,17 @@ from chatwoot_security import normalize_chatwoot_root
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+
+def _non_negative_float_env(name: str, default: str) -> float:
+    raw_value = os.getenv(name, default)
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a non-negative number") from exc
+    if value < 0:
+        raise ValueError(f"{name} must be a non-negative number")
+    return value
+
 GEMINI_DASHBOARD_DEFAULT_MODEL = "gemini-3.6-flash"
 GEMINI_MODEL_ALIASES = {
     # Older aliases and 2.5 IDs can return 404 for new Gemini Developer API
@@ -105,6 +116,9 @@ class Settings:
     # Optional one-time Railway repair. When set to the outage start timestamp,
     # deployment startup creates Chatwoot handoffs for still-unanswered turns.
     GEMINI_OUTAGE_RECOVERY_SINCE = os.getenv("GEMINI_OUTAGE_RECOVERY_SINCE", "").strip()
+    GEMINI_OUTAGE_RECOVERY_DELAY_SECONDS = _non_negative_float_env(
+        "GEMINI_OUTAGE_RECOVERY_DELAY_SECONDS", "1"
+    )
     PHONE_LOCK_TTL_SECONDS = int(os.getenv("PHONE_LOCK_TTL_SECONDS", "180"))
     # JSON array of customer-facing files the model is allowed to request.
     PRESAVED_FILES_JSON = os.getenv("PRESAVED_FILES_JSON", "[]")

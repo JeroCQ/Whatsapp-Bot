@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import time
+from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import requests
@@ -26,7 +27,6 @@ from database import (
     invalidate_follow_up,
     register_follow_up,
     reset_client_history,
-    recover_failed_handoff,
     resume_bot_state,
     save_message_log,
     update_chatwoot_conversation_id,
@@ -172,17 +172,20 @@ def send_whatsapp_message(to_number: str, text: str):
         raise ProviderError("meta", "send_text", getattr(getattr(e, "response", None), "status_code", None), message="transport error") from e
 
 
-def send_scheduled_follow_up(phone_number: str, token: str, message: str):
+def send_scheduled_follow_up(phone_number: str, token: str, message: str, expires_at: str = None):
     """Send a follow-up only if no newer customer message invalidated it."""
     if not claim_follow_up(phone_number, token):
         print(f"[FOLLOW UP] Cancelado o reemplazado para {phone_number}")
+        return
+    if expires_at and datetime.now(timezone.utc) >= datetime.fromisoformat(expires_at):
+        print(f"[FOLLOW UP] Cancelado para {phone_number}: expiró la ventana de 24 horas de WhatsApp")
         return
     send_whatsapp_message(phone_number, message)
     save_message_log(phone_number, "model", message)
     print(f"[FOLLOW UP] Enviado a {phone_number}")
 
 
-def schedule_follow_up(phone_number: str, message: str, delay_minutes: int):
+def schedule_follow_up(phone_number: str, message: str, delay_minutes: int, received_at=None):
     """Persist and enqueue the AI-authored follow-up."""
     if not message or not queue_enabled():
         if message:
@@ -198,7 +201,8 @@ def schedule_follow_up(phone_number: str, message: str, delay_minutes: int):
             )
             return
         token = register_follow_up(phone_number, delay_seconds)
-        enqueue_in(delay_seconds, send_scheduled_follow_up, phone_number, token, message,
+        expires_at = ((received_at or datetime.now(timezone.utc)) + timedelta(hours=24)).isoformat()
+        enqueue_in(delay_seconds, send_scheduled_follow_up, phone_number, token, message, expires_at,
                    job_id=f"follow-up-{phone_number}-{token}")
         print(f"[FOLLOW UP] Programado para {phone_number} en {delay_seconds} segundos")
     except Exception as exc:
@@ -454,12 +458,10 @@ def _create_handoff_ticket_if_needed(sender_phone: str, sender_name: str, new_st
     display_name = f"{sender_name} (+{sender_phone})"
     contact_id = chatwoot_api.get_or_create_contact(sender_phone, name=display_name)
     if not contact_id:
-        recover_failed_handoff(sender_phone)
         return
 
     conv_id = chatwoot_api.create_conversation(contact_id)
     if not conv_id:
-        recover_failed_handoff(sender_phone)
         return
 
     update_chatwoot_conversation_id(sender_phone, conv_id)
@@ -508,7 +510,7 @@ def recover_gemini_outage_handoffs(since: str):
     recoveries = find_recoveries(rows)
     result = {"candidates": len(recoveries), "tickets_created": 0, "skipped": 0, "failed": 0}
     print(f"[GEMINI RECOVERY] handoffs_pending={len(recoveries)}")
-    for recovery in recoveries:
+    for index, recovery in enumerate(recoveries):
         try:
             state = get_or_create_customer_state(recovery.phone)
             if not state or state.get("chatwoot_conversation_id"):
@@ -529,6 +531,8 @@ def recover_gemini_outage_handoffs(since: str):
         except Exception as exc:
             result["failed"] += 1
             print(f"[GEMINI RECOVERY ERROR] phone={recovery.phone} error={sanitize_text(exc)}")
+        if index < len(recoveries) - 1:
+            time.sleep(config.GEMINI_OUTAGE_RECOVERY_DELAY_SECONDS)
     return result
 
 
@@ -549,6 +553,7 @@ def process_whatsapp_message(sender_phone: str, sender_name: str, message_body: 
 
 
 def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, message_body: str, is_image: bool = False, media_id: str = None, is_audio: bool = False, audio_media_id: str = None, media_type: str = None, mime_type: str = None, filename: str = None):
+    received_at = datetime.now(timezone.utc)
     effective_media_id = media_id or audio_media_id
     effective_media_type = normalize_media_type(media_type or ("image" if is_image else "audio" if is_audio else None), mime_type) if effective_media_id else None
     is_image = effective_media_type == "image"
@@ -573,6 +578,10 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
         save_message_log(sender_phone, "user", log_text)
         conv_id = state_record.get("chatwoot_conversation_id")
         if not conv_id:
+            _create_handoff_ticket_if_needed(
+                sender_phone, sender_name, state_record, effective_media_id,
+                message_body, mime_type, filename, effective_media_type,
+            )
             return
         if effective_media_id:
             file_bytes, downloaded_mime = chatwoot_api.download_meta_media(effective_media_id)
@@ -642,7 +651,10 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
             mime_type, filename, effective_media_type, audio_bytes, downloaded_mime_type,
         )
         if primary_delivered and not new_state.get("is_paused"):
-            schedule_follow_up(sender_phone, ai_turn.follow_up_message, ai_turn.follow_up_delay_minutes)
+            schedule_follow_up(
+                sender_phone, ai_turn.follow_up_message,
+                ai_turn.follow_up_delay_minutes, received_at,
+            )
 
 
 def resolved_customer_message() -> str:

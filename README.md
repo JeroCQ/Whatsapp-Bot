@@ -157,6 +157,14 @@ choose whether the files arrive before or after its text. Unknown IDs are ignore
 the application, so the model cannot send an unapproved file. Changes to this variable
 take effect after restarting/redeploying the service.
 
+Esta lista describe adjuntos **preconfigurados que el bot puede enviar**, no una
+capacidad general de Gemini para comprender cualquier archivo. Con el bot activo se
+transcriben notas de voz y las imágenes se señalan en el prompt, pero el binario de la
+imagen no se entrega actualmente a Gemini. En un handoff, el servicio intenta reenviar
+los adjuntos de WhatsApp a Chatwoot; la entrega sigue sujeta a los formatos y límites de
+Meta, Chatwoot y `CHATWOOT_MAX_ATTACHMENT_BYTES`, y una conversión de audio fallida
+puede impedir la reproducción en línea aunque se conserve el archivo original.
+
 No uses las variables históricas `catalogo_tanaka` o `catalogo_memos`: el runtime
 solo carga `PRESAVED_FILES_JSON` y el despliegue se selecciona con `BUSINESS_ID`.
 
@@ -319,6 +327,12 @@ solo recibieron el fallback de la caída y crea sus tickets en Chatwoot. El resu
 privado del ticket indica explícitamente que Gemini no respondió porque no había
 créditos prepagados. Las conversaciones que ya recibieron una respuesta normal o
 ya tienen ticket se omiten.
+
+Opcionalmente configura `GEMINI_OUTAGE_RECOVERY_DELAY_SECONDS` (por defecto `1`,
+nunca negativo) para espaciar las llamadas a Chatwoot. La reparación consulta como
+máximo 10.000 filas desde la fecha indicada en cada arranque; para una caída mayor hay
+que elegir una fecha que mantenga el intervalo dentro de ese límite. No responde por
+WhatsApp ni se ejecuta como job RQ: es una tarea local y única del proceso web.
 
 Cuando Railway muestre `[GEMINI RECOVERY] completed ...` y los tickets
 aparezcan en Chatwoot, elimina la variable. La comprobación de tickets existentes

@@ -36,3 +36,13 @@ def test_skips_conversation_picked_up_by_advisor():
     ]
 
     assert find_recoveries(rows) == []
+
+
+def test_only_uses_the_user_question_immediately_before_fallback():
+    rows = [
+        row("57300", "user", "Pregunta antigua"),
+        row("57300", "system", "evento intermedio"),
+        row("57300", "model", OUTAGE_FALLBACK),
+    ]
+
+    assert find_recoveries(rows) == []
