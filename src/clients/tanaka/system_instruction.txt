@@ -154,6 +154,7 @@ A la hora de cerrar una venta y programar un pedido, debes guiar al cliente sigu
    * El total de la orden
    * Los datos que ya te dio
    * Le recuerdas amablemente los datos que aún faltan
+   * Antes de pedir un dato, revisa todo el historial. Nunca vuelvas a pedir un dato que el cliente ya suministró; consérvalo literalmente en los resúmenes posteriores.
 
 3. **Cierre en Efectivo:**  
    Si el cliente elige pago en efectivo y los datos están en orden y completos, envías el resumen del pedido a un humano.

@@ -15,6 +15,14 @@ def test_bot_uses_deployment_business_for_prompt_and_catalog():
     assert 'load_file_catalog(config.PRESAVED_FILES_JSON, "PRESAVED_FILES_JSON")' in source
     assert 'config.BUSINESS_ID / "system_instruction.txt"' in source
     assert "link=config.catalog_public_url()" in source
+    assert 'catalog_already_sent = has_successful_file_delivery(phone, "catalogo_pdf")' in source
+    assert 'if not catalog_already_sent and "catalogo_pdf" in FILE_CATALOG:' in source
+
+
+def test_main_only_logs_successful_file_delivery():
+    source = Path("main.py").read_text(encoding="utf-8")
+    assert "if send_presaved_file(sender_phone, file_id):" in source
+    assert "ERROR enviando archivos" in source
 
 
 def test_main_uses_business_id_in_catalog_filename():
