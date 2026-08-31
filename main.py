@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 import chatwoot_api
 from bot import FILE_CATALOG, process_message_logic, transcribe_audio_message
+from conversation_summary import build_handoff_summary
 from config import config
 from database import (
     claim_webhook_event,
@@ -462,12 +463,15 @@ def _create_handoff_ticket_if_needed(sender_phone: str, sender_name: str, new_st
         return
 
     update_chatwoot_conversation_id(sender_phone, conv_id)
-    logs = get_message_logs(sender_phone, limit=6)
+    logs = get_message_logs(sender_phone, limit=50)
     context_str = "\n".join([f"{'👤' if m['role']=='user' else '🤖'}: {m['content']}" for m in logs])
     reason = new_state.get("handoff_reason", "Razón no especificada")
     save_message_log(sender_phone, "system", f"HANDOFF: Transferido a humano. Razón: {reason}")
     short_alert = f"🔔 {reason}"
-    context_details = f"**Resumen de últimos mensajes:**\n{context_str}"
+    context_details = (
+        f"{build_handoff_summary(logs, state_check.get('customer_data'), state_check.get('order_summary'))}\n\n"
+        f"**Últimos mensajes:**\n{context_str}"
+    )
 
     if effective_media_id:
         file_bytes, downloaded_mime = (media_bytes, downloaded_mime_type) if media_bytes is not None else chatwoot_api.download_meta_media(effective_media_id)
@@ -614,18 +618,24 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
 
     if ai_turn:
         primary_delivered = not bool(ai_turn.response)
+        delivered_files = []
         if ai_turn.send_files_before_response:
             for file_id in ai_turn.requested_files:
-                send_presaved_file(sender_phone, file_id)
+                if send_presaved_file(sender_phone, file_id):
+                    delivered_files.append(file_id)
         if ai_turn.response:
             send_whatsapp_message(sender_phone, ai_turn.response)
             save_message_log(sender_phone, "model", ai_turn.response)
             primary_delivered = True
         if not ai_turn.send_files_before_response:
             for file_id in ai_turn.requested_files:
-                send_presaved_file(sender_phone, file_id)
-        if ai_turn.requested_files:
-            save_message_log(sender_phone, "system", f"Archivos enviados: {', '.join(ai_turn.requested_files)}")
+                if send_presaved_file(sender_phone, file_id):
+                    delivered_files.append(file_id)
+        if delivered_files:
+            save_message_log(sender_phone, "system", f"Archivos enviados: {', '.join(delivered_files)}")
+        failed_files = [file_id for file_id in ai_turn.requested_files if file_id not in delivered_files]
+        if failed_files:
+            save_message_log(sender_phone, "system", f"ERROR enviando archivos: {', '.join(failed_files)}")
         new_state = get_or_create_customer_state(sender_phone)
         _create_handoff_ticket_if_needed(
             sender_phone, sender_name, new_state, effective_media_id, message_body,
