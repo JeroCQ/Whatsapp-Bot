@@ -34,6 +34,14 @@ def test_velvet_instruction_does_not_import_unconfirmed_tanaka_commercial_facts(
     assert "Medellín, Bogotá y Barranquilla" not in instruction
 
 
+def test_new_brand_runbooks_use_bootstrap_and_leave_live_tanaka_untouched():
+    for filename in ("SETUP_MEMOS.md", "SETUP_VELVET.md"):
+        runbook = (ROOT / filename).read_text(encoding="utf-8")
+        assert "supabase/bootstrap.sql" in runbook
+        assert "No ejecutes `supabase/upgrade_existing_tanaka.sql`" in runbook
+        assert "Railway Tanaka" in runbook
+
+
 def test_tanaka_instruction_limits_same_day_delivery_by_local_time():
     instruction = (ROOT / "src/clients/tanaka/system_instruction.txt").read_text(encoding="utf-8")
     assert "fecha y hora local de Colombia" in instruction

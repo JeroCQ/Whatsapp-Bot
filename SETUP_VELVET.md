@@ -12,7 +12,9 @@ número, Supabase, Redis/cola, cuenta/inbox de Chatwoot ni secretos de otra marc
 2. **Crear Supabase.** Crea un proyecto vacío para Velvet y ejecuta
    `supabase/bootstrap.sql` en SQL Editor. Comprueba las cuatro tablas, índices y el
    bucket público `catalogos`. Guarda la URL y `service_role`; nunca uses la anon key
-   en el bot ni expongas `service_role` al navegador.
+   en el bot ni expongas `service_role` al navegador. **No ejecutes `supabase/upgrade_existing_tanaka.sql`:
+   ese archivo es únicamente para actualizar
+   el Supabase histórico de Tanaka sin borrar sus datos.**
 3. **Preparar Meta y el número.** Crea una app Meta nueva o un entorno empresarial
    inequívocamente aislado, añade el producto WhatsApp, incorpora y verifica el
    número nuevo, registra su Phone Number ID y crea un token permanente de system
@@ -64,6 +66,17 @@ número, Supabase, Redis/cola, cuenta/inbox de Chatwoot ni secretos de otra marc
 ```json
 [{"id":"catalogo_pdf","description":"Catálogo oficial de Velvet Repostería y Mochis Velvet; enviarlo cuando pregunten por productos, sabores, cantidades, precios u opciones.","type":"image","filename":"Catálogo Velvet.png","caption":"Con mucho gusto, te comparto nuestro catálogo ☺️"}]
 ```
+
+En el editor de variables de Railway pega **solo el JSON anterior**, desde `[` hasta
+`]`: Railway guarda el valor directamente y no necesita las comillas exteriores ni
+las barras `\`. Si se define desde Bash o un archivo `.env`, la forma equivalente es:
+
+```bash
+PRESAVED_FILES_JSON='[{"id":"catalogo_pdf","description":"Catálogo oficial de Velvet Repostería y Mochis Velvet; enviarlo cuando pregunten por productos, sabores, cantidades, precios u opciones.","type":"image","filename":"Catálogo Velvet.png","caption":"Con mucho gusto, te comparto nuestro catálogo ☺️"}]'
+```
+
+Esta variable se configura únicamente en el Railway Velvet. No edites el valor del
+Railway Tanaka que ya está live.
 
 No configures `RUN_WORKER_IN_WEB=false` si no existe un worker separado. No copies
 `catalogo_tanaka`, `catalogo_memos`, Redis, IDs, tokens, cuentas o webhooks ajenos.
