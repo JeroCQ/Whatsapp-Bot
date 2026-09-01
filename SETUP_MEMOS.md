@@ -15,6 +15,8 @@ No conviertas el Railway de Tanaka en Memo's. Déjalo intacto y crea un segundo 
 
 1. En Supabase crea una organización/proyecto para Memo's, elige región cercana y guarda la contraseña de base de datos.
 2. Abre **SQL Editor**, pega todo `supabase/bootstrap.sql` y ejecútalo una vez.
+   **No ejecutes `supabase/upgrade_existing_tanaka.sql`: ese archivo solo actualiza
+   el Supabase histórico de Tanaka y no es el inicializador de proyectos nuevos.**
 3. En **Storage** confirma que exista el bucket público `catalogos`.
 4. En **Project Settings → API** copia:
    - Project URL → `SUPABASE_URL`.
@@ -91,11 +93,23 @@ También puedes agregar `DASHBOARD_FORMAT_TIMEOUT_SECONDS=90`. No configures `RU
 
 ### `PRESAVED_FILES_JSON` para Memo's
 
-La URL es un placeholder válido porque el backend busca en runtime el único catálogo vigente como `catalogos/memos.{pdf|jpg|jpeg|png|webp}` y usa su MIME real para enviarlo como documento o imagen:
+El ID reservado `catalogo_pdf` no necesita `link`: el backend busca en runtime el
+único catálogo vigente como `catalogos/memos.{pdf|jpg|jpeg|png|webp}` y usa su MIME
+real para enviarlo como documento o imagen:
 
 ```json
-[{"id":"catalogo_pdf","description":"Catálogo de Quesos Memo's; enviarlo cuando pidan el catálogo, precios generales o quieran ver todos los productos.","type":"document","link":"https://example.com/catalogo.pdf","filename":"Catálogo Memo's.pdf","caption":"Patrón, aquí tienes el catálogo de Quesos Memo's 🧀"}]
+[{"id":"catalogo_pdf","description":"Catálogo de Quesos Memo's; enviarlo cuando pidan el catálogo, precios generales o quieran ver todos los productos.","type":"document","filename":"Catálogo Memo's.pdf","caption":"Patrón, aquí tienes el catálogo de Quesos Memo's 🧀"}]
 ```
+
+En Railway Memo's pega **solo el JSON anterior**, desde `[` hasta `]`, sin comillas
+exteriores y sin barras `\`. Si se define desde Bash o un archivo `.env`, usa:
+
+```bash
+PRESAVED_FILES_JSON="[{\"id\":\"catalogo_pdf\",\"description\":\"Catálogo de Quesos Memo's; enviarlo cuando pidan el catálogo, precios generales o quieran ver todos los productos.\",\"type\":\"document\",\"filename\":\"Catálogo Memo's.pdf\",\"caption\":\"Patrón, aquí tienes el catálogo de Quesos Memo's 🧀\"}]"
+```
+
+Este valor pertenece únicamente al Railway Memo's. No reemplaces ni edites
+`PRESAVED_FILES_JSON` en el Railway Tanaka live.
 
 Después del primer deploy, entra al perfil Memo's de Lovable y sube el PDF o imagen real. Verifica en Supabase Storage que exista exactamente un objeto `catalogos/memos.{ext}` con la extensión correcta.
 

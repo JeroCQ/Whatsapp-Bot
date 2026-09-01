@@ -5,6 +5,7 @@ const allowedOrigin = (Deno.env.get("DASHBOARD_FRONTEND_ORIGIN") ?? "").replace(
 const clientPasswords: Record<string, string> = {
   tanaka: Deno.env.get("TANAKA_DASHBOARD_PASSWORD") ?? "",
   memos: Deno.env.get("MEMOS_DASHBOARD_PASSWORD") ?? "",
+  velvet: Deno.env.get("VELVET_DASHBOARD_PASSWORD") ?? "",
 };
 const allowedRoutes = new Set([
   "login",
