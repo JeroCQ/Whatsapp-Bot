@@ -899,9 +899,9 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
     )
     print(
         f"[CHATWOOT WEBHOOK] accepted event={data.get('event')} "
-        f"conversation_id={conv_id} event_id={event_id} mode={mode}"
+        f"conversation_id={conv_id} event_id={event_id} mode=after_response"
     )
-    return {"status": "success", "mode": mode}
+    return {"status": "success", "mode": "after_response"}
 
 
 @app.post("/")
