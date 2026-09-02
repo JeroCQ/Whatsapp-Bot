@@ -4,6 +4,11 @@ FastAPI WhatsApp sales bot with Chatwoot handoff and Gemini responses.
 
 ## Deployments por negocio
 
+Para cualquier negocio nuevo, comienza por el runbook canónico
+[`docs/NEW_BUSINESS_SETUP.md`](docs/NEW_BUSINESS_SETUP.md). Define el orden completo
+GitHub → Supabase → Meta → Chatwoot → Railway → dashboard, las fuentes de variables
+y las pruebas extremo a extremo.
+
 El código es multi-despliegue, no multi-negocio: cada Railway debe definir un único
 `BUSINESS_ID`, usar su propio Supabase/WhatsApp/Redis/Chatwoot inbox y cargar los
 archivos permitidos desde `PRESAVED_FILES_JSON`. El backend administrativo rechaza

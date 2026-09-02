@@ -1,5 +1,9 @@
 # Despliegue aislado de Tanaka en Railway y Chatwoot self-hosted
 
+> Para crear cualquier negocio desde cero, usa primero el runbook canónico
+> [`docs/NEW_BUSINESS_SETUP.md`](docs/NEW_BUSINESS_SETUP.md). Este documento conserva
+> las decisiones y diagnósticos específicos de Tanaka.
+
 Este procedimiento crea un Railway nuevo para **Tanaka** sin reutilizar los datos,
 colas, números ni recursos de otra marca. El repositorio es multi-despliegue: una
 instancia atiende exactamente el negocio indicado por `BUSINESS_ID`.
