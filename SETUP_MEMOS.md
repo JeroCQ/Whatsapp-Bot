@@ -1,5 +1,9 @@
 # Puesta en producción de Quesos Memo's sin tocar Tanaka
 
+> Para crear cualquier negocio desde cero, usa primero el runbook canónico
+> [`docs/NEW_BUSINESS_SETUP.md`](docs/NEW_BUSINESS_SETUP.md). Este documento conserva
+> los datos y decisiones específicos de Memo's.
+
 > **Actualización futura del Memo's existente:** antes de desplegar una versión
 > nueva de este repositorio, crea un backup de su Supabase y ejecuta
 > `supabase/upgrade_existing_brand.sql`. La consulta inicial de IDs Chatwoot

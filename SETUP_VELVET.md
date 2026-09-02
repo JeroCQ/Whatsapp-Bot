@@ -1,5 +1,9 @@
 # Puesta en producción de Velvet con recursos nuevos
 
+> El proceso general y las correcciones aprendidas aquí se consolidaron en
+> [`docs/NEW_BUSINESS_SETUP.md`](docs/NEW_BUSINESS_SETUP.md), el runbook canónico
+> para toda marca nueva. Este documento conserva únicamente el contexto de Velvet.
+
 Velvet se despliega desde este repositorio como una instancia aislada con
 `BUSINESS_ID=velvet`. Puede compartir la instalación raíz de Chatwoot y, cuando el
 equipo lo decida conscientemente, credenciales de Gemini/GitHub; no debe compartir
