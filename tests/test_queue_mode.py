@@ -20,8 +20,8 @@ def test_follow_up_delay_helper_has_one_definition():
     assert source.count("def follow_up_delay_seconds(") == 1
 
 
-def test_provider_webhook_request_paths_do_not_call_remote_idempotency_or_redis():
-    """Meta/Chatwoot must ACK before any Supabase write or Redis enqueue."""
+def test_provider_webhook_request_paths_keep_supabase_claims_in_workers():
+    """Meta/Chatwoot may use bounded Redis, but never wait for Supabase."""
     tree = ast.parse(Path("main.py").read_text(encoding="utf-8"))
     functions = {
         node.name: node
@@ -35,18 +35,13 @@ def test_provider_webhook_request_paths_do_not_call_remote_idempotency_or_redis(
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
         }
         assert "claim_webhook_event" not in calls
-        assert "enqueue" not in calls
+        assert "_dispatch_before_ack" in calls
 
-    assert any(
-        isinstance(node, ast.Attribute)
-        and node.attr == "add_task"
-        for node in ast.walk(functions["receive_webhook"])
-    )
-    assert any(
-        isinstance(node, ast.Attribute)
-        and node.attr == "add_task"
-        for node in ast.walk(functions["chatwoot_webhook"])
-    )
+
+def test_redis_producer_connection_has_strict_webhook_timeouts():
+    source = Path("queue_client.py").read_text(encoding="utf-8")
+    assert "socket_connect_timeout=1.0" in source
+    assert "socket_timeout=2.0" in source
 
 
 class WebQueueModeTests(unittest.TestCase):

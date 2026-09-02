@@ -760,14 +760,13 @@ def process_chatwoot_event(data: dict, event_id: str = None):
             raise
 
 
-def _dispatch_after_response(func, *args, event_id: str = None, **kwargs):
-    """Enqueue only after the provider response has already been sent.
+def _dispatch_before_ack(background_tasks: BackgroundTasks, func, *args, event_id: str = None, **kwargs):
+    """Durably enqueue with a bounded Redis call, then let the endpoint ACK.
 
-    Redis and Supabase are remote services. Even an idempotency write or an RQ
-    enqueue can occasionally take longer than Meta's webhook deadline, so neither
-    operation belongs on the request path. Starlette runs this function as a
-    response background task. If Redis is unavailable, processing still occurs in
-    that background task rather than dropping the accepted message.
+    The previous after-response enqueue could be lost or become invisible when the
+    request lifecycle ended. Supabase claiming remains worker-side, while the
+    producer Redis connection has a two-second socket timeout. If Redis is down,
+    FastAPI runs the actual work after the ACK as a last-resort fallback.
     """
     func_kwargs = dict(kwargs)
     if event_id:
@@ -776,10 +775,11 @@ def _dispatch_after_response(func, *args, event_id: str = None, **kwargs):
         job_id = f"{func.__name__}-{event_id}" if event_id else None
         try:
             enqueue(func, *args, job_id=job_id, **func_kwargs)
+            print(f"[WEBHOOK QUEUE] queued event_id={event_id} job={job_id}", flush=True)
             return "queued"
         except Exception as exc:
-            print(f"[QUEUE ERROR] Failed to enqueue event_id={event_id}; processing after ACK: {exc}")
-    func(*args, **func_kwargs)
+            print(f"[QUEUE ERROR] Failed to enqueue event_id={event_id}; processing after ACK: {exc}", flush=True)
+    background_tasks.add_task(func, *args, **func_kwargs)
     return "background_task"
 
 
@@ -831,8 +831,8 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                         event_id = message.get("id")
                         if message_type == "text":
                             body = message.get("text", {}).get("body")
-                            background_tasks.add_task(
-                                _dispatch_after_response,
+                            _dispatch_before_ack(
+                                background_tasks,
                                 process_claimed_whatsapp_event,
                                 sender_phone,
                                 sender_name,
@@ -849,8 +849,8 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                             inbound_media_id = media_payload.get("id")
                             caption = media_payload.get("caption", "")
                             body = caption or ("[Audio Nota]" if message_type == "audio" else "")
-                            background_tasks.add_task(
-                                _dispatch_after_response,
+                            _dispatch_before_ack(
+                                background_tasks,
                                 process_claimed_whatsapp_event,
                                 sender_phone,
                                 sender_name,
@@ -891,8 +891,8 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=403, detail="Chatwoot account or inbox mismatch")
     event_id = chatwoot_event_identity(data)
     conv_id = data.get("conversation", {}).get("id") or data.get("id")
-    background_tasks.add_task(
-        _dispatch_after_response,
+    mode = _dispatch_before_ack(
+        background_tasks,
         process_claimed_chatwoot_event,
         data,
         event_id=event_id,

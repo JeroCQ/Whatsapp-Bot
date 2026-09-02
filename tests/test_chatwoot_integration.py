@@ -63,7 +63,7 @@ def test_valid_webhook_and_root_dispatcher_constraint(monkeypatch):
     client = TestClient(main.app)
     monkeypatch.setattr(main.time, "time", lambda: 2000000000)
     monkeypatch.setattr(main, "claim_webhook_event", lambda *args: True)
-    monkeypatch.setattr(main, "_dispatch_after_response", lambda *args, **kwargs: "queued")
+    monkeypatch.setattr(main, "_dispatch_before_ack", lambda *args, **kwargs: "queued")
     body = json.dumps(payload()).encode()
     assert client.post("/chatwoot-webhook", content=body, headers=signed(body)).status_code == 200
     assert client.post("/", json=payload()).status_code == 404
@@ -73,7 +73,7 @@ def test_temporary_webhook_alias_uses_same_signature_validation(monkeypatch):
     client = TestClient(main.app)
     monkeypatch.setattr(main.time, "time", lambda: 2000000000)
     monkeypatch.setattr(main, "claim_webhook_event", lambda *args: True)
-    monkeypatch.setattr(main, "_dispatch_after_response", lambda *args, **kwargs: "queued")
+    monkeypatch.setattr(main, "_dispatch_before_ack", lambda *args, **kwargs: "queued")
     body = json.dumps(payload()).encode()
 
     assert client.post("/chatwoo-webhook", content=body, headers=signed(body)).status_code == 200
