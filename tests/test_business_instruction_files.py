@@ -15,18 +15,17 @@ def test_velvet_instruction_uses_confirmed_identity_catalog_and_logistics():
     instruction = (ROOT / "src/clients/velvet/system_instruction.txt").read_text(encoding="utf-8")
     assert "Camila" in instruction
     assert "Velvet Repostería y Mochis Velvet" in instruction
-    assert "Red Velvet, Taro, Lulo, Café" in instruction
-    assert "de 48 a 95 unidades, $3.500 COP" in instruction
-    assert "desde 96 unidades, $3.000 COP" in instruction
-    assert "Cra. 10 #47-31, barrio El Troncal, Cali" in instruction
-    assert "lunes a sábado de 9:00 a. m. a 5:00 p. m." in instruction
-    assert "Nunca reutilices ni inventes tarifas de otra marca" in instruction
+    assert "Caja x 6 unidades: **$28.000 COP**" in instruction
+    assert "De 48 a 95 unidades: **$3.500 COP**" in instruction
+    assert "Desde 96 unidades en adelante: **$3.000 COP**" in instruction
+    assert "Carrera 10 # 47-31, Barrio El Troncal, Cali" in instruction
+    assert "Lunes a sábado de 9:00 a.m. a 5:00 p.m." in instruction
+    assert "dentro de la ciudad que no pertenezcan a las zonas más lejanas" in instruction
+    assert "**$9.000 COP**" in instruction
     assert "follow_up_delay_minutes = 120" in instruction
     assert "trigger_handoff = true" in instruction
-    assert "Soy Camila, asesora de Velvet" in instruction
-    assert "de 48 a 95 unidades, $3.500 COP" in instruction
-    assert "desde 96 unidades, $3.000 COP" in instruction
-    assert "adjunta el catálogo una sola vez" in instruction
+    assert "Mi nombre es Camila de Velvet" in instruction
+    assert "Adjunta el catálogo una sola vez" in instruction
 
 
 def test_velvet_instruction_does_not_import_unconfirmed_tanaka_commercial_facts():
@@ -34,8 +33,32 @@ def test_velvet_instruction_does_not_import_unconfirmed_tanaka_commercial_facts(
     assert "Alexandra" not in instruction
     assert "Tanaka Saludable" not in instruction
     assert "51400015704" not in instruction
-    assert "$9.000" not in instruction
-    assert "Medellín, Bogotá y Barranquilla" not in instruction
+    assert "NIT 901888354" not in instruction
+    assert "nevera térmica" not in instruction
+
+
+def test_velvet_instruction_preserves_sales_flow_and_brand_identified_handoff():
+    instruction = (ROOT / "src/clients/velvet/system_instruction.txt").read_text(encoding="utf-8")
+    assert "Orden obligatorio antes de responder" in instruction
+    assert "El catálogo apoya la respuesta, pero no la reemplaza" in instruction
+    assert 'escribe solamente "precio"' in instruction
+    assert "Qué gusto atenderte nuevamente" in instruction
+    assert "Respuestas breves con contexto" in instruction
+    assert "El momentum de compra es sagrado" in instruction
+    assert "no pidas todavía la dirección exacta" in instruction
+    assert "Resumen progresivo" in instruction
+    assert "Datos adicionales" in instruction
+    assert "entre las 8:00 a.m. y las 6:00 p.m." in instruction
+    assert "no generes otro" in instruction
+    assert "handoff_reason" in instruction
+    assert "empiece exactamente con el identificador `VELVET: `" in instruction
+    assert "deja `follow_up_message` vacío" in instruction
+
+
+def test_velvet_instruction_answers_confirmed_volcano_definition_without_handoff():
+    instruction = (ROOT / "src/clients/velvet/system_instruction.txt").read_text(encoding="utf-8")
+    assert "exterior de bizcocho cocido y un interior líquido" in instruction
+    assert "no actives handoff solo porque el cliente pregunte qué es" in instruction
 
 
 def test_new_brand_runbooks_use_bootstrap_and_leave_live_tanaka_untouched():
