@@ -4,6 +4,16 @@ Este procedimiento crea un Railway nuevo para **Tanaka** sin reutilizar los dato
 colas, números ni recursos de otra marca. El repositorio es multi-despliegue: una
 instancia atiende exactamente el negocio indicado por `BUSINESS_ID`.
 
+> **Actualización futura del proyecto existente:** antes de desplegar una versión
+> nueva de este repositorio, crea un backup de Supabase y ejecuta
+> `supabase/upgrade_existing_brand.sql`. Revisa primero que su consulta de IDs
+> Chatwoot duplicados devuelva cero filas y exige `true` en toda la verificación
+> final. No ejecutes `supabase/bootstrap.sql`, no cambies `BUSINESS_ID=tanaka` y no
+> reemplaces sus secretos, Redis, número Meta, catálogo o recursos Chatwoot por los
+> de otra marca. `upgrade_existing_tanaka.sql` queda como compatibilidad histórica;
+> para versiones futuras usa el upgrade genérico y sigue
+> `docs/UPGRADE_EXISTING_BRANDS.md`.
+
 ## Decisiones que hay que confirmar antes del corte
 
 Anota estas respuestas antes de cambiar webhooks. No bloquean la preparación de

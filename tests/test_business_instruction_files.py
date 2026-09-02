@@ -16,13 +16,17 @@ def test_velvet_instruction_uses_confirmed_identity_catalog_and_logistics():
     assert "Camila" in instruction
     assert "Velvet Repostería y Mochis Velvet" in instruction
     assert "Red Velvet, Taro, Lulo, Café" in instruction
-    assert "desde 48 unidades, $3.500 COP" in instruction
+    assert "de 48 a 95 unidades, $3.500 COP" in instruction
     assert "desde 96 unidades, $3.000 COP" in instruction
     assert "Cra. 10 #47-31, barrio El Troncal, Cali" in instruction
     assert "lunes a sábado de 9:00 a. m. a 5:00 p. m." in instruction
     assert "Nunca reutilices ni inventes tarifas de otra marca" in instruction
     assert "follow_up_delay_minutes = 120" in instruction
     assert "trigger_handoff = true" in instruction
+    assert "Soy Camila, asesora de Velvet" in instruction
+    assert "de 48 a 95 unidades, $3.500 COP" in instruction
+    assert "desde 96 unidades, $3.000 COP" in instruction
+    assert "adjunta el catálogo una sola vez" in instruction
 
 
 def test_velvet_instruction_does_not_import_unconfirmed_tanaka_commercial_facts():

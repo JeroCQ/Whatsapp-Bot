@@ -42,3 +42,42 @@ def test_new_project_bootstrap_includes_all_incremental_tanaka_features():
         assert required in sql
 
     assert "do not run upgrade_existing_tanaka.sql afterward" in sql
+
+
+def test_message_log_roles_support_runtime_markers_and_chatwoot_history():
+    bootstrap = (ROOT / "supabase" / "bootstrap.sql").read_text(encoding="utf-8").lower()
+    repair = (ROOT / "supabase" / "enable_runtime_message_roles.sql").read_text(encoding="utf-8").lower()
+    expected = "role in ('user', 'model', 'system', 'asesor')"
+
+    assert expected in bootstrap
+    assert expected in repair
+    assert "drop constraint if exists message_logs_role_check" in repair
+    assert "canonical equivalent of enable_runtime_message_roles.sql" in bootstrap
+    assert "canonical supabase/bootstrap.sql" in repair
+
+
+def test_generic_existing_brand_upgrade_has_current_runtime_parity():
+    sql = (ROOT / "supabase" / "upgrade_existing_brand.sql").read_text(encoding="utf-8").lower()
+
+    for required in (
+        "add column if not exists chatwoot_conversation_id",
+        "add column if not exists follow_up_token",
+        "add column if not exists customer_data",
+        "add column if not exists order_summary",
+        "create table if not exists public.processed_webhook_events",
+        "duplicate chatwoot_conversation_id values must be resolved before upgrading",
+        "role in ('user', 'model', 'system', 'asesor')",
+        "uq_conversation_states_active_chatwoot_conversation_id",
+        "create table if not exists public.dashboard_admins",
+        "enable row level security",
+        "values ('catalogos', 'catalogos', true)",
+    ):
+        assert required in sql
+
+
+def test_generic_existing_brand_upgrade_is_non_destructive():
+    sql = (ROOT / "supabase" / "upgrade_existing_brand.sql").read_text(encoding="utf-8").lower()
+
+    assert "drop table" not in sql
+    assert "truncate " not in sql
+    assert "delete from" not in sql

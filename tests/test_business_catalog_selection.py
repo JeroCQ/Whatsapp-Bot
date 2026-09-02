@@ -16,7 +16,14 @@ def test_bot_uses_deployment_business_for_prompt_and_catalog():
     assert 'config.BUSINESS_ID / "system_instruction.txt"' in source
     assert "link=config.catalog_public_url()" in source
     assert 'catalog_already_sent = has_successful_file_delivery(phone, "catalogo_pdf")' in source
-    assert 'if not catalog_already_sent and "catalogo_pdf" in FILE_CATALOG:' in source
+    assert 'and "catalogo_pdf" not in requested_files' in source
+
+
+def test_catalog_onboarding_does_not_duplicate_a_model_requested_catalog():
+    source = Path("bot.py").read_text(encoding="utf-8")
+    assert source.index('and "catalogo_pdf" not in requested_files') < source.index(
+        'requested_files.insert(0, "catalogo_pdf")'
+    )
 
 
 def test_main_only_logs_successful_file_delivery():

@@ -1,5 +1,13 @@
 # Puesta en producción de Quesos Memo's sin tocar Tanaka
 
+> **Actualización futura del Memo's existente:** antes de desplegar una versión
+> nueva de este repositorio, crea un backup de su Supabase y ejecuta
+> `supabase/upgrade_existing_brand.sql`. La consulta inicial de IDs Chatwoot
+> duplicados debe devolver cero filas y la verificación final debe devolver `true`
+> en todo. No ejecutes `supabase/bootstrap.sql`, conserva `BUSINESS_ID=memos` y no
+> reemplaces sus secretos, Redis, número Meta, catálogo o Chatwoot por los de Tanaka
+> o Velvet. Sigue el corte completo de `docs/UPGRADE_EXISTING_BRANDS.md`.
+
 ## Arquitectura final
 
 No conviertas el Railway de Tanaka en Memo's. Déjalo intacto y crea un segundo proyecto Railway desde este mismo repositorio. Cada despliegue ejecuta una sola marca mediante `BUSINESS_ID`; el backend rechaza cualquier `client_name` distinto al de ese despliegue. Cada marca tiene su propio WhatsApp, Supabase, Redis, inbox de Chatwoot, secretos y URL. Lovable es el único frontend compartido y actúa como enrutador de perfiles.
@@ -116,6 +124,11 @@ Este valor pertenece únicamente al Railway Memo's. No reemplaces ni edites
 `PRESAVED_FILES_JSON` en el Railway Tanaka live.
 
 Después del primer deploy, entra al perfil Memo's de Lovable y sube el PDF o imagen real. Verifica en Supabase Storage que exista exactamente un objeto `catalogos/memos.{ext}` con la extensión correcta.
+
+Si este Supabase Memo's fue creado con una versión anterior del bootstrap y el log
+muestra `message_logs_role_check` al guardar `Archivos enviados`, ejecuta una vez
+`supabase/enable_runtime_message_roles.sql`. Los proyectos nuevos no necesitan este
+paso porque las mismas sentencias ya forman parte de `supabase/bootstrap.sql`.
 
 ## 5. Prompt para Lovable
 

@@ -111,3 +111,14 @@ un pedido mayorista, una tarifa desconocida, un pago o una queja crea conversaci
 en el inbox Velvet; resolverla reactiva solo ese teléfono. Verifica en Supabase que
 los mensajes nuevos estén únicamente en Velvet. Si falla, desconecta solo el
 callback Meta de Velvet o revierte su último deploy; no modifiques Tanaka.
+
+## Corrección para un Supabase Velvet ya creado
+
+Si el log muestra `message_logs_role_check` al guardar `Archivos enviados`, ejecuta
+una vez `supabase/enable_runtime_message_roles.sql` en SQL Editor. Los primeros
+bootstraps solo aceptaban `user` y `model`, pero el runtime también necesita
+`system` para recordar que ya envió el catálogo y `asesor` para el historial de
+Chatwoot. Sin esta corrección el marcador falla y el catálogo vuelve a enviarse.
+Las mismas sentencias ya están integradas en el SQL principal
+`supabase/bootstrap.sql`, por lo que una marca creada desde cero no necesita
+ejecutar después el archivo de reparación.
