@@ -121,6 +121,10 @@ Los agentes y su elegibilidad se administran en Chatwoot, no en el código del b
    `https://DOMINIO-TANAKA/chatwoot-webhook`, suscrito únicamente a
    `message_created` y `conversation_status_changed`. Copia el secreto generado a
    `CHATWOOT_WEBHOOK_SECRET`.
+   Para respuestas salientes del API inbox, configura además la webhook URL del
+   propio canal hacia esa misma ruta y guarda su `secret` independiente como
+   `CHATWOOT_API_INBOX_WEBHOOK_SECRET`. No uses el HMAC token de identidad. Si se
+   conserva también el account webhook, ambos secretos son distintos y válidos.
 8. Usa en `CHATWOOT_BASE_URL` solo la raíz HTTPS self-hosted, sin `/app`,
    `/api/v1`, query ni path adicional.
 
@@ -175,7 +179,8 @@ a otro proyecto. `RUN_WORKER_IN_WEB` se elimina o queda `true`;
 | `CHATWOOT_ACCOUNT_ID` | Para handoff | ID numérico de la cuenta Tanaka |
 | `CHATWOOT_INBOX_ID` | Para handoff | ID numérico del API inbox Tanaka |
 | `CHATWOOT_API_TOKEN` | Para handoff | Token del agente/integración Tanaka |
-| `CHATWOOT_WEBHOOK_SECRET` | Para handoff | Secreto del account webhook Tanaka |
+| `CHATWOOT_WEBHOOK_SECRET` | Opcional | Secreto de un account webhook Tanaka separado, si se conserva |
+| `CHATWOOT_API_INBOX_WEBHOOK_SECRET` | Para respuestas del asesor | `secret` firmante del API inbox Tanaka |
 | `PRESAVED_FILES_JSON` | Para catálogo | JSON mostrado debajo |
 | `CATALOG_STORAGE_BUCKET` | Recomendable | `catalogos` (es también el default) |
 | `DASHBOARD_API_KEY` | Si se usa dashboard | Secreto nuevo compartido solo con el proxy server-side de Tanaka |

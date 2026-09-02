@@ -61,6 +61,10 @@ class Settings:
         or ("fixed" if CHATWOOT_ASSIGNEE_ID else "automatic")
     ).strip().lower()
     CHATWOOT_WEBHOOK_SECRET = os.getenv("CHATWOOT_WEBHOOK_SECRET")
+    # API inbox delivery webhooks use the channel's own signing secret, which is
+    # distinct from an optional account webhook secret. Accept both at the shared
+    # callback while keeping each deployment scoped to one account/inbox.
+    CHATWOOT_API_INBOX_WEBHOOK_SECRET = os.getenv("CHATWOOT_API_INBOX_WEBHOOK_SECRET")
     CHATWOOT_MAX_ATTACHMENT_BYTES = int(os.getenv("CHATWOOT_MAX_ATTACHMENT_BYTES", str(25 * 1024 * 1024)))
     APP_ENV = os.getenv("APP_ENV", "production").strip().lower()
 
@@ -133,8 +137,13 @@ class Settings:
             raise ValueError(error_msg)
         chatwoot_values = [cls.CHATWOOT_BASE_URL, cls.CHATWOOT_API_TOKEN, cls.CHATWOOT_ACCOUNT_ID, cls.CHATWOOT_INBOX_ID]
         if any(chatwoot_values):
-            if not all(chatwoot_values) or not cls.CHATWOOT_WEBHOOK_SECRET:
-                raise ValueError("Chatwoot requires BASE_URL, API_TOKEN, ACCOUNT_ID, INBOX_ID and WEBHOOK_SECRET")
+            if not all(chatwoot_values) or not (
+                cls.CHATWOOT_WEBHOOK_SECRET or cls.CHATWOOT_API_INBOX_WEBHOOK_SECRET
+            ):
+                raise ValueError(
+                    "Chatwoot requires BASE_URL, API_TOKEN, ACCOUNT_ID, INBOX_ID "
+                    "and at least one webhook signing secret"
+                )
             cls.CHATWOOT_BASE_URL = normalize_chatwoot_root(cls.CHATWOOT_BASE_URL, production=cls.APP_ENV not in {"development", "test"})
             cls.CHATWOOT_API_URL = cls.CHATWOOT_BASE_URL
             cls.CHATWOOT_ACCESS_TOKEN = cls.CHATWOOT_API_TOKEN

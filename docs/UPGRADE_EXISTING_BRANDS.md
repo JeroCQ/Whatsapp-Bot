@@ -38,6 +38,16 @@ existentes y verifica solamente su correspondencia:
 Conserva el `PRESAVED_FILES_JSON` propio y el objeto `catalogos/{BUSINESS_ID}.*` de
 cada Supabase. No copies la imagen Velvet ni cambies el catálogo vigente.
 
+En cada API inbox, configura su webhook URL hacia `/chatwoot-webhook` del Railway
+de esa misma marca y guarda el `secret` del canal como
+`CHATWOOT_API_INBOX_WEBHOOK_SECRET`. Es distinto del HMAC token de identidad y del
+secreto de un account webhook. Mantener `CHATWOOT_ASSIGNMENT_MODE=automatic` y
+`CHATWOOT_ASSIGNEE_ID` vacío es válido; la entrega no depende del modo de asignación.
+Un administrador puede confirmar el secreto con
+`GET /api/v1/accounts/{account_id}/inboxes/{inbox_id}` y tomando el campo `secret`
+(nunca `hmac_token`). Después de entregar a Meta, el bot actualiza ese mensaje del
+API inbox a `delivered`; si Meta falla, lo marca `failed` con un error genérico.
+
 ## 4. Desplegar y verificar
 
 1. Despliega primero sin cambiar callbacks ni secretos.
@@ -58,4 +68,3 @@ Si falla, revierte únicamente el Railway de esa marca al commit anterior. No re
 el SQL eliminando columnas o roles: las adiciones son compatibles con la versión
 anterior. Si fuera necesario, desconecta temporalmente solo su callback Meta. No
 modifiques el Railway, Supabase, Redis, número o Chatwoot de las otras marcas.
-

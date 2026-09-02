@@ -26,3 +26,7 @@ def test_existing_brand_runbook_preserves_brand_isolation_and_uses_generic_upgra
     assert "whatsapp-events-memos" in runbook
     assert "message_logs_role_check" in runbook
     assert "No copies la imagen Velvet" in runbook
+    assert "CHATWOOT_API_INBOX_WEBHOOK_SECRET" in runbook
+    assert "CHATWOOT_ASSIGNMENT_MODE=automatic" in runbook
+    assert "nunca `hmac_token`" in runbook
+    assert "API inbox a `delivered`" in runbook

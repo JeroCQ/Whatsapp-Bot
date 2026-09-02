@@ -50,7 +50,12 @@ No conviertas el Railway de Tanaka en Memo's. Déjalo intacto y crea un segundo 
 2. Copia el ID numérico de la cuenta → `CHATWOOT_ACCOUNT_ID` y el ID numérico del inbox nuevo → `CHATWOOT_INBOX_ID`.
 3. Desde el perfil de un agente/integración exclusivo de Memo's copia el access token → `CHATWOOT_API_TOKEN`.
 4. Usa la raíz de la instalación, sin `/api/v1` al final, como `CHATWOOT_BASE_URL`.
-5. Crea un account webhook suscrito a `message_created` y `conversation_status_changed` hacia `https://DOMINIO-MEMOS/chatwoot-webhook`. Copia su secreto generado a `CHATWOOT_WEBHOOK_SECRET`; no lo pongas en la URL.
+5. En el **API inbox** configura `https://DOMINIO-MEMOS/chatwoot-webhook` como
+   webhook URL y copia el `secret` firmante del canal a
+   `CHATWOOT_API_INBOX_WEBHOOK_SECRET`; no uses el HMAC token de identidad. Este es
+   el callback que entrega respuestas de agentes y evita “Failed to send”. Un
+   account webhook adicional es opcional y usa un secreto distinto en
+   `CHATWOOT_WEBHOOK_SECRET`.
 
 ## 4. Railway nuevo
 
@@ -81,7 +86,8 @@ No conviertas el Railway de Tanaka en Memo's. Déjalo intacto y crea un segundo 
 | `CHATWOOT_ACCOUNT_ID` | **Cambiar** | Cuenta exclusiva de Memo's. Nunca compartir la cuenta de Tanaka. |
 | `CHATWOOT_API_TOKEN` | **Cambiar** | Token del agente/integración exclusivo de Memo's. |
 | `CHATWOOT_ASSIGNEE_ID` | **Agregar** | ID numérico del agente `memos@briosos.org`; fuerza la asignación al crear cada handoff y evita depender de la política Default. |
-| `CHATWOOT_WEBHOOK_SECRET` | **Agregar/cambiar** | Secreto generado por el account webhook exclusivo de Memo's. |
+| `CHATWOOT_WEBHOOK_SECRET` | **Opcional/cambiar** | Secreto de un account webhook Memo's separado, si se conserva. |
+| `CHATWOOT_API_INBOX_WEBHOOK_SECRET` | **Agregar/cambiar** | `secret` firmante del API inbox Memo's; requerido para entregar respuestas del asesor. |
 | `CHATWOOT_MAX_ATTACHMENT_BYTES` | **Agregar opcional** | Máximo de descarga; default `26214400` (25 MiB). |
 | `CHATWOOT_BASE_URL` | **Cambiar** | Raíz HTTPS de Chatwoot self-hosted, sin `/api/v1` ni `/app`. |
 | `GEMINI_API_KEY` | **Conservar o cambiar** | Puede compartirse; una clave/proyecto separado aísla cuota y facturación. |

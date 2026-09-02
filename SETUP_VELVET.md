@@ -34,9 +34,15 @@ número, Supabase, Redis/cola, cuenta/inbox de Chatwoot ni secretos de otra marc
    `whatsapp-events-velvet` y el commit esperado.
 7. **Conectar Meta.** Configura `https://DOMINIO-VELVET/webhook` con el mismo
    `WA_VERIFY_TOKEN`, valida el callback y suscribe `messages`.
-8. **Conectar Chatwoot.** Crea un account webhook hacia
-   `https://DOMINIO-VELVET/chatwoot-webhook`, suscrito únicamente a
-   `message_created` y `conversation_status_changed`; copia su secreto a Railway.
+8. **Conectar Chatwoot.** En la configuración del **API inbox Velvet**, fija su
+   webhook URL como `https://DOMINIO-VELVET/chatwoot-webhook` y copia el `secret`
+   de ese canal a `CHATWOOT_API_INBOX_WEBHOOK_SECRET`. Este callback es el canal de
+   entrega de respuestas del asesor; si falla, Chatwoot muestra “Failed to send”.
+   No lo confundas con el HMAC token de identidad. Un account webhook adicional es
+   opcional y usa su propio `CHATWOOT_WEBHOOK_SECRET`.
+   Un administrador puede verificar el valor correcto consultando el inbox por
+   `GET /api/v1/accounts/{account_id}/inboxes/{inbox_id}`: usa el campo `secret`,
+   no `hmac_token`, y nunca lo pegues en tickets o logs.
 9. **Cargar catálogo y probar.** Sube la imagen oficial como un único objeto
    `catalogos/velvet.png` desde el dashboard. Prueba saludo de Camila, catálogo,
    pedido, comprobante, handoff, reactivación desde Chatwoot y aislamiento respecto
@@ -59,7 +65,8 @@ número, Supabase, Redis/cola, cuenta/inbox de Chatwoot ni secretos de otra marc
 | `CHATWOOT_ACCOUNT_ID` | Cuenta Velvet |
 | `CHATWOOT_INBOX_ID` | API inbox Velvet |
 | `CHATWOOT_API_TOKEN` | Token del agente/integración Velvet |
-| `CHATWOOT_WEBHOOK_SECRET` | Secreto del account webhook Velvet |
+| `CHATWOOT_WEBHOOK_SECRET` | Opcional: secreto de un account webhook Velvet separado |
+| `CHATWOOT_API_INBOX_WEBHOOK_SECRET` | `secret` firmante del API inbox Velvet; requerido para respuestas de agentes |
 | `CHATWOOT_ASSIGNMENT_MODE` | `automatic` (o `fixed` junto con un `CHATWOOT_ASSIGNEE_ID` válido) |
 | `GITHUB_SI_PATH` | `src/clients/velvet/system_instruction.txt` (o eliminar para usar la ruta derivada) |
 | `CATALOG_STORAGE_BUCKET` | `catalogos` |

@@ -683,6 +683,9 @@ def _chatwoot_sender_label(data: dict) -> str:
 def process_chatwoot_event(data: dict, event_id: str = None):
     """Process a Chatwoot webhook event from the queue/worker."""
     started_at = time.perf_counter()
+    event_conv_id = None
+    message_id = None
+    is_public_outgoing = False
     try:
         account_id, inbox_id = chatwoot_scope(data)
         if account_id != str(config.CHATWOOT_ACCOUNT_ID) or inbox_id != str(config.CHATWOOT_INBOX_ID):
@@ -697,13 +700,14 @@ def process_chatwoot_event(data: dict, event_id: str = None):
         )
         message_type = str(data.get("message_type") or "").strip().lower()
         is_private = _chatwoot_flag(data.get("private"), default=False)
-        if event == "message_created" and message_type == "outgoing" and not is_private:
+        message_id = data.get("id") if event == "message_created" else None
+        is_public_outgoing = event == "message_created" and message_type == "outgoing" and not is_private
+        if is_public_outgoing:
             conv_id = event_conv_id
             content = data.get("content")
             attachments = data.get("attachments")
             phone = get_phone_by_chatwoot_id(conv_id) if conv_id else None
             if phone:
-                save_message_log(phone, "asesor", content or "[Adjunto enviado por asesor]")
                 if attachments:
                     for attachment in attachments:
                         data_url = _attachment_url(attachment)
@@ -719,12 +723,17 @@ def process_chatwoot_event(data: dict, event_id: str = None):
                         send_whatsapp_media(phone, meta_media_id, whatsapp_media_type, content, attachment_filename)
                 if content and not attachments:
                     send_whatsapp_message(phone, content)
+                save_message_log(phone, "asesor", content or "[Adjunto enviado por asesor]")
+                chatwoot_api.update_message_status(conv_id, message_id, "delivered")
                 print(
                     f"[CHATWOOT DELIVERY] forwarded event_id={event_id} conversation_id={conv_id} "
                     f"sender={_chatwoot_sender_label(data)} has_content={bool(content)} "
                     f"attachment_count={len(attachments or [])}"
                 )
             else:
+                chatwoot_api.update_message_status(
+                    conv_id, message_id, "failed", "No se encontró el teléfono asociado a la conversación"
+                )
                 print(
                     f"[CHATWOOT EVENT WARN] Public outgoing message not forwarded: "
                     f"reason=conversation_not_mapped event_id={event_id} conversation_id={conv_id} "
@@ -753,6 +762,10 @@ def process_chatwoot_event(data: dict, event_id: str = None):
         import traceback
         print("[ERROR CRÍTICO] Falló process_chatwoot_event:")
         traceback.print_exc()
+        if is_public_outgoing and event_conv_id and message_id:
+            chatwoot_api.update_message_status(
+                event_conv_id, message_id, "failed", "No se pudo entregar el mensaje a WhatsApp"
+            )
         mark_webhook_event_processed("chatwoot", event_id, status="failed", error=str(e))
         # Let RQ apply its failure/retry policy instead of reporting a dropped
         # attachment as a successfully completed job.
@@ -875,12 +888,17 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
 @app.post("/chatwoo-webhook", include_in_schema=False)
 async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
     raw_body = await request.body()
-    if not verify_chatwoot_signature(
-        raw_body,
-        request.headers.get("X-Chatwoot-Timestamp", ""),
-        request.headers.get("X-Chatwoot-Signature", ""),
-        config.CHATWOOT_WEBHOOK_SECRET or "",
-    ):
+    timestamp = request.headers.get("X-Chatwoot-Timestamp", "")
+    signature = request.headers.get("X-Chatwoot-Signature", "")
+    valid_signature = any(
+        verify_chatwoot_signature(raw_body, timestamp, signature, secret)
+        for secret in (
+            config.CHATWOOT_WEBHOOK_SECRET,
+            config.CHATWOOT_API_INBOX_WEBHOOK_SECRET,
+        )
+        if secret
+    )
+    if not valid_signature:
         raise HTTPException(status_code=401, detail="Invalid Chatwoot webhook signature")
     try:
         data = json.loads(raw_body)
