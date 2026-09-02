@@ -107,6 +107,18 @@ class ChatwootAssignmentConfigTests(TestCase):
         with mock.patch.dict(os.environ, {**self.CHATWOOT_ENV, "CHATWOOT_ASSIGNMENT_MODE": "automatic"}, clear=True):
             self.assertIsNone(load_config().CHATWOOT_ASSIGNEE_ID)
 
+    def test_api_inbox_secret_can_secure_webhook_without_account_webhook(self):
+        env = {
+            **self.CHATWOOT_ENV,
+            "CHATWOOT_WEBHOOK_SECRET": "",
+            "CHATWOOT_API_INBOX_WEBHOOK_SECRET": "api-inbox-secret",
+            "CHATWOOT_ASSIGNMENT_MODE": "automatic",
+        }
+        with mock.patch.dict(os.environ, env, clear=True):
+            config = load_config()
+            self.assertEqual(config.CHATWOOT_API_INBOX_WEBHOOK_SECRET, "api-inbox-secret")
+            self.assertIsNone(config.CHATWOOT_ASSIGNEE_ID)
+
     def test_automatic_mode_retains_rollback_assignee(self):
         env = {**self.CHATWOOT_ENV, "CHATWOOT_ASSIGNMENT_MODE": " Automatic ", "CHATWOOT_ASSIGNEE_ID": "4"}
         with mock.patch.dict(os.environ, env, clear=True):

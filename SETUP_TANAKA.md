@@ -4,6 +4,16 @@ Este procedimiento crea un Railway nuevo para **Tanaka** sin reutilizar los dato
 colas, números ni recursos de otra marca. El repositorio es multi-despliegue: una
 instancia atiende exactamente el negocio indicado por `BUSINESS_ID`.
 
+> **Actualización futura del proyecto existente:** antes de desplegar una versión
+> nueva de este repositorio, crea un backup de Supabase y ejecuta
+> `supabase/upgrade_existing_brand.sql`. Revisa primero que su consulta de IDs
+> Chatwoot duplicados devuelva cero filas y exige `true` en toda la verificación
+> final. No ejecutes `supabase/bootstrap.sql`, no cambies `BUSINESS_ID=tanaka` y no
+> reemplaces sus secretos, Redis, número Meta, catálogo o recursos Chatwoot por los
+> de otra marca. `upgrade_existing_tanaka.sql` queda como compatibilidad histórica;
+> para versiones futuras usa el upgrade genérico y sigue
+> `docs/UPGRADE_EXISTING_BRANDS.md`.
+
 ## Decisiones que hay que confirmar antes del corte
 
 Anota estas respuestas antes de cambiar webhooks. No bloquean la preparación de
@@ -111,6 +121,10 @@ Los agentes y su elegibilidad se administran en Chatwoot, no en el código del b
    `https://DOMINIO-TANAKA/chatwoot-webhook`, suscrito únicamente a
    `message_created` y `conversation_status_changed`. Copia el secreto generado a
    `CHATWOOT_WEBHOOK_SECRET`.
+   Para respuestas salientes del API inbox, configura además la webhook URL del
+   propio canal hacia esa misma ruta y guarda su `secret` independiente como
+   `CHATWOOT_API_INBOX_WEBHOOK_SECRET`. No uses el HMAC token de identidad. Si se
+   conserva también el account webhook, ambos secretos son distintos y válidos.
 8. Usa en `CHATWOOT_BASE_URL` solo la raíz HTTPS self-hosted, sin `/app`,
    `/api/v1`, query ni path adicional.
 
@@ -165,7 +179,8 @@ a otro proyecto. `RUN_WORKER_IN_WEB` se elimina o queda `true`;
 | `CHATWOOT_ACCOUNT_ID` | Para handoff | ID numérico de la cuenta Tanaka |
 | `CHATWOOT_INBOX_ID` | Para handoff | ID numérico del API inbox Tanaka |
 | `CHATWOOT_API_TOKEN` | Para handoff | Token del agente/integración Tanaka |
-| `CHATWOOT_WEBHOOK_SECRET` | Para handoff | Secreto del account webhook Tanaka |
+| `CHATWOOT_WEBHOOK_SECRET` | Opcional | Secreto de un account webhook Tanaka separado, si se conserva |
+| `CHATWOOT_API_INBOX_WEBHOOK_SECRET` | Para respuestas del asesor | `secret` firmante del API inbox Tanaka |
 | `PRESAVED_FILES_JSON` | Para catálogo | JSON mostrado debajo |
 | `CATALOG_STORAGE_BUCKET` | Recomendable | `catalogos` (es también el default) |
 | `DASHBOARD_API_KEY` | Si se usa dashboard | Secreto nuevo compartido solo con el proxy server-side de Tanaka |

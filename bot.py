@@ -221,7 +221,11 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> BotT
         # Catalog delivery is an onboarding invariant, not a probabilistic model
         # choice. If delivery fails, no success marker is stored and the next
         # customer turn retries it.
-        if not catalog_already_sent and "catalogo_pdf" in FILE_CATALOG:
+        if (
+            not catalog_already_sent
+            and "catalogo_pdf" in FILE_CATALOG
+            and "catalogo_pdf" not in requested_files
+        ):
             requested_files.insert(0, "catalogo_pdf")
         follow_up_message = str(ai_data.get("follow_up_message") or "").strip()
         try:

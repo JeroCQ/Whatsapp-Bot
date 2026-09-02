@@ -123,6 +123,22 @@ def send_message_to_chatwoot(conversation_id: int, content: str, is_private: boo
         return None
 
 
+def update_message_status(conversation_id: int, message_id: int, status: str, external_error: str = None):
+    """Reflect external WhatsApp delivery back into an API-inbox message."""
+    if not conversation_id or not message_id or status not in {"delivered", "failed"}:
+        return None
+    url = f"{get_base_url()}/conversations/{int(conversation_id)}/messages/{int(message_id)}"
+    data = {"status": status}
+    if external_error and status == "failed":
+        data["external_error"] = str(external_error)[:500]
+    try:
+        response = put(url, headers=get_headers(), json=data, allow_redirects=False)
+        return _checked(response, f"update_message_{status}", (200, 201))
+    except (ProviderError, requests.exceptions.RequestException) as exc:
+        print(f"[CHATWOOT STATUS WARN] Could not mark message_id={message_id} status={status}: {exc}")
+        return None
+
+
 def download_meta_media(media_id: str):
     """Obtiene un archivo temporal de Meta y devuelve sus bytes y MIME type."""
     url = f"https://graph.facebook.com/v20.0/{media_id}"

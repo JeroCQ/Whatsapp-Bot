@@ -52,7 +52,9 @@ def main():
             print("[LAUNCHER WARN] RUN_WORKER_IN_WEB=false but no RQ worker was found; starting embedded fallback worker.")
         else:
             print("[LAUNCHER] REDIS_URL detected; starting embedded RQ worker subprocess.")
-        worker_process = subprocess.Popen([sys.executable, "-m", "workers.runner"])
+        # `-u` is required because Railway captures a pipe rather than a TTY;
+        # otherwise worker startup/job logs can remain buffered indefinitely.
+        worker_process = subprocess.Popen([sys.executable, "-u", "-m", "workers.runner"])
     elif redis_url:
         print("[LAUNCHER] REDIS_URL detected but RUN_WORKER_IN_WEB=false; web process will only enqueue jobs.")
     else:

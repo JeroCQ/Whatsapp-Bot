@@ -63,17 +63,28 @@ def test_valid_webhook_and_root_dispatcher_constraint(monkeypatch):
     client = TestClient(main.app)
     monkeypatch.setattr(main.time, "time", lambda: 2000000000)
     monkeypatch.setattr(main, "claim_webhook_event", lambda *args: True)
-    monkeypatch.setattr(main, "_dispatch", lambda *args, **kwargs: "queued")
+    monkeypatch.setattr(main, "_dispatch_before_ack", lambda *args, **kwargs: "queued")
     body = json.dumps(payload()).encode()
     assert client.post("/chatwoot-webhook", content=body, headers=signed(body)).status_code == 200
     assert client.post("/", json=payload()).status_code == 404
+
+
+def test_api_inbox_signing_secret_is_accepted_without_changing_assignment(monkeypatch):
+    client = TestClient(main.app)
+    monkeypatch.setattr(main.time, "time", lambda: 2000000000)
+    monkeypatch.setattr(main.config, "CHATWOOT_API_INBOX_WEBHOOK_SECRET", "api-inbox-secret")
+    monkeypatch.setattr(main, "_dispatch_before_ack", lambda *args, **kwargs: "queued")
+    body = json.dumps(payload()).encode()
+
+    assert client.post("/chatwoot-webhook", content=body, headers=signed(body, "api-inbox-secret")).status_code == 200
+    assert main.config.CHATWOOT_ASSIGNMENT_MODE == "automatic"
 
 
 def test_temporary_webhook_alias_uses_same_signature_validation(monkeypatch):
     client = TestClient(main.app)
     monkeypatch.setattr(main.time, "time", lambda: 2000000000)
     monkeypatch.setattr(main, "claim_webhook_event", lambda *args: True)
-    monkeypatch.setattr(main, "_dispatch", lambda *args, **kwargs: "queued")
+    monkeypatch.setattr(main, "_dispatch_before_ack", lambda *args, **kwargs: "queued")
     body = json.dumps(payload()).encode()
 
     assert client.post("/chatwoo-webhook", content=body, headers=signed(body)).status_code == 200
@@ -279,12 +290,15 @@ def test_followup_at_or_after_24_hours_is_cancelled(monkeypatch, capsys):
 
 def test_agent_text_forwarding_is_scoped(monkeypatch):
     sent = []
+    statuses = []
     monkeypatch.setattr(main, "get_phone_by_chatwoot_id", lambda value: "57300")
     monkeypatch.setattr(main, "save_message_log", lambda *a: None)
     monkeypatch.setattr(main, "send_whatsapp_message", lambda *a: sent.append(a) or True)
     monkeypatch.setattr(main, "mark_webhook_event_processed", lambda *a, **k: None)
+    monkeypatch.setattr(chatwoot_api, "update_message_status", lambda *a: statuses.append(a))
     main.process_chatwoot_event(payload())
     assert sent == [("57300", "agent reply")]
+    assert statuses == [(44, 91, "delivered")]
     sent.clear()
     main.process_chatwoot_event(payload(account=99))
     assert sent == []
@@ -298,6 +312,7 @@ def test_string_false_private_flag_is_forwarded(monkeypatch):
     monkeypatch.setattr(main, "save_message_log", lambda *a: None)
     monkeypatch.setattr(main, "send_whatsapp_message", lambda *a: sent.append(a) or True)
     monkeypatch.setattr(main, "mark_webhook_event_processed", lambda *a, **k: None)
+    monkeypatch.setattr(chatwoot_api, "update_message_status", lambda *a: None)
 
     main.process_chatwoot_event(event, event_id="message_created:91")
 
@@ -320,14 +335,17 @@ def test_non_forwarded_chatwoot_message_logs_reason(monkeypatch, capsys, changes
 
 
 def test_unmapped_public_reply_logs_delivery_warning(monkeypatch, capsys):
+    statuses = []
     monkeypatch.setattr(main, "get_phone_by_chatwoot_id", lambda value: None)
     monkeypatch.setattr(main, "mark_webhook_event_processed", lambda *a, **k: None)
+    monkeypatch.setattr(chatwoot_api, "update_message_status", lambda *a: statuses.append(a))
 
     main.process_chatwoot_event(payload(), event_id="message_created:91")
 
     output = capsys.readouterr().out
     assert "reason=conversation_not_mapped" in output
     assert "event_id=message_created:91" in output
+    assert statuses == [(44, 91, "failed", "No se encontró el teléfono asociado a la conversación")]
 
 
 def test_agent_attachment_forwarding(monkeypatch):
@@ -339,6 +357,7 @@ def test_agent_attachment_forwarding(monkeypatch):
     monkeypatch.setattr(main, "upload_chatwoot_attachment_to_meta", lambda *a: "media-1")
     monkeypatch.setattr(main, "send_whatsapp_media", lambda *a: sent.append(a) or True)
     monkeypatch.setattr(main, "mark_webhook_event_processed", lambda *a, **k: None)
+    monkeypatch.setattr(chatwoot_api, "update_message_status", lambda *a: None)
     main.process_chatwoot_event(event)
     assert sent == [("57300", "media-1", "image", "agent reply", "proof.png")]
 
@@ -384,14 +403,33 @@ def test_attachment_forwarding_failure_is_retriable(monkeypatch):
     event = payload()
     event["attachments"] = [{"data_url": "/file.png", "content_type": "image/png"}]
     marked = []
+    statuses = []
     monkeypatch.setattr(main, "get_phone_by_chatwoot_id", lambda value: "57300")
     monkeypatch.setattr(main, "save_message_log", lambda *a: None)
     monkeypatch.setattr(main, "upload_chatwoot_attachment_to_meta", lambda *a: None)
     monkeypatch.setattr(main, "mark_webhook_event_processed", lambda *a, **k: marked.append((a, k)))
+    monkeypatch.setattr(chatwoot_api, "update_message_status", lambda *a: statuses.append(a))
 
     with pytest.raises(ProviderError):
         main.process_chatwoot_event(event, event_id="message_created:91")
     assert marked[-1][1]["status"] == "failed"
+    assert statuses == [(44, 91, "failed", "No se pudo entregar el mensaje a WhatsApp")]
+
+
+def test_chatwoot_api_message_status_uses_api_inbox_update_endpoint(monkeypatch):
+    captured = {}
+
+    def fake_put(url, **kwargs):
+        captured.update(url=url, json=kwargs["json"])
+        return Response(200, {"id": 91, "status": "delivered"})
+
+    monkeypatch.setattr(chatwoot_api, "put", fake_put)
+
+    assert chatwoot_api.update_message_status(44, 91, "delivered") is not None
+    assert captured == {
+        "url": "https://app.chatwoot.com/api/v1/accounts/10/conversations/44/messages/91",
+        "json": {"status": "delivered"},
+    }
 
 
 def test_attachment_size_limit(monkeypatch):
