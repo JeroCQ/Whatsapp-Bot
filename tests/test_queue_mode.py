@@ -1,4 +1,5 @@
 import unittest
+import ast
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
@@ -17,6 +18,35 @@ from queue_client import (
 def test_follow_up_delay_helper_has_one_definition():
     source = Path("queue_client.py").read_text(encoding="utf-8")
     assert source.count("def follow_up_delay_seconds(") == 1
+
+
+def test_provider_webhook_request_paths_do_not_call_remote_idempotency_or_redis():
+    """Meta/Chatwoot must ACK before any Supabase write or Redis enqueue."""
+    tree = ast.parse(Path("main.py").read_text(encoding="utf-8"))
+    functions = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    for endpoint in ("receive_webhook", "chatwoot_webhook"):
+        calls = {
+            node.func.id
+            for node in ast.walk(functions[endpoint])
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        assert "claim_webhook_event" not in calls
+        assert "enqueue" not in calls
+
+    assert any(
+        isinstance(node, ast.Attribute)
+        and node.attr == "add_task"
+        for node in ast.walk(functions["receive_webhook"])
+    )
+    assert any(
+        isinstance(node, ast.Attribute)
+        and node.attr == "add_task"
+        for node in ast.walk(functions["chatwoot_webhook"])
+    )
 
 
 class WebQueueModeTests(unittest.TestCase):

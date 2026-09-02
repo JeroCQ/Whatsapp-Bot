@@ -16,6 +16,9 @@ Para crear el despliegue aislado de Tanaka sobre Chatwoot self-hosted, Supabase,
 Meta y Railway nuevos, sigue [`SETUP_TANAKA.md`](SETUP_TANAKA.md). El runbook
 incluye el orden de creación, la lista exacta de variables y las pruebas de corte.
 
+Para desplegar Velvet con Camila, un número, Supabase, Railway, Redis y API inbox
+de Chatwoot nuevos, sigue el orden seguro de [`SETUP_VELVET.md`](SETUP_VELVET.md).
+
 ## Dashboard administrativo de Tanaka
 
 The repository contains the initial dashboard-managed Tanaka system instruction at

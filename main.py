@@ -760,7 +760,15 @@ def process_chatwoot_event(data: dict, event_id: str = None):
             raise
 
 
-def _dispatch(background_tasks: BackgroundTasks, func, *args, event_id: str = None, **kwargs):
+def _dispatch_after_response(func, *args, event_id: str = None, **kwargs):
+    """Enqueue only after the provider response has already been sent.
+
+    Redis and Supabase are remote services. Even an idempotency write or an RQ
+    enqueue can occasionally take longer than Meta's webhook deadline, so neither
+    operation belongs on the request path. Starlette runs this function as a
+    response background task. If Redis is unavailable, processing still occurs in
+    that background task rather than dropping the accepted message.
+    """
     func_kwargs = dict(kwargs)
     if event_id:
         func_kwargs["event_id"] = event_id
@@ -770,10 +778,27 @@ def _dispatch(background_tasks: BackgroundTasks, func, *args, event_id: str = No
             enqueue(func, *args, job_id=job_id, **func_kwargs)
             return "queued"
         except Exception as exc:
-            # Do not drop customer messages just because Redis/RQ is misconfigured.
-            print(f"[QUEUE ERROR] Failed to enqueue event_id={event_id}; falling back to FastAPI background task: {exc}")
-    background_tasks.add_task(func, *args, **func_kwargs)
+            print(f"[QUEUE ERROR] Failed to enqueue event_id={event_id}; processing after ACK: {exc}")
+    func(*args, **func_kwargs)
     return "background_task"
+
+
+def process_claimed_whatsapp_event(*args, event_id: str = None):
+    """Claim a Meta event off the request path, then perform the expensive work."""
+    sender_phone = args[0] if args else None
+    if not claim_webhook_event("whatsapp", event_id, sender_phone):
+        print(f"[WEBHOOK DEBUG] WhatsApp duplicado ignorado: {event_id}")
+        return
+    process_whatsapp_message(*args, event_id=event_id)
+
+
+def process_claimed_chatwoot_event(data: dict, event_id: str = None):
+    """Claim a Chatwoot event off the request path before processing it."""
+    conv_id = data.get("conversation", {}).get("id") or data.get("id")
+    if not claim_webhook_event("chatwoot", event_id, str(conv_id) if conv_id else None):
+        print(f"[WEBHOOK DEBUG] Chatwoot duplicado ignorado: {event_id}")
+        return
+    process_chatwoot_event(data, event_id=event_id)
 
 
 @app.get("/webhook")
@@ -790,7 +815,7 @@ async def verify_webhook(
 @app.post("/webhook")
 async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
     data = await request.json()
-    enqueued = 0
+    accepted = 0
     try:
         if data.get("object") == "whatsapp_business_account":
             for entry in data.get("entry", []):
@@ -804,21 +829,29 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                         sender_phone = message.get("from")
                         message_type = message.get("type")
                         event_id = message.get("id")
-                        if not claim_webhook_event("whatsapp", event_id, sender_phone):
-                            print(f"[WEBHOOK DEBUG] WhatsApp duplicado ignorado: {event_id}")
-                            continue
                         if message_type == "text":
                             body = message.get("text", {}).get("body")
-                            _dispatch(background_tasks, process_whatsapp_message, sender_phone, sender_name, body, False, None, False, None, event_id=event_id)
-                            enqueued += 1
+                            background_tasks.add_task(
+                                _dispatch_after_response,
+                                process_claimed_whatsapp_event,
+                                sender_phone,
+                                sender_name,
+                                body,
+                                False,
+                                None,
+                                False,
+                                None,
+                                event_id=event_id,
+                            )
+                            accepted += 1
                         elif message_type in WHATSAPP_MEDIA_TYPES:
                             media_payload = message.get(message_type, {})
                             inbound_media_id = media_payload.get("id")
                             caption = media_payload.get("caption", "")
                             body = caption or ("[Audio Nota]" if message_type == "audio" else "")
-                            _dispatch(
-                                background_tasks,
-                                process_whatsapp_message,
+                            background_tasks.add_task(
+                                _dispatch_after_response,
+                                process_claimed_whatsapp_event,
                                 sender_phone,
                                 sender_name,
                                 body,
@@ -831,8 +864,8 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                                 media_payload.get("filename"),
                                 event_id=event_id,
                             )
-                            enqueued += 1
-        return {"status": "success", "accepted": enqueued, "queue_enabled": queue_enabled()}
+                            accepted += 1
+        return {"status": "success", "accepted": accepted, "queue_enabled": queue_enabled()}
     except Exception as e:
         print(f"Error Webhook Meta: {e}")
         return {"status": "error"}
@@ -858,15 +891,17 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=403, detail="Chatwoot account or inbox mismatch")
     event_id = chatwoot_event_identity(data)
     conv_id = data.get("conversation", {}).get("id") or data.get("id")
-    if not claim_webhook_event("chatwoot", event_id, str(conv_id) if conv_id else None):
-        print(f"[WEBHOOK DEBUG] Chatwoot duplicado ignorado: {event_id}")
-        return {"status": "success", "duplicate": True}
-    mode = _dispatch(background_tasks, process_chatwoot_event, data, event_id=event_id)
+    background_tasks.add_task(
+        _dispatch_after_response,
+        process_claimed_chatwoot_event,
+        data,
+        event_id=event_id,
+    )
     print(
         f"[CHATWOOT WEBHOOK] accepted event={data.get('event')} "
-        f"conversation_id={conv_id} event_id={event_id} mode={mode}"
+        f"conversation_id={conv_id} event_id={event_id} mode=after_response"
     )
-    return {"status": "success", "mode": mode}
+    return {"status": "success", "mode": "after_response"}
 
 
 @app.post("/")
