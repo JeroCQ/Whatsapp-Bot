@@ -1,5 +1,13 @@
 # Puesta en producción de Quesos Memo's sin tocar Tanaka
 
+> **Actualización futura del Memo's existente:** antes de desplegar una versión
+> nueva de este repositorio, crea un backup de su Supabase y ejecuta
+> `supabase/upgrade_existing_brand.sql`. La consulta inicial de IDs Chatwoot
+> duplicados debe devolver cero filas y la verificación final debe devolver `true`
+> en todo. No ejecutes `supabase/bootstrap.sql`, conserva `BUSINESS_ID=memos` y no
+> reemplaces sus secretos, Redis, número Meta, catálogo o Chatwoot por los de Tanaka
+> o Velvet. Sigue el corte completo de `docs/UPGRADE_EXISTING_BRANDS.md`.
+
 ## Arquitectura final
 
 No conviertas el Railway de Tanaka en Memo's. Déjalo intacto y crea un segundo proyecto Railway desde este mismo repositorio. Cada despliegue ejecuta una sola marca mediante `BUSINESS_ID`; el backend rechaza cualquier `client_name` distinto al de ese despliegue. Cada marca tiene su propio WhatsApp, Supabase, Redis, inbox de Chatwoot, secretos y URL. Lovable es el único frontend compartido y actúa como enrutador de perfiles.
@@ -15,7 +23,13 @@ No conviertas el Railway de Tanaka en Memo's. Déjalo intacto y crea un segundo 
 
 1. En Supabase crea una organización/proyecto para Memo's, elige región cercana y guarda la contraseña de base de datos.
 2. Abre **SQL Editor**, pega todo `supabase/bootstrap.sql` y ejecútalo una vez.
-3. En **Storage** confirma que exista el bucket público `catalogos`.
+   **No ejecutes `supabase/upgrade_existing_tanaka.sql`: ese archivo solo actualiza
+   el Supabase histórico de Tanaka y no es el inicializador de proyectos nuevos.**
+   `bootstrap.sql` ya incluye las mismas funciones agregadas después a Tanaka:
+   idempotencia/cola, vínculo Chatwoot, cancelación de follow-ups, memoria de datos
+   del cliente y pedido, catálogo y allow-list administrativa protegida.
+3. Confirma que la consulta final devuelva `true` en todas sus columnas y que en
+   **Storage** exista el bucket público `catalogos`.
 4. En **Project Settings → API** copia:
    - Project URL → `SUPABASE_URL`.
    - La clave secreta `service_role` → `SUPABASE_SERVICE_ROLE_KEY`. No uses la `anon`/publishable key y nunca la expongas en Lovable.
@@ -91,13 +105,30 @@ También puedes agregar `DASHBOARD_FORMAT_TIMEOUT_SECONDS=90`. No configures `RU
 
 ### `PRESAVED_FILES_JSON` para Memo's
 
-La URL es un placeholder válido porque el backend busca en runtime el único catálogo vigente como `catalogos/memos.{pdf|jpg|jpeg|png|webp}` y usa su MIME real para enviarlo como documento o imagen:
+El ID reservado `catalogo_pdf` no necesita `link`: el backend busca en runtime el
+único catálogo vigente como `catalogos/memos.{pdf|jpg|jpeg|png|webp}` y usa su MIME
+real para enviarlo como documento o imagen:
 
 ```json
-[{"id":"catalogo_pdf","description":"Catálogo de Quesos Memo's; enviarlo cuando pidan el catálogo, precios generales o quieran ver todos los productos.","type":"document","link":"https://example.com/catalogo.pdf","filename":"Catálogo Memo's.pdf","caption":"Patrón, aquí tienes el catálogo de Quesos Memo's 🧀"}]
+[{"id":"catalogo_pdf","description":"Catálogo de Quesos Memo's; enviarlo cuando pidan el catálogo, precios generales o quieran ver todos los productos.","type":"document","filename":"Catálogo Memo's.pdf","caption":"Patrón, aquí tienes el catálogo de Quesos Memo's 🧀"}]
 ```
 
+En Railway Memo's pega **solo el JSON anterior**, desde `[` hasta `]`, sin comillas
+exteriores y sin barras `\`. Si se define desde Bash o un archivo `.env`, usa:
+
+```bash
+PRESAVED_FILES_JSON="[{\"id\":\"catalogo_pdf\",\"description\":\"Catálogo de Quesos Memo's; enviarlo cuando pidan el catálogo, precios generales o quieran ver todos los productos.\",\"type\":\"document\",\"filename\":\"Catálogo Memo's.pdf\",\"caption\":\"Patrón, aquí tienes el catálogo de Quesos Memo's 🧀\"}]"
+```
+
+Este valor pertenece únicamente al Railway Memo's. No reemplaces ni edites
+`PRESAVED_FILES_JSON` en el Railway Tanaka live.
+
 Después del primer deploy, entra al perfil Memo's de Lovable y sube el PDF o imagen real. Verifica en Supabase Storage que exista exactamente un objeto `catalogos/memos.{ext}` con la extensión correcta.
+
+Si este Supabase Memo's fue creado con una versión anterior del bootstrap y el log
+muestra `message_logs_role_check` al guardar `Archivos enviados`, ejecuta una vez
+`supabase/enable_runtime_message_roles.sql`. Los proyectos nuevos no necesitan este
+paso porque las mismas sentencias ya forman parte de `supabase/bootstrap.sql`.
 
 ## 5. Prompt para Lovable
 

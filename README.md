@@ -16,6 +16,24 @@ Para crear el despliegue aislado de Tanaka sobre Chatwoot self-hosted, Supabase,
 Meta y Railway nuevos, sigue [`SETUP_TANAKA.md`](SETUP_TANAKA.md). El runbook
 incluye el orden de creación, la lista exacta de variables y las pruebas de corte.
 
+Para desplegar Velvet con Camila, un número, Supabase, Railway, Redis y API inbox
+de Chatwoot nuevos, sigue el orden seguro de [`SETUP_VELVET.md`](SETUP_VELVET.md).
+
+## Arquitectura repetible para marcas actuales y futuras
+
+Toda modificación debe mantener dos caminos completos: creación limpia mediante
+`supabase/bootstrap.sql` y actualización idempotente de despliegues existentes sin
+perder datos. El runtime permanece genérico mediante `BUSINESS_ID`; identidad y
+reglas comerciales viven en `src/clients/{business_id}/system_instruction.txt`, y
+cada marca conserva Railway, Supabase, Redis/cola, Meta y Chatwoot aislados. Las
+reglas permanentes para Codex están en [`AGENTS.md`](AGENTS.md).
+
+Al llevar una versión nueva a una marca ya operativa, no ejecutes el bootstrap:
+haz backup y usa `supabase/upgrade_existing_brand.sql`. Este upgrade genérico
+mantiene las tablas y datos del negocio mientras agrega de forma idempotente las
+capacidades requeridas por el runtime actual. Sigue el checklist completo de
+[`docs/UPGRADE_EXISTING_BRANDS.md`](docs/UPGRADE_EXISTING_BRANDS.md).
+
 ## Dashboard administrativo de Tanaka
 
 The repository contains the initial dashboard-managed Tanaka system instruction at

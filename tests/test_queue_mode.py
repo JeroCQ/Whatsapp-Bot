@@ -1,4 +1,5 @@
 import unittest
+import ast
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
@@ -17,6 +18,30 @@ from queue_client import (
 def test_follow_up_delay_helper_has_one_definition():
     source = Path("queue_client.py").read_text(encoding="utf-8")
     assert source.count("def follow_up_delay_seconds(") == 1
+
+
+def test_provider_webhook_request_paths_keep_supabase_claims_in_workers():
+    """Meta/Chatwoot may use bounded Redis, but never wait for Supabase."""
+    tree = ast.parse(Path("main.py").read_text(encoding="utf-8"))
+    functions = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    for endpoint in ("receive_webhook", "chatwoot_webhook"):
+        calls = {
+            node.func.id
+            for node in ast.walk(functions[endpoint])
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        assert "claim_webhook_event" not in calls
+        assert "_dispatch_before_ack" in calls
+
+
+def test_redis_producer_connection_has_strict_webhook_timeouts():
+    source = Path("queue_client.py").read_text(encoding="utf-8")
+    assert "socket_connect_timeout=1.0" in source
+    assert "socket_timeout=2.0" in source
 
 
 class WebQueueModeTests(unittest.TestCase):

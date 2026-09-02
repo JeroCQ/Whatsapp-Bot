@@ -8,6 +8,7 @@ CONFIG = (Path(__file__).resolve().parents[1] / "supabase/config.toml").read_tex
 def test_proxy_uses_secret_passwords_without_hardcoding_them():
     assert "TANAKA_DASHBOARD_PASSWORD" in PROXY
     assert "MEMOS_DASHBOARD_PASSWORD" in PROXY
+    assert "VELVET_DASHBOARD_PASSWORD" in PROXY
     assert "TANA2026" not in PROXY
     assert "MEMO2026" not in PROXY
 

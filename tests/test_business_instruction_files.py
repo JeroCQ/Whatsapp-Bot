@@ -11,6 +11,41 @@ def test_memos_instruction_is_available_to_the_selected_deployment():
     assert "follow_up_delay_minutes = 120" in instruction
 
 
+def test_velvet_instruction_uses_confirmed_identity_catalog_and_logistics():
+    instruction = (ROOT / "src/clients/velvet/system_instruction.txt").read_text(encoding="utf-8")
+    assert "Camila" in instruction
+    assert "Velvet Repostería y Mochis Velvet" in instruction
+    assert "Red Velvet, Taro, Lulo, Café" in instruction
+    assert "de 48 a 95 unidades, $3.500 COP" in instruction
+    assert "desde 96 unidades, $3.000 COP" in instruction
+    assert "Cra. 10 #47-31, barrio El Troncal, Cali" in instruction
+    assert "lunes a sábado de 9:00 a. m. a 5:00 p. m." in instruction
+    assert "Nunca reutilices ni inventes tarifas de otra marca" in instruction
+    assert "follow_up_delay_minutes = 120" in instruction
+    assert "trigger_handoff = true" in instruction
+    assert "Soy Camila, asesora de Velvet" in instruction
+    assert "de 48 a 95 unidades, $3.500 COP" in instruction
+    assert "desde 96 unidades, $3.000 COP" in instruction
+    assert "adjunta el catálogo una sola vez" in instruction
+
+
+def test_velvet_instruction_does_not_import_unconfirmed_tanaka_commercial_facts():
+    instruction = (ROOT / "src/clients/velvet/system_instruction.txt").read_text(encoding="utf-8")
+    assert "Alexandra" not in instruction
+    assert "Tanaka Saludable" not in instruction
+    assert "51400015704" not in instruction
+    assert "$9.000" not in instruction
+    assert "Medellín, Bogotá y Barranquilla" not in instruction
+
+
+def test_new_brand_runbooks_use_bootstrap_and_leave_live_tanaka_untouched():
+    for filename in ("SETUP_MEMOS.md", "SETUP_VELVET.md"):
+        runbook = (ROOT / filename).read_text(encoding="utf-8")
+        assert "supabase/bootstrap.sql" in runbook
+        assert "No ejecutes `supabase/upgrade_existing_tanaka.sql`" in runbook
+        assert "Railway Tanaka" in runbook
+
+
 def test_tanaka_instruction_limits_same_day_delivery_by_local_time():
     instruction = (ROOT / "src/clients/tanaka/system_instruction.txt").read_text(encoding="utf-8")
     assert "fecha y hora local de Colombia" in instruction

@@ -111,7 +111,16 @@ def get_queue():
         from redis import Redis
         from rq import Queue
 
-        redis_conn = Redis.from_url(REDIS_URL)
+        # Webhook producers must never hang behind an unreachable Railway Redis.
+        # The dedicated worker creates its own long-lived connection; this client
+        # is for short queue/registry commands and therefore uses strict bounds.
+        redis_conn = Redis.from_url(
+            REDIS_URL,
+            socket_connect_timeout=1.0,
+            socket_timeout=2.0,
+            retry_on_timeout=False,
+            health_check_interval=30,
+        )
         _queue = Queue(QUEUE_NAME, connection=redis_conn, default_timeout=JOB_TIMEOUT)
     return _queue
 
