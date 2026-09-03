@@ -64,22 +64,28 @@ runtime: `customers`, `conversation_states`, `message_logs` y
 `dashboard_admins` pertenece a la capa administrativa y tampoco sustituye ninguna
 de las cuatro tablas del bot.
 
-El esquema **no está todavía completo para esta versión**: a
-`conversation_states` le falta `follow_up_token`. El código actual lo usa para
-programar, cancelar y consumir seguimientos. También faltan en el extracto los
-índices actuales y no se puede confirmar desde un `CREATE TABLE` si existe el bucket
-Storage `catalogos`, sus políticas o el estado de RLS.
+El esquema compartido **no está todavía completo para esta versión**, aunque ya
+incluye `follow_up_token`, `customer_data` y `order_summary`. En concreto:
+
+- `message_logs_role_check` solo acepta `user` y `model`, pero el runtime actual
+  también guarda marcadores `system` y mensajes de asesor con rol `asesor`;
+- falta `catalog_assets`, necesaria incluso si Tanaka conserva por ahora un solo
+  catálogo universal (la fila usa `catalog_id=catalogo_pdf`);
+- el extracto no permite confirmar los índices, el bucket Storage `catalogos`, su
+  bandera pública ni el estado de RLS/grants.
 
 1. Haz un backup o snapshot y confirma que las variables apuntan al proyecto Tanaka
    pagado, no al de otra marca.
-2. Abre `supabase/upgrade_existing_tanaka.sql`. Ejecuta primero únicamente la consulta
+2. Abre `supabase/upgrade_existing_brand.sql`. Ejecuta primero únicamente la consulta
    de IDs Chatwoot duplicados de la cabecera. Debe devolver **cero filas**. Si devuelve
    datos, conserva la fila que corresponda al ticket activo y limpia los IDs obsoletos
    antes de continuar.
-3. Ejecuta el archivo completo en **SQL Editor**. Es idempotente: agrega solo
-   `follow_up_token`, crea los índices que faltan y crea/corrige el bucket público
-   `catalogos`; no elimina tablas ni filas históricas.
-4. Verifica que la última consulta del archivo devuelva `true` en las siete columnas.
+3. Ejecuta el archivo completo en **SQL Editor**. Es idempotente: completa las
+   columnas y roles admitidos que falten, crea los índices y `catalog_assets`, y
+   crea/corrige el bucket público `catalogos`; no elimina tablas ni filas históricas.
+4. Verifica que la última consulta del archivo devuelva `true` en **todas** sus
+   columnas. El upgrade conserva las filas existentes y agrega la tabla de metadatos
+   multicatálogo sin obligarte a crear más de un catálogo.
 5. En **Project Settings → API**, copia la URL de este mismo proyecto a
    `SUPABASE_URL` y su clave secreta **service_role** a
    `SUPABASE_SERVICE_ROLE_KEY`. No uses anon/publishable y no expongas service-role
@@ -150,28 +156,32 @@ Los agentes y su elegibilidad se administran en Chatwoot, no en el código del b
 
 ## 6. Qué hacer exactamente con las variables actuales
 
-### Las 11 variables mostradas
+### Variables de identidad del despliegue que debes verificar
 
 | Variable | Acción | Valor de Tanaka |
 | --- | --- | --- |
-| `QUEUE_NAME` | **Cambiar** | `whatsapp-events-tanaka` |
-| `REDIS_URL` | **Cambiar** | Referencia al Redis **nuevo**, normalmente `${{Redis.REDIS_URL}}` |
+| `QUEUE_NAME` | **Conservar/verificar** | `whatsapp-events-tanaka` |
+| `REDIS_URL` | **Conservar/verificar** | Referencia al Redis del mismo proyecto Tanaka, normalmente `${{Redis.REDIS_URL}}` |
 | `RUN_WORKER_IN_WEB` | **Eliminar** (recomendado) | Sin definir equivale a worker embebido; alternativamente `true`. Nunca `false` en esta topología inicial |
 | `SUPABASE_SERVICE_ROLE_KEY` | **Cambiar respecto de otra marca / verificar para Tanaka** | `service_role` secreto del Supabase Tanaka pagado existente |
 | `SUPABASE_URL` | **Cambiar respecto de otra marca / verificar para Tanaka** | URL del Supabase Tanaka pagado existente |
-| `WA_PHONE_NUMBER_ID` | **Cambiar** | Phone Number ID del número nuevo |
-| `WA_TOKEN` | **Cambiar** | Token permanente nuevo autorizado para ese número |
-| `WA_VERIFY_TOKEN` | **Cambiar** | Secreto aleatorio nuevo, idéntico al configurado en Meta |
+| `WA_PHONE_NUMBER_ID` | **Conservar/verificar** | Phone Number ID del número Tanaka actual |
+| `WA_TOKEN` | **Conservar/verificar** | Token permanente autorizado para ese mismo número |
+| `WA_VERIFY_TOKEN` | **Conservar/verificar** | Secreto actual, idéntico al configurado en Meta |
 | `GITHUB_SI_PATH` | **Fijar/verificar** | `src/clients/tanaka/system_instruction.txt` |
 | `GITHUB_TOKEN` | **Conservar o cambiar** | Conservar solo si tiene el permiso mínimo de contenido para este repo; uno separado aísla permisos |
 | `CHATWOOT_ASSIGNMENT_MODE` | **Fijar** | `automatic`; Chatwoot controla colaboradores, disponibilidad y round robin |
 | `CHATWOOT_ASSIGNEE_ID` | **Conservar solo para rollback** | ID numérico anterior; se ignora en `automatic` y es obligatorio en `fixed` |
 
-Por tanto, cambian obligatoriamente `QUEUE_NAME`, `REDIS_URL`, las tres variables
-de WhatsApp y `CHATWOOT_ASSIGNMENT_MODE`. Las dos variables Supabase deben apuntar al
-proyecto Tanaka pagado existente: cámbialas solo si los valores actuales pertenecen
-a otro proyecto. `RUN_WORKER_IN_WEB` se elimina o queda `true`;
-`GITHUB_SI_PATH` se verifica y `GITHUB_TOKEN` puede conservarse conscientemente.
+Cuando se actualiza **el mismo Railway con el mismo Supabase, Redis, número Meta y
+Chatwoot**, no se rotan por rutina `REDIS_URL`, las variables de WhatsApp, las de
+Supabase ni los IDs/tokens Chatwoot: se verifica que sigan perteneciendo a Tanaka.
+Sí debes agregar cualquier variable requerida que falte, fijar
+`BUSINESS_ID=tanaka`, usar `QUEUE_NAME=whatsapp-events-tanaka` y desplegar el commit
+nuevo. `RUN_WORKER_IN_WEB` se elimina o queda `true`; `GITHUB_SI_PATH` se verifica y
+`GITHUB_TOKEN` puede conservarse conscientemente. Solo rota un secreto si estuvo
+expuesto, expiró o quieres invalidar el anterior; si lo rotas, actualiza a la vez el
+proveedor correspondiente para evitar una interrupción.
 
 ### Variables que faltan en la lista y deben agregarse
 
