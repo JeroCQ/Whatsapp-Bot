@@ -7,22 +7,26 @@ import logging
 import re
 import threading
 import time
+import unicodedata
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote, urljoin, urlparse
 from typing import Annotated, Any
 
 import requests
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from config import config
 from http_client import get, put
+from database import supabase
 
 
 CLIENT_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
+CATALOG_ID_RE = re.compile(r"^catalogo_[a-z0-9_]{1,52}$")
 API_ROOT = "https://api.github.com"
 logger = logging.getLogger(__name__)
 
@@ -66,6 +70,20 @@ class SIChange(BaseModel):
     explicacion: str = Field(min_length=1)
     texto_original: str = Field(min_length=1)
     texto_nuevo: str
+
+
+class CatalogMetadata(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    catalog_id: str = Field(min_length=3, max_length=64)
+    public_name: str = Field(min_length=1, max_length=120)
+    description: str = Field(min_length=1, max_length=500)
+
+    @field_validator("catalog_id")
+    @classmethod
+    def safe_catalog_id(cls, value: str) -> str:
+        if not CATALOG_ID_RE.fullmatch(value):
+            raise ValueError("catalog_id debe usar catalogo_ seguido de minúsculas, números o guion bajo")
+        return value
 
 
 class GeminiProviderError(Exception):
@@ -306,13 +324,13 @@ class CatalogStorageAdapter:
             "apikey": config.SUPABASE_KEY or "",
         }
 
-    def key(self, client_name: str, extension: str = "pdf") -> str:
+    def key(self, client_name: str, extension: str = "pdf", catalog_id: str = "catalogo_pdf") -> str:
         validate_client_name(client_name)
-        return config.catalog_storage_key(client_name, extension)
+        return config.catalog_storage_key(client_name, extension, catalog_id)
 
-    def public_url(self, client_name: str, extension: str = "pdf") -> str:
+    def public_url(self, client_name: str, extension: str = "pdf", catalog_id: str = "catalogo_pdf") -> str:
         validate_client_name(client_name)
-        return f"{self.base_url}/storage/v1/object/public/{self.bucket}/{self.key(client_name, extension)}"
+        return f"{self.base_url}/storage/v1/object/public/{self.bucket}/{self.key(client_name, extension, catalog_id)}"
 
     def storage_hostname(self) -> str:
         parsed = urlparse(self.base_url)
@@ -357,8 +375,8 @@ class CatalogStorageAdapter:
             )
         raise HTTPException(502, detail)
 
-    def delete_existing(self, client_name: str, extension: str = "pdf") -> None:
-        key = self.key(client_name, extension)
+    def delete_existing(self, client_name: str, extension: str = "pdf", catalog_id: str = "catalogo_pdf") -> None:
+        key = self.key(client_name, extension, catalog_id)
         url = f"{self.base_url}/storage/v1/object/{self.bucket}/{key}"
         try:
             response = requests.delete(url, headers=self.headers, timeout=(5, config.DASHBOARD_EXTERNAL_TIMEOUT_SECONDS))
@@ -387,8 +405,8 @@ class CatalogStorageAdapter:
             )
             raise HTTPException(502, "El almacenamiento no permitió reemplazar el catálogo existente")
 
-    def create_tus_upload(self, client_name: str, size_bytes: int, extension: str, content_type: str) -> str:
-        key = self.key(client_name, extension)
+    def create_tus_upload(self, client_name: str, size_bytes: int, extension: str, content_type: str, catalog_id: str = "catalogo_pdf") -> str:
+        key = self.key(client_name, extension, catalog_id)
         url = f"{self.storage_hostname()}/storage/v1/upload/resumable"
         headers = {
             **self.headers,
@@ -432,9 +450,9 @@ class CatalogStorageAdapter:
             raise HTTPException(502, "El almacenamiento no devolvió URL de carga resumable")
         return urljoin(url, upload_url)
 
-    def upload_once(self, client_name: str, file_obj, size_bytes: int, extension: str, content_type: str) -> dict:
+    def upload_once(self, client_name: str, file_obj, size_bytes: int, extension: str, content_type: str, catalog_id: str = "catalogo_pdf") -> dict:
         chunk_size = 6 * 1024 * 1024
-        upload_url = self.create_tus_upload(client_name, size_bytes, extension, content_type)
+        upload_url = self.create_tus_upload(client_name, size_bytes, extension, content_type, catalog_id)
         offset = 0
         try:
             while True:
@@ -460,27 +478,27 @@ class CatalogStorageAdapter:
             logger.error("Catalog upload incomplete: client=%s size_bytes=%s uploaded_bytes=%s", client_name, size_bytes, offset)
             raise HTTPException(502, "El almacenamiento no confirmó la carga completa")
         return {
-            "publicUrl": self.public_url(client_name, extension),
+            "publicUrl": self.public_url(client_name, extension, catalog_id),
             "updatedAt": datetime.now(timezone.utc).isoformat(),
             "sizeBytes": size_bytes,
             "contentType": content_type,
-            "filename": self.key(client_name, extension),
+            "filename": self.key(client_name, extension, catalog_id),
         }
 
-    def upload(self, client_name: str, file_obj, size_bytes: int, extension: str, content_type: str) -> dict:
+    def upload(self, client_name: str, file_obj, size_bytes: int, extension: str, content_type: str, catalog_id: str = "catalogo_pdf") -> dict:
         started_at = time.perf_counter()
         try:
-            result = self.upload_once(client_name, file_obj, size_bytes, extension, content_type)
+            result = self.upload_once(client_name, file_obj, size_bytes, extension, content_type, catalog_id)
         except HTTPException as exc:
             if exc.status_code != 409:
                 raise
             logger.warning("Catalog path already exists during upload; deleting and retrying once: client=%s size_bytes=%s", client_name, size_bytes)
-            self.delete_existing(client_name, extension)
+            self.delete_existing(client_name, extension, catalog_id)
             file_obj.seek(0)
-            result = self.upload_once(client_name, file_obj, size_bytes, extension, content_type)
+            result = self.upload_once(client_name, file_obj, size_bytes, extension, content_type, catalog_id)
         for stale_extension in self.CATALOG_FORMATS:
             if stale_extension != extension:
-                self.delete_existing(client_name, stale_extension)
+                self.delete_existing(client_name, stale_extension, catalog_id)
         logger.info(
             "Catalog upload completed: client=%s size_bytes=%s duration_ms=%s content_type=%s",
             client_name,
@@ -490,9 +508,9 @@ class CatalogStorageAdapter:
         )
         return result
 
-    def metadata(self, client_name: str) -> dict:
+    def metadata(self, client_name: str, catalog_id: str = "catalogo_pdf") -> dict:
         for extension, expected_content_type in self.CATALOG_FORMATS.items():
-            public_url = self.public_url(client_name, extension)
+            public_url = self.public_url(client_name, extension, catalog_id)
             try:
                 response = requests.head(public_url, timeout=(5, config.DASHBOARD_EXTERNAL_TIMEOUT_SECONDS), allow_redirects=True)
             except requests.RequestException:
@@ -507,9 +525,37 @@ class CatalogStorageAdapter:
                 "updatedAt": response.headers.get("last-modified"),
                 "sizeBytes": int(size) if size and size.isdigit() else None,
                 "contentType": (response.headers.get("content-type") or expected_content_type).split(";", 1)[0],
-                "filename": self.key(client_name, extension),
+                "filename": self.key(client_name, extension, catalog_id),
             }
         raise HTTPException(404, "El catálogo no existe en el almacenamiento")
+
+    def download(self, client_name: str, catalog_id: str, filename: str) -> requests.Response:
+        """Open an authenticated, streamed response for one known catalog object."""
+        extension = PurePosixPath(filename).suffix.lstrip(".").lower()
+        content_type = self.CATALOG_FORMATS.get(extension)
+        if not content_type:
+            raise HTTPException(404, "El catálogo no tiene un archivo compatible cargado")
+        key = self.key(client_name, extension, catalog_id)
+        url = f"{self.base_url}/storage/v1/object/{self.bucket}/{key}"
+        try:
+            response = requests.get(
+                url,
+                headers=self.headers,
+                stream=True,
+                timeout=(5, 60),
+            )
+        except requests.Timeout as exc:
+            raise HTTPException(502, "Supabase Storage excedió el tiempo límite al descargar el catálogo") from exc
+        except requests.RequestException as exc:
+            raise HTTPException(502, "No fue posible descargar el catálogo desde Supabase Storage") from exc
+        if response.status_code in (400, 404):
+            response.close()
+            raise HTTPException(404, "El archivo activo del catálogo no existe")
+        if response.status_code >= 400:
+            status = response.status_code
+            response.close()
+            raise HTTPException(502, f"Supabase Storage rechazó la descarga del catálogo (HTTP {status})")
+        return response
 
     def health(self) -> None:
         """Check the configured bucket without uploading or modifying data."""
@@ -829,3 +875,136 @@ def upload_catalog(file: Annotated[UploadFile, File()], client_name: str | None 
     file.file.seek(0)
     result = storage.upload(resolved_client_name, file.file, size_bytes, extension, content_type)
     return {"ok": True, **result}
+
+
+@router.get("/catalogs")
+def list_catalogs(client_name: str = Query(min_length=1)):
+    validate_deployment_client(client_name)
+    return (
+        supabase.table("catalog_assets").select("*")
+        .eq("business_id", client_name).order("created_at").execute().data or []
+    )
+
+
+@router.post("/catalogs")
+def create_catalog(metadata: CatalogMetadata, client_name: str = Query(min_length=1)):
+    validate_deployment_client(client_name)
+    row = {"business_id": client_name, **metadata.model_dump()}
+    try:
+        return supabase.table("catalog_assets").insert(row).execute().data[0]
+    except Exception as exc:
+        raise HTTPException(409, "El nombre de backend ya existe para este negocio") from exc
+
+
+@router.patch("/catalogs/{catalog_id}")
+def rename_catalog(catalog_id: str, metadata: CatalogMetadata, client_name: str = Query(min_length=1)):
+    validate_deployment_client(client_name)
+    if catalog_id != metadata.catalog_id:
+        raise HTTPException(422, "El nombre de backend es estable; crea otro catálogo para cambiarlo")
+    result = (
+        supabase.table("catalog_assets").update({
+            "public_name": metadata.public_name,
+            "description": metadata.description,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("business_id", client_name).eq("catalog_id", catalog_id).execute().data or []
+    )
+    if not result:
+        raise HTTPException(404, "Catálogo no encontrado")
+    return result[0]
+
+
+def stream_storage_response(response: requests.Response):
+    """Yield provider chunks and always release its pooled connection."""
+    try:
+        yield from response.iter_content(chunk_size=256 * 1024)
+    finally:
+        response.close()
+
+
+@router.get("/catalogs/{catalog_id}/file")
+def download_catalog_file(
+    catalog_id: str,
+    storage: CatalogStorageAdapter = Depends(get_catalog_storage),
+):
+    # This deployment and its dashboard key already select exactly one brand.
+    # A client_name query parameter, if sent by an older Lovable build, is
+    # intentionally ignored rather than trusted as an authorization scope.
+    if not CATALOG_ID_RE.fullmatch(catalog_id):
+        raise HTTPException(422, "catalog_id inválido")
+    rows = (
+        supabase.table("catalog_assets")
+        .select("catalog_id,public_name,filename")
+        .eq("business_id", config.BUSINESS_ID)
+        .eq("catalog_id", catalog_id)
+        .execute().data or []
+    )
+    if not rows:
+        raise HTTPException(404, "Catálogo no encontrado")
+    catalog = rows[0]
+    stored_filename = catalog.get("filename")
+    if not stored_filename:
+        raise HTTPException(404, "El catálogo no tiene un archivo cargado")
+    extension = PurePosixPath(stored_filename).suffix.lstrip(".").lower()
+    content_type = storage.CATALOG_FORMATS.get(extension)
+    if not content_type:
+        raise HTTPException(404, "El catálogo no tiene un archivo compatible cargado")
+    provider_response = storage.download(config.BUSINESS_ID, catalog_id, stored_filename)
+    public_stem = PurePosixPath(str(catalog["public_name"]).replace("\r", " ").replace("\n", " ")).stem
+    public_filename = f"{public_stem or catalog_id}.{extension}"
+    ascii_filename = (
+        unicodedata.normalize("NFKD", public_filename)
+        .encode("ascii", "ignore")
+        .decode("ascii")
+        .replace('"', "")
+        or f"{catalog_id}.{extension}"
+    )
+    headers = {
+        "Content-Disposition": (
+            f'inline; filename="{ascii_filename}"; '
+            f"filename*=UTF-8''{quote(public_filename, safe='')}"
+        ),
+        "Cache-Control": "private, no-store",
+    }
+    content_length = provider_response.headers.get("content-length")
+    if content_length and content_length.isdigit():
+        headers["Content-Length"] = content_length
+    return StreamingResponse(
+        stream_storage_response(provider_response),
+        media_type=content_type,
+        headers=headers,
+    )
+
+
+@router.post("/catalogs/{catalog_id}/file")
+def replace_catalog_file(
+    catalog_id: str,
+    file: Annotated[UploadFile, File()],
+    client_name: str = Query(min_length=1),
+    storage: CatalogStorageAdapter = Depends(get_catalog_storage),
+):
+    validate_deployment_client(client_name)
+    if not CATALOG_ID_RE.fullmatch(catalog_id):
+        raise HTTPException(422, "catalog_id inválido")
+    existing = supabase.table("catalog_assets").select("catalog_id").eq("business_id", client_name).eq("catalog_id", catalog_id).execute().data or []
+    if not existing:
+        raise HTTPException(404, "Crea primero los metadatos del catálogo")
+    extension, content_type = validated_catalog_format(file)
+    size_bytes = uploaded_file_size(file)
+    if size_bytes > config.DASHBOARD_MAX_CATALOG_MB * 1024 * 1024:
+        raise HTTPException(413, f"El catálogo excede el tamaño máximo de {config.DASHBOARD_MAX_CATALOG_MB} MB")
+    file.file.seek(0)
+    result = storage.upload(client_name, file.file, size_bytes, extension, content_type, catalog_id)
+    media_type = "image" if content_type.startswith("image/") else "document"
+    supabase.table("catalog_assets").update({"media_type": media_type, "filename": result["filename"], "updated_at": datetime.now(timezone.utc).isoformat()}).eq("business_id", client_name).eq("catalog_id", catalog_id).execute()
+    return {"ok": True, **result}
+
+
+@router.delete("/catalogs/{catalog_id}")
+def delete_catalog(catalog_id: str, client_name: str = Query(min_length=1), storage: CatalogStorageAdapter = Depends(get_catalog_storage)):
+    validate_deployment_client(client_name)
+    if not CATALOG_ID_RE.fullmatch(catalog_id):
+        raise HTTPException(422, "catalog_id inválido")
+    for extension in storage.CATALOG_FORMATS:
+        storage.delete_existing(client_name, extension, catalog_id)
+    supabase.table("catalog_assets").delete().eq("business_id", client_name).eq("catalog_id", catalog_id).execute()
+    return {"ok": True}

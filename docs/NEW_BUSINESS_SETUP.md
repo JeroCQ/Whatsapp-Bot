@@ -250,3 +250,7 @@ El proxy externo añade, con nombres propios de su plataforma,
 * Se copió configuración de otra marca para avanzar rápido: un alta no está lista
   hasta que número, Supabase, Redis/cola, account/inbox y secretos sean propios.
 
+
+## Catálogos múltiples (proyectos nuevos y existentes)
+
+`bootstrap.sql` (nuevo) y `upgrade_existing_brand.sql` (existente) crean `catalog_assets`. En Lovable, crea un ID técnico estable `catalogo_<slug>` y un nombre público por pieza, sube cada archivo por separado y referencia el ID exacto desde `requested_files` del system instruction. No agregues una variable Railway por catálogo: solo `BUSINESS_ID`, credenciales del Supabase aislado y `CATALOG_STORAGE_BUCKET`. Verifica creación, edición de nombre, reemplazo, eliminación y que otro `BUSINESS_ID` reciba HTTP 422. Comprueba también que **Ver archivo** abre inline `GET /api/catalogs/{catalog_id}/file`; esa descarga usa siempre el `BUSINESS_ID` del deployment y no acepta un negocio elegido por el navegador.

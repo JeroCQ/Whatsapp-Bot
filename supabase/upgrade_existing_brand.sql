@@ -75,6 +75,20 @@ INSERT INTO storage.buckets (id, name, public)
 VALUES ('catalogos', 'catalogos', true)
 ON CONFLICT (id) DO UPDATE SET public = true;
 
+CREATE TABLE IF NOT EXISTS public.catalog_assets (
+  business_id text NOT NULL,
+  catalog_id text NOT NULL CHECK (catalog_id ~ '^catalogo_[a-z0-9_]{1,52}$'),
+  public_name text NOT NULL CHECK (length(trim(public_name)) BETWEEN 1 AND 120),
+  description text NOT NULL CHECK (length(trim(description)) BETWEEN 1 AND 500),
+  media_type text NOT NULL DEFAULT 'document' CHECK (media_type IN ('document', 'image')),
+  filename text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (business_id, catalog_id)
+);
+ALTER TABLE public.catalog_assets ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.catalog_assets FROM anon, authenticated;
+
 -- Every result must be true before deploying the new bot commit.
 SELECT
   to_regclass('public.customers') IS NOT NULL AS has_customers,
@@ -82,6 +96,7 @@ SELECT
   to_regclass('public.message_logs') IS NOT NULL AS has_message_logs,
   to_regclass('public.processed_webhook_events') IS NOT NULL AS has_webhook_events,
   to_regclass('public.dashboard_admins') IS NOT NULL AS has_dashboard_admins,
+  to_regclass('public.catalog_assets') IS NOT NULL AS has_catalog_assets,
   EXISTS (
     SELECT 1 FROM information_schema.columns
     WHERE table_schema = 'public' AND table_name = 'conversation_states'

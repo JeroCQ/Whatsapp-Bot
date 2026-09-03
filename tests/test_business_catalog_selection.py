@@ -15,15 +15,14 @@ def test_bot_uses_deployment_business_for_prompt_and_catalog():
     assert 'load_file_catalog(config.PRESAVED_FILES_JSON, "PRESAVED_FILES_JSON")' in source
     assert 'config.BUSINESS_ID / "system_instruction.txt"' in source
     assert "link=config.catalog_public_url()" in source
-    assert 'catalog_already_sent = has_successful_file_delivery(phone, "catalogo_pdf")' in source
-    assert 'and "catalogo_pdf" not in requested_files' in source
+    assert "delivered_catalogs" in source
+    assert "has_successful_file_delivery(phone, file_id)" in source
 
 
-def test_catalog_onboarding_does_not_duplicate_a_model_requested_catalog():
+def test_catalog_selection_is_instruction_driven_and_deduplicates_deliveries():
     source = Path("bot.py").read_text(encoding="utf-8")
-    assert source.index('and "catalogo_pdf" not in requested_files') < source.index(
-        'requested_files.insert(0, "catalogo_pdf")'
-    )
+    assert "requested_files = [file_id for file_id in requested_files if file_id not in delivered_catalogs]" in source
+    assert 'requested_files.insert(0, "catalogo_pdf")' not in source
 
 
 def test_main_only_logs_successful_file_delivery():

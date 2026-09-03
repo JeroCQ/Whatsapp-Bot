@@ -114,13 +114,17 @@ class Settings:
     PRESAVED_FILES_JSON = os.getenv("PRESAVED_FILES_JSON", "[]")
 
     @classmethod
-    def catalog_storage_key(cls, client_name: str | None = None, extension: str = "pdf") -> str:
-        return f"{client_name or cls.BUSINESS_ID}.{extension.lstrip('.').lower()}"
+    def catalog_storage_key(cls, client_name: str | None = None, extension: str = "pdf", catalog_id: str = "catalogo_pdf") -> str:
+        business = client_name or cls.BUSINESS_ID
+        suffix = extension.lstrip(".").lower()
+        # Preserve the legacy universal-catalog path while allowing any business
+        # to own multiple independently replaceable catalog objects.
+        return f"{business}.{suffix}" if catalog_id == "catalogo_pdf" else f"{business}/{catalog_id}.{suffix}"
 
     @classmethod
-    def catalog_public_url(cls, client_name: str | None = None, extension: str = "pdf") -> str:
+    def catalog_public_url(cls, client_name: str | None = None, extension: str = "pdf", catalog_id: str = "catalogo_pdf") -> str:
         base_url = (cls.SUPABASE_URL or "").rstrip("/")
-        return f"{base_url}/storage/v1/object/public/{cls.CATALOG_STORAGE_BUCKET}/{cls.catalog_storage_key(client_name, extension)}"
+        return f"{base_url}/storage/v1/object/public/{cls.CATALOG_STORAGE_BUCKET}/{cls.catalog_storage_key(client_name, extension, catalog_id)}"
     
     @classmethod
     def validate(cls):
