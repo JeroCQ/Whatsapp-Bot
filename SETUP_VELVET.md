@@ -133,3 +133,12 @@ Chatwoot. Sin esta corrección el marcador falla y el catálogo vuelve a enviars
 Las mismas sentencias ya están integradas en el SQL principal
 `supabase/bootstrap.sql`, por lo que una marca creada desde cero no necesita
 ejecutar después el archivo de reparación.
+
+## Migración a tres catálogos (existentes y nuevos)
+
+1. Ejecuta `supabase/upgrade_existing_brand.sql` si Velvet ya existe; para un proyecto nuevo ejecuta `supabase/bootstrap.sql`. Ambos crean `catalog_assets` y el bucket.
+2. Despliega este backend conservando `BUSINESS_ID=velvet`; no agregues URLs por catálogo a Railway. `CATALOG_STORAGE_BUCKET=catalogos` continúa siendo suficiente.
+3. Aplica en Lovable `docs/LOVABLE_MULTI_CATALOG_PROMPT.md` y crea los IDs exactos `catalogo_tortas`, `catalogo_mochis` y `catalogo_mochis_mayorista` con sus nombres públicos indicados.
+4. Sube/reemplaza por separado la pieza de tortas, la pieza detal (caja x6 $28.000; caja x12 $50.000) y la pieza mayorista (40–95 a $3.500 c/u; 96+ a $3.000 c/u).
+5. `PRESAVED_FILES_JSON` deja de definir los catálogos administrados. Puede permanecer durante el despliegue como fallback legado, pero elimínalo después de verificar las tres filas y archivos.
+6. Prueba: saludo nuevo sin adjunto; “tortas” envía solo Catálogo Tortas; “mochis” solo Catálogo Mochis; “quiero 50” envía mayorista, cotiza $175.000 y no hace handoff; 96 unidades cotiza $288.000; una excepción o cantidad extraordinaria sí escala.
