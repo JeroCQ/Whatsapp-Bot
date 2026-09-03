@@ -7,6 +7,24 @@ from config import config
 supabase: Client = create_client(config.SUPABASE_URL, config.SUPABASE_KEY)
 
 
+def get_catalog_assets():
+    """Return this isolated deployment's active dashboard-managed catalogs."""
+    try:
+        return (
+            supabase.table("catalog_assets")
+            .select("catalog_id,public_name,description,media_type,filename")
+            .eq("business_id", config.BUSINESS_ID)
+            .order("created_at")
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        # Rolling upgrades keep the legacy Railway catalog working until the
+        # canonical existing-brand SQL has been applied.
+        return []
+
+
 def _first(data):
     return data[0] if data else None
 
