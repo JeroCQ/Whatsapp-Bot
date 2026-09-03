@@ -141,4 +141,5 @@ ejecutar después el archivo de reparación.
 3. Aplica en Lovable `docs/LOVABLE_MULTI_CATALOG_PROMPT.md` y crea los IDs exactos `catalogo_tortas`, `catalogo_mochis` y `catalogo_mochis_mayorista` con sus nombres públicos indicados.
 4. Sube/reemplaza por separado la pieza de tortas, la pieza detal (caja x6 $28.000; caja x12 $50.000) y la pieza mayorista (40–95 a $3.500 c/u; 96+ a $3.000 c/u).
 5. `PRESAVED_FILES_JSON` deja de definir los catálogos administrados. Puede permanecer durante el despliegue como fallback legado, pero elimínalo después de verificar las tres filas y archivos.
-6. Prueba: saludo nuevo sin adjunto; “tortas” envía solo Catálogo Tortas; “mochis” solo Catálogo Mochis; “quiero 50” envía mayorista, cotiza $175.000 y no hace handoff; 96 unidades cotiza $288.000; una excepción o cantidad extraordinaria sí escala.
+6. En Catalog Manager pulsa **Ver archivo** en cada tarjeta: debe abrir inline el PDF o imagen activo mediante `GET /api/catalogs/{catalog_id}/file`, nunca mediante una URL pública de Supabase en el navegador.
+7. Prueba: saludo nuevo sin adjunto; “tortas” envía solo Catálogo Tortas; “mochis” solo Catálogo Mochis; “quiero 50” envía mayorista, cotiza $175.000 y no hace handoff; 96 unidades cotiza $288.000; una excepción o cantidad extraordinaria sí escala.

@@ -7,15 +7,17 @@ import logging
 import re
 import threading
 import time
+import unicodedata
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote, urljoin, urlparse
 from typing import Annotated, Any
 
 import requests
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from config import config
@@ -527,6 +529,34 @@ class CatalogStorageAdapter:
             }
         raise HTTPException(404, "El catálogo no existe en el almacenamiento")
 
+    def download(self, client_name: str, catalog_id: str, filename: str) -> requests.Response:
+        """Open an authenticated, streamed response for one known catalog object."""
+        extension = PurePosixPath(filename).suffix.lstrip(".").lower()
+        content_type = self.CATALOG_FORMATS.get(extension)
+        if not content_type:
+            raise HTTPException(404, "El catálogo no tiene un archivo compatible cargado")
+        key = self.key(client_name, extension, catalog_id)
+        url = f"{self.base_url}/storage/v1/object/{self.bucket}/{key}"
+        try:
+            response = requests.get(
+                url,
+                headers=self.headers,
+                stream=True,
+                timeout=(5, 60),
+            )
+        except requests.Timeout as exc:
+            raise HTTPException(502, "Supabase Storage excedió el tiempo límite al descargar el catálogo") from exc
+        except requests.RequestException as exc:
+            raise HTTPException(502, "No fue posible descargar el catálogo desde Supabase Storage") from exc
+        if response.status_code in (400, 404):
+            response.close()
+            raise HTTPException(404, "El archivo activo del catálogo no existe")
+        if response.status_code >= 400:
+            status = response.status_code
+            response.close()
+            raise HTTPException(502, f"Supabase Storage rechazó la descarga del catálogo (HTTP {status})")
+        return response
+
     def health(self) -> None:
         """Check the configured bucket without uploading or modifying data."""
         response = requests.get(
@@ -881,6 +911,68 @@ def rename_catalog(catalog_id: str, metadata: CatalogMetadata, client_name: str 
     if not result:
         raise HTTPException(404, "Catálogo no encontrado")
     return result[0]
+
+
+def stream_storage_response(response: requests.Response):
+    """Yield provider chunks and always release its pooled connection."""
+    try:
+        yield from response.iter_content(chunk_size=256 * 1024)
+    finally:
+        response.close()
+
+
+@router.get("/catalogs/{catalog_id}/file")
+def download_catalog_file(
+    catalog_id: str,
+    storage: CatalogStorageAdapter = Depends(get_catalog_storage),
+):
+    # This deployment and its dashboard key already select exactly one brand.
+    # A client_name query parameter, if sent by an older Lovable build, is
+    # intentionally ignored rather than trusted as an authorization scope.
+    if not CATALOG_ID_RE.fullmatch(catalog_id):
+        raise HTTPException(422, "catalog_id inválido")
+    rows = (
+        supabase.table("catalog_assets")
+        .select("catalog_id,public_name,filename")
+        .eq("business_id", config.BUSINESS_ID)
+        .eq("catalog_id", catalog_id)
+        .execute().data or []
+    )
+    if not rows:
+        raise HTTPException(404, "Catálogo no encontrado")
+    catalog = rows[0]
+    stored_filename = catalog.get("filename")
+    if not stored_filename:
+        raise HTTPException(404, "El catálogo no tiene un archivo cargado")
+    extension = PurePosixPath(stored_filename).suffix.lstrip(".").lower()
+    content_type = storage.CATALOG_FORMATS.get(extension)
+    if not content_type:
+        raise HTTPException(404, "El catálogo no tiene un archivo compatible cargado")
+    provider_response = storage.download(config.BUSINESS_ID, catalog_id, stored_filename)
+    public_stem = PurePosixPath(str(catalog["public_name"]).replace("\r", " ").replace("\n", " ")).stem
+    public_filename = f"{public_stem or catalog_id}.{extension}"
+    ascii_filename = (
+        unicodedata.normalize("NFKD", public_filename)
+        .encode("ascii", "ignore")
+        .decode("ascii")
+        .replace('"', "")
+        or f"{catalog_id}.{extension}"
+    )
+    headers = {
+        "Content-Disposition": (
+            f'inline; filename="{ascii_filename}"; '
+            f"filename*=UTF-8''{quote(public_filename, safe='')}"
+        ),
+        "Cache-Control": "private, no-store",
+    }
+    content_length = provider_response.headers.get("content-length")
+    if content_length and content_length.isdigit():
+        headers["Content-Length"] = content_length
+    return StreamingResponse(
+        stream_storage_response(provider_response),
+        media_type=content_type,
+        headers=headers,
+    )
 
 
 @router.post("/catalogs/{catalog_id}/file")

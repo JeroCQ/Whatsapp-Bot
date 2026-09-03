@@ -42,8 +42,11 @@ class FakeGitHub:
 
 
 class FakeStorage:
+    CATALOG_FORMATS = {"pdf": "application/pdf", "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
+
     def __init__(self):
         self.uploaded = None
+        self.downloaded = None
 
     def upload(self, client_name, file_obj, size_bytes, extension, content_type):
         self.uploaded = (client_name, file_obj.read(), size_bytes, extension, content_type)
@@ -66,6 +69,23 @@ class FakeStorage:
 
     def health(self):
         return None
+
+    def download(self, client_name, catalog_id, filename):
+        self.downloaded = (client_name, catalog_id, filename)
+
+        class Response:
+            headers = {"content-length": "13"}
+
+            @staticmethod
+            def iter_content(chunk_size):
+                assert chunk_size == 256 * 1024
+                yield b"%PDF-1.7\nbody"
+
+            @staticmethod
+            def close():
+                return None
+
+        return Response()
 
 
 def make_client(gemini=None, github=None, storage=None):
@@ -136,6 +156,68 @@ def test_successful_endpoints_and_catalog_path():
         "contentType": "application/pdf",
         "filename": "client_1.pdf",
     }
+
+
+def test_catalog_file_download_is_scoped_and_inline(monkeypatch):
+    class Query:
+        data = [{
+            "catalog_id": "catalogo_tortas",
+            "public_name": "Catálogo Tortas",
+            "filename": "client_1/catalogo_tortas.pdf",
+        }]
+
+        def select(self, *_args):
+            return self
+
+        def eq(self, field, value):
+            if field == "business_id":
+                assert value == "client_1"
+            if field == "catalog_id":
+                assert value == "catalogo_tortas"
+            return self
+
+        def execute(self):
+            return self
+
+    class Supabase:
+        @staticmethod
+        def table(name):
+            assert name == "catalog_assets"
+            return Query()
+
+    monkeypatch.setattr(api, "supabase", Supabase())
+    storage = FakeStorage()
+    client, headers = make_client(storage=storage)
+
+    response = client.get(
+        "/api/catalogs/catalogo_tortas/file?client_name=another_brand",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert response.content == b"%PDF-1.7\nbody"
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.headers["content-length"] == "13"
+    assert response.headers["content-disposition"].startswith('inline; filename="Catalogo Tortas.pdf";')
+    assert "filename*=UTF-8''Cat%C3%A1logo%20Tortas.pdf" in response.headers["content-disposition"]
+    assert storage.downloaded == ("client_1", "catalogo_tortas", "client_1/catalogo_tortas.pdf")
+
+
+def test_catalog_file_download_returns_404_without_file(monkeypatch):
+    class Query:
+        data = [{"catalog_id": "catalogo_tortas", "public_name": "Catálogo Tortas", "filename": None}]
+
+        def select(self, *_args): return self
+        def eq(self, *_args): return self
+        def execute(self): return self
+
+    monkeypatch.setattr(api, "supabase", type("Supabase", (), {"table": staticmethod(lambda _name: Query())})())
+    client, headers = make_client(storage=FakeStorage())
+
+    response = client.get("/api/catalogs/catalogo_tortas/file", headers=headers)
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "El catálogo no tiene un archivo cargado"}
 
 
 def test_explicit_si_path_cannot_cross_business(monkeypatch):
@@ -409,7 +491,7 @@ def test_catalog_upload_retries_after_conflict_and_absent_delete(monkeypatch):
         return {"filename": "tanaka.pdf"}
 
     monkeypatch.setattr(adapter, "upload_once", upload_once)
-    monkeypatch.setattr(adapter, "delete_existing", lambda client, extension="pdf": deleted.append((client, extension)))
+    monkeypatch.setattr(adapter, "delete_existing", lambda client, extension="pdf", catalog_id="catalogo_pdf": deleted.append((client, extension)))
 
     result = adapter.upload("tanaka", BytesIO(b"%PDF-test"), 9, "pdf", "application/pdf")
 
@@ -450,7 +532,7 @@ def test_catalog_upload_removes_other_client_formats(monkeypatch):
     adapter = object.__new__(api.CatalogStorageAdapter)
     deleted = []
     monkeypatch.setattr(adapter, "upload_once", lambda *args: {"filename": "client_1.png"})
-    monkeypatch.setattr(adapter, "delete_existing", lambda client, extension="pdf": deleted.append((client, extension)))
+    monkeypatch.setattr(adapter, "delete_existing", lambda client, extension="pdf", catalog_id="catalogo_pdf": deleted.append((client, extension)))
 
     assert adapter.upload("client_1", object(), 10, "png", "image/png") == {"filename": "client_1.png"}
     assert {extension for _, extension in deleted} == {"pdf", "jpg", "jpeg", "webp"}
