@@ -241,7 +241,7 @@ def send_whatsapp_media(to_number: str, media_id: str, media_type: str, caption:
 
 def catalog_link_for_whatsapp(file_id: str, link: str) -> str:
     """Add a cache-busting query to dashboard-managed catalog links sent through Meta."""
-    if file_id != "catalogo_pdf":
+    if not file_id.startswith("catalogo_"):
         return link
     try:
         response = requests.head(link, timeout=MEDIA_TIMEOUT, allow_redirects=True)
@@ -256,10 +256,10 @@ def catalog_link_for_whatsapp(file_id: str, link: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 
-def current_catalog_for_whatsapp() -> tuple[str, str, str, str] | None:
+def current_catalog_for_whatsapp(catalog_id: str = "catalogo_pdf") -> tuple[str, str, str, str] | None:
     """Find this deployment's active PDF/image catalog from public Storage metadata."""
     for extension, expected_content_type, media_type in CATALOG_FORMATS:
-        link = config.catalog_public_url(extension=extension)
+        link = config.catalog_public_url(extension=extension, catalog_id=catalog_id)
         try:
             response = requests.head(link, timeout=MEDIA_TIMEOUT, allow_redirects=True)
         except requests.exceptions.RequestException:
@@ -326,15 +326,15 @@ def send_presaved_file(to_number: str, file_id: str):
     else:
         source_link = item.link
         catalog_extension = "pdf"
-        if file_id == "catalogo_pdf":
-            current_catalog = current_catalog_for_whatsapp()
+        if file_id.startswith("catalogo_"):
+            current_catalog = current_catalog_for_whatsapp(file_id)
             if not current_catalog:
                 print("[FILE CATALOG] No active PDF/image catalog exists for this deployment")
                 return False
             source_link, catalog_content_type, media_type, catalog_extension = current_catalog
         resolved_link = catalog_link_for_whatsapp(file_id, source_link)
         media_reference = {"link": resolved_link}
-        if file_id == "catalogo_pdf":
+        if file_id.startswith("catalogo_"):
             version = dict(parse_qsl(urlsplit(resolved_link).query, keep_blank_values=True)).get("v", "")
             digest = hashlib.sha256(version.encode("utf-8")).hexdigest()[:12] if version else str(int(time.time()))
             resolved_filename = f"catalogo-{config.BUSINESS_ID}-{digest}.{catalog_extension}"
@@ -346,7 +346,7 @@ def send_presaved_file(to_number: str, file_id: str):
                 return False
             media_reference = {"id": media_id}
     caption = item.default_caption
-    if file_id == "catalogo_pdf" and media_type == "image" and display_filename:
+    if file_id.startswith("catalogo_") and media_type == "image" and display_filename:
         caption = os.path.splitext(display_filename)[0]
     if caption and media_type in {"document", "image", "video"}:
         media_reference["caption"] = caption
