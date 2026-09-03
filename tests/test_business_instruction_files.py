@@ -25,8 +25,20 @@ def test_velvet_instruction_uses_confirmed_identity_catalog_and_logistics():
     assert "**$9.000 COP**" in instruction
     assert "follow_up_delay_minutes = 120" in instruction
     assert "trigger_handoff = true" in instruction
-    assert "Mi nombre es Camila de Velvet" in instruction
+    assert "Soy Camila, asesora de Velvet en Cali" in instruction
     assert "Cada catálogo se envía una sola vez" in instruction
+
+
+def test_velvet_catalog_messages_are_brief_visual_and_gender_neutral():
+    instruction = (ROOT / "src/clients/velvet/system_instruction.txt").read_text(encoding="utf-8")
+    assert "pieza visual autosuficiente" in instruction
+    assert "no copies en el texto sus precios, sabores, tamaños ni rangos de cantidades" in instruction
+    assert "una o dos frases cortas" in instruction
+    assert "muchos”" in instruction
+    assert "no autorizan repetir las escalas" in instruction
+    assert "Voz y trato unisex" in instruction
+    assert "evita “señor”, “señora”, “bienvenido”, “bienvenida”" in instruction
+    assert "¿Se te antojan tortas o mochis?" in instruction
 
 
 def test_velvet_instruction_does_not_import_unconfirmed_tanaka_commercial_facts():
