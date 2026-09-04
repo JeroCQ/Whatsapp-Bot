@@ -832,7 +832,7 @@ def validated_catalog_format(file: UploadFile) -> tuple[str, str]:
     expected_content_type = CATALOG_UPLOAD_FORMATS.get(extension)
     supplied_content_type = (file.content_type or "").lower().split(";", 1)[0]
     if not expected_content_type or supplied_content_type not in {expected_content_type, "application/octet-stream"}:
-        raise HTTPException(400, CATALOG_FORMAT_ERROR)
+        raise HTTPException(415, CATALOG_FORMAT_ERROR)
 
     header = file.file.read(12)
     file.file.seek(0)
@@ -843,7 +843,7 @@ def validated_catalog_format(file: UploadFile) -> tuple[str, str]:
         "image/webp": header.startswith(b"RIFF") and header[8:12] == b"WEBP",
     }[expected_content_type]
     if not valid_header:
-        raise HTTPException(400, f"El archivo está vacío o su contenido no coincide. {CATALOG_FORMAT_ERROR}")
+        raise HTTPException(415, f"El archivo está vacío o su contenido no coincide. {CATALOG_FORMAT_ERROR}")
     return extension.lstrip("."), expected_content_type
 
 
@@ -879,16 +879,38 @@ def upload_catalog(file: Annotated[UploadFile, File()], client_name: str | None 
 
 @router.get("/catalogs")
 def list_catalogs(client_name: str = Query(min_length=1)):
-    validate_deployment_client(client_name)
-    return (
+    try:
+        validate_deployment_client(client_name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    rows = (
         supabase.table("catalog_assets").select("*")
         .eq("business_id", client_name).order("created_at").execute().data or []
     )
+    for row in rows:
+        filename = row.get("filename")
+        content_type = row.get("content_type")
+        row["public_url"] = (
+            config.catalog_public_url(
+                client_name,
+                PurePosixPath(filename).suffix.lstrip("."),
+                row["catalog_id"],
+            )
+            if filename else None
+        )
+        # Keep both naming styles accepted by current Lovable cards.
+        row["media_type"] = row.get("media_type") or (
+            "image" if content_type and content_type.startswith("image/") else "document"
+        )
+    return rows
 
 
 @router.post("/catalogs")
 def create_catalog(metadata: CatalogMetadata, client_name: str = Query(min_length=1)):
-    validate_deployment_client(client_name)
+    try:
+        validate_deployment_client(client_name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     row = {"business_id": client_name, **metadata.model_dump()}
     try:
         return supabase.table("catalog_assets").insert(row).execute().data[0]
@@ -995,7 +1017,13 @@ def replace_catalog_file(
     file.file.seek(0)
     result = storage.upload(client_name, file.file, size_bytes, extension, content_type, catalog_id)
     media_type = "image" if content_type.startswith("image/") else "document"
-    supabase.table("catalog_assets").update({"media_type": media_type, "filename": result["filename"], "updated_at": datetime.now(timezone.utc).isoformat()}).eq("business_id", client_name).eq("catalog_id", catalog_id).execute()
+    supabase.table("catalog_assets").update({
+        "media_type": media_type,
+        "content_type": content_type,
+        "size_bytes": size_bytes,
+        "filename": result["filename"],
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }).eq("business_id", client_name).eq("catalog_id", catalog_id).execute()
     return {"ok": True, **result}
 
 
