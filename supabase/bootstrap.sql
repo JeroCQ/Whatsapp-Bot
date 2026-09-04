@@ -99,6 +99,8 @@ CREATE TABLE IF NOT EXISTS public.catalog_assets (
   description text NOT NULL CHECK (length(trim(description)) BETWEEN 1 AND 500),
   media_type text NOT NULL DEFAULT 'document' CHECK (media_type IN ('document', 'image')),
   filename text,
+  content_type text CHECK (content_type IN ('application/pdf', 'image/jpeg', 'image/png', 'image/webp')),
+  size_bytes bigint CHECK (size_bytes IS NULL OR size_bytes >= 0),
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (business_id, catalog_id)

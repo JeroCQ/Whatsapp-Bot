@@ -266,12 +266,71 @@ def test_auth_traversal_and_bad_pdfs():
     assert client.get("/api/current-si?client_name=../secret", headers=headers).status_code == 422
     assert client.get("/api/si-history?client_name=../secret", headers=headers).status_code == 422
     assert client.post("/api/upload-catalog?client_name=client_1", headers=headers,
-                       files={"file": ("x.txt", b"hello", "text/plain")}).status_code == 400
+                       files={"file": ("x.txt", b"hello", "text/plain")}).status_code == 415
     error = client.post("/api/upload-catalog?client_name=client_1", headers=headers,
                         files={"file": ("x.txt", b"hello", "text/plain")})
     assert "PDF, JPG/JPEG, PNG y WebP" in error.json()["detail"]
     assert client.post("/api/upload-catalog?client_name=client_1", headers=headers,
-                       files={"file": ("x.pdf", b"", "application/pdf")}).status_code == 400
+                       files={"file": ("x.pdf", b"", "application/pdf")}).status_code == 415
+
+
+def test_catalog_list_is_isolated_and_returns_lovable_card_fields(monkeypatch):
+    class Query:
+        data = [{
+            "business_id": "client_1",
+            "catalog_id": "catalogo_mochis",
+            "public_name": "Catálogo Mochis",
+            "description": "Enviar cuando pidan mochis al detal",
+            "filename": "client_1/catalogo_mochis.png",
+            "content_type": "image/png",
+            "size_bytes": 321,
+            "media_type": "image",
+            "updated_at": "2026-09-04T00:00:00Z",
+        }]
+
+        def select(self, *_args): return self
+        def eq(self, field, value):
+            assert (field, value) == ("business_id", "client_1")
+            return self
+        def order(self, *_args): return self
+        def execute(self): return self
+
+    monkeypatch.setattr(api, "supabase", type("Supabase", (), {"table": staticmethod(lambda _name: Query())})())
+    client, headers = make_client()
+
+    response = client.get("/api/catalogs?client_name=client_1", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()[0]["public_url"].endswith("/catalogos/client_1/catalogo_mochis.png")
+    assert response.json()[0]["content_type"] == "image/png"
+    assert response.json()[0]["size_bytes"] == 321
+    assert client.get("/api/catalogs?client_name=another_brand", headers=headers).status_code == 422
+
+
+def test_catalog_metadata_body_cannot_override_query_client(monkeypatch):
+    inserted = []
+
+    class Query:
+        data = []
+        def insert(self, row):
+            inserted.append(row)
+            self.data = [row]
+            return self
+        def execute(self): return self
+
+    monkeypatch.setattr(api, "supabase", type("Supabase", (), {"table": staticmethod(lambda _name: Query())})())
+    client, headers = make_client()
+    body = {
+        "catalog_id": "catalogo_mochis",
+        "public_name": "Catálogo Mochis",
+        "description": "Enviar cuando pidan mochis",
+        "client_name": "another_brand",
+    }
+
+    response = client.post("/api/catalogs?client_name=client_1", headers=headers, json=body)
+
+    assert response.status_code == 422
+    assert inserted == []
 
 
 def test_sha_conflict_is_sanitized(monkeypatch):
