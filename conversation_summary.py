@@ -85,8 +85,18 @@ def build_handoff_summary(
     data = dict(preserved_data or {})
     data.update(supplied_customer_data(messages))
     data_text = "; ".join(f"{label}: {value}" for label, value in data.items())
+    operational_error = next(
+        (
+            _clean(str(message.get("content") or ""), 500)
+            for message in reversed(messages)
+            if message.get("role") == "system"
+            and str(message.get("content") or "").startswith("ERROR")
+        ),
+        "ninguno registrado",
+    )
     return (
         f"**Resumen de handoff**\n"
         f"**Pedido en curso:** {preserved_order or compact_order_summary(messages)}\n"
-        f"**Datos ya suministrados:** {data_text or 'ninguno identificado'}"
+        f"**Datos ya suministrados:** {data_text or 'ninguno identificado'}\n"
+        f"**Incidente operativo:** {operational_error}"
     )

@@ -110,9 +110,86 @@ def test_handoff_summary_and_text_alert_are_private(monkeypatch):
     )
 
     assert "Resumen" in messages[0][0][1]
+    assert "**Motivo de transferencia:** Necesita asesor" in messages[0][0][1]
     assert messages[0][1]["is_private"] is True
     assert "🔔 Necesita asesor" in messages[1][0][1]
     assert messages[1][1]["is_private"] is True
+
+
+def test_catalog_delivery_failure_pauses_and_creates_explicit_handoff(monkeypatch):
+    state = {"is_paused": False, "chatwoot_conversation_id": None}
+    turn = type("Turn", (), {
+        "send_files_before_response": False,
+        "requested_files": ["catalogo_portafolio"],
+        "response": "Te comparto el catálogo.",
+        "follow_up_message": "",
+        "follow_up_delay_minutes": 120,
+    })()
+    logs = []
+    customer_messages = []
+    handoffs = []
+    monkeypatch.setattr(main, "invalidate_follow_up", lambda *_args: None)
+    monkeypatch.setattr(main, "get_or_create_customer_state", lambda *_args: dict(state))
+    monkeypatch.setattr(main, "process_message_logic", lambda *_args: turn)
+    monkeypatch.setattr(main, "deliver_presaved_file", lambda *_args: (
+        False, "catalogo_portafolio: FileDeliveryError: meta_media_upload_failed"
+    ))
+    monkeypatch.setattr(main, "send_whatsapp_message", lambda _phone, text: customer_messages.append(text) or True)
+    monkeypatch.setattr(main, "save_message_log", lambda *args: logs.append(args))
+    monkeypatch.setattr(main, "pause_bot_for_handoff", lambda _phone, reason: state.update(
+        is_paused=True, handoff_reason=reason
+    ))
+    monkeypatch.setattr(main, "_create_handoff_ticket_if_needed", lambda *args: handoffs.append(args))
+    monkeypatch.setattr(main, "schedule_follow_up", lambda *_args: pytest.fail("must not schedule after handoff"))
+
+    main._process_whatsapp_message_unlocked("57300", "Cliente", "Mándame el catálogo")
+
+    assert state["is_paused"] is True
+    assert "No se pudo entregar el catálogo" in state["handoff_reason"]
+    assert any("Detalle técnico" in entry[2] and "meta_media_upload_failed" in entry[2] for entry in logs)
+    assert customer_messages[-1] == (
+        "Perdón, no pude adjuntar el catálogo. Ya avisé al equipo para que te lo envíe manualmente."
+    )
+    assert handoffs and handoffs[0][2]["is_paused"] is True
+
+
+def test_authenticated_manual_handoff_creates_chatwoot_conversation(monkeypatch):
+    state = {"is_paused": False, "chatwoot_conversation_id": None}
+    monkeypatch.setattr(main, "get_or_create_customer_state", lambda *_args: dict(state))
+    monkeypatch.setattr(main, "pause_bot_for_handoff", lambda _phone, reason: state.update(
+        is_paused=True, handoff_reason=reason
+    ))
+
+    def create_ticket(*_args):
+        state["chatwoot_conversation_id"] = 456
+
+    monkeypatch.setattr(main, "_create_handoff_ticket_if_needed", create_ticket)
+    client = TestClient(main.app)
+    response = client.post(
+        "/api/manual-handoff?client_name=client_1",
+        headers={"X-Dashboard-API-Key": "dashboard-secret"},
+        json={
+            "phone_number": "573001112233",
+            "customer_name": "Cliente",
+            "reason": "Recuperar catálogo no entregado",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "status": "created", "conversation_id": 456}
+
+
+def test_bulk_catalog_recovery_requires_explicit_confirmation():
+    with pytest.raises(ValueError):
+        main.BulkCatalogRecoveryRequest(
+            recoveries=[{"phone_number": "573001112233", "catalog_id": "catalogo_pdf"}],
+            confirmation="SI",
+        )
+    request = main.BulkCatalogRecoveryRequest(
+        recoveries=[{"phone_number": "573001112233", "catalog_id": "catalogo_pdf"}],
+        confirmation="REENVIAR",
+    )
+    assert request.recoveries[0].catalog_id == "catalogo_pdf"
 
 
 def test_handoff_summary_and_media_alert_are_private(monkeypatch):
@@ -302,6 +379,25 @@ def test_agent_text_forwarding_is_scoped(monkeypatch):
     sent.clear()
     main.process_chatwoot_event(payload(account=99))
     assert sent == []
+
+
+def test_agent_catalog_command_bypasses_chatwoot_attachment_upload(monkeypatch):
+    event = payload()
+    event["content"] = "/catalogo catalogo_portafolio"
+    delivered = []
+    logs = []
+    monkeypatch.setattr(main, "get_phone_by_chatwoot_id", lambda _value: "57300")
+    monkeypatch.setattr(fake_bot, "refresh_managed_catalogs", lambda: None, raising=False)
+    monkeypatch.setattr(main, "deliver_presaved_file", lambda *args: delivered.append(args) or (True, None))
+    monkeypatch.setattr(main, "send_whatsapp_message", lambda *_args: pytest.fail("command text must stay internal"))
+    monkeypatch.setattr(main, "save_message_log", lambda *args: logs.append(args))
+    monkeypatch.setattr(main, "mark_webhook_event_processed", lambda *args, **kwargs: None)
+    monkeypatch.setattr(chatwoot_api, "update_message_status", lambda *args: None)
+
+    main.process_chatwoot_event(event)
+
+    assert delivered == [("57300", "catalogo_portafolio")]
+    assert logs == [("57300", "asesor", "Catálogo enviado por asesor: catalogo_portafolio")]
 
 
 def test_string_false_private_flag_is_forwarded(monkeypatch):

@@ -100,6 +100,12 @@ def test_tanaka_instruction_answers_before_using_catalog_and_limits_follow_up():
     assert "súper pendiente" in instruction
     assert "Si el cliente no responde a ese seguimiento, no generes otro" in instruction
     assert "entre las 8:00 a.m. y las 6:00 p.m." in instruction
+    assert "usa de 1 a 3 líneas breves" in instruction
+    assert "no una renuncia a vender" in instruction
+    assert "recomendación pertinente" in instruction
+    assert "no transcribas listas extensas" in instruction
+    assert "envía únicamente el archivo específico pertinente" in instruction
+    assert "no autoriza un seguimiento comercial por sí sola" in instruction
 
 
 def test_tanaka_instruction_uses_confirmed_product_facts():

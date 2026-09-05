@@ -1,11 +1,44 @@
 """Configuration and prompt helpers for files the AI may send to customers."""
 
 import json
+import re
+import unicodedata
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 
 SUPPORTED_MEDIA_TYPES = {"audio", "document", "image", "video"}
+
+
+def is_explicit_file_resend_request(text: str) -> bool:
+    """Recognize a customer's direct request to retry a previously offered file."""
+    normalized = unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode().lower()
+    return bool(re.search(
+        r"\b(reenvia(?:me|s|r)?|vuelve\s+a\s+(?:enviar|mandar)|"
+        r"(?:envia|manda)\w*\s+(?:de\s+nuevo|otra\s+vez)|"
+        r"no\s+(?:me\s+)?(?:llego|recibi))\b",
+        normalized,
+    ))
+
+
+def advisor_catalog_command(text: str | None) -> str | None:
+    """Parse the safe Chatwoot command used to send an already-managed catalog."""
+    match = re.fullmatch(r"\s*/catalogo\s+(catalogo_[a-z0-9_]{1,52})\s*", text or "", re.IGNORECASE)
+    return match.group(1).lower() if match else None
+
+
+def last_delivered_file(history: list[dict], available_ids: set[str]) -> str | None:
+    """Find the most recently logged successful file that is still available."""
+    marker = "Archivos enviados:"
+    for message in reversed(history):
+        content = str(message.get("content") or "")
+        if message.get("role") != "system" or marker not in content:
+            continue
+        delivered = [item.strip() for item in content.split(marker, 1)[1].split(",")]
+        matches = [file_id for file_id in delivered if file_id in available_ids]
+        if matches:
+            return matches[-1]
+    return None
 
 
 @dataclass(frozen=True)
@@ -74,17 +107,50 @@ def catalog_prompt(catalog: dict[str, PresavedFile]) -> str:
         "ARCHIVOS PREGUARDADOS DISPONIBLES:",
         "Solicita archivos solo por su ID exacto en requested_files. Nunca inventes un ID.",
         "Decide cuándo enviarlos usando estas descripciones y las reglas del prompt:",
+        "Si un archivo específico responde la petición, priorízalo sobre un catálogo general.",
+        "No copies en el chat listas extensas que ya están en un archivo: usa una introducción de máximo dos líneas y solicita el archivo.",
+        "Cuando la respuesta depende principalmente del archivo, usa send_files_before_response=true para entregar primero el adjunto.",
+        "La introducción breve puede conservar un único siguiente paso comercial si ya existe una compra activa; no conviertas una consulta informativa aislada en presión de venta.",
     ]
     for item in catalog.values():
         extras = f"; texto predeterminado: {item.default_caption}" if item.default_caption else ""
         lines.append(f"- ID {item.id!r} ({item.media_type}): {item.description}{extras}")
     lines.extend([
         "Incluye cada ID como máximo una vez.",
-        "send_files_before_response indica si los archivos deben llegar antes del texto; "
-        "normalmente usa false para introducirlos primero con el mensaje.",
+        "send_files_before_response indica si los archivos deben llegar antes del texto.",
         "No afirmes que un archivo fue enviado si su ID no aparece arriba.",
     ])
     return "\n".join(lines)
+
+
+def merge_managed_catalogs(
+    catalog: dict[str, PresavedFile],
+    rows: list[dict],
+    public_url: Callable[[str], str],
+) -> dict[str, PresavedFile]:
+    """Apply dashboard-managed rows using the same rules in runtime and preview APIs."""
+    if not rows:
+        return catalog
+    managed_ids = {row["catalog_id"] for row in rows}
+    for file_id in list(catalog):
+        if file_id.startswith("catalogo_") and file_id not in managed_ids:
+            del catalog[file_id]
+    for row in rows:
+        # A metadata-only catalog remains editable in Lovable but must not be
+        # offered to Gemini until there is a file the sender can deliver.
+        if not row.get("filename"):
+            catalog.pop(row["catalog_id"], None)
+            continue
+        file_id = row["catalog_id"]
+        catalog[file_id] = PresavedFile(
+            id=file_id,
+            description=row.get("description") or f"Catálogo público {row['public_name']}",
+            media_type=row.get("media_type") or "document",
+            link=public_url(file_id),
+            filename=row.get("public_name") or row.get("filename"),
+            default_caption=row.get("public_name"),
+        )
+    return catalog
 
 
 def extend_system_instruction(base_instruction: str, catalog: dict[str, PresavedFile]) -> str:
