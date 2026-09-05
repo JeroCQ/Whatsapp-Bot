@@ -691,3 +691,94 @@ def test_catalog_metadata_finds_image_after_missing_pdf(monkeypatch):
         "contentType": "image/png",
         "filename": "client_1.png",
     }
+
+
+def test_real_40_mb_pdf_is_streamed_to_tus_in_bounded_chunks(monkeypatch, tmp_path):
+    """Exercise the real file size that failed on Railway without buffering it as one body."""
+    size_bytes = 40 * 1024 * 1024
+    pdf = tmp_path / "PORTAFOLIO TANAKA 19 AGOSTO 2026 (1).pdf"
+    with pdf.open("wb") as stream:
+        stream.write(b"%PDF-1.7\n")
+        stream.truncate(size_bytes)
+
+    class Response:
+        status_code = 204
+        text = ""
+
+        def __init__(self, offset):
+            self.headers = {"upload-offset": str(offset)}
+
+    chunks = []
+    offset = 0
+
+    def patch(_url, *, data, **_kwargs):
+        nonlocal offset
+        chunks.append(len(data))
+        offset += len(data)
+        return Response(offset)
+
+    adapter = object.__new__(api.CatalogStorageAdapter)
+    adapter.base_url = "https://project.supabase.co"
+    adapter.bucket = "catalogos"
+    adapter.headers = {"Authorization": "Bearer secret", "apikey": "secret"}
+    monkeypatch.setattr(adapter, "create_tus_upload", lambda *_args: "https://upload.test/id")
+    monkeypatch.setattr(api.requests, "patch", patch)
+
+    with pdf.open("rb") as stream:
+        result = adapter.upload_once(
+            "tanaka", stream, size_bytes, "pdf", "application/pdf", "catalogo_portafolio"
+        )
+
+    assert pdf.stat().st_size == size_bytes
+    assert sum(chunks) == size_bytes
+    assert max(chunks) == 6 * 1024 * 1024
+    assert len(chunks) == 7
+    assert result["filename"] == "tanaka/catalogo_portafolio.pdf"
+    assert result["publicUrl"].endswith("/catalogos/tanaka/catalogo_portafolio.pdf")
+
+
+def test_malformed_tus_offset_is_a_concrete_502_with_traceback(monkeypatch, caplog):
+    from io import BytesIO
+
+    class Response:
+        status_code = 204
+        text = ""
+        headers = {"upload-offset": "not-an-integer"}
+
+    adapter = object.__new__(api.CatalogStorageAdapter)
+    adapter.base_url = "https://project.supabase.co"
+    adapter.bucket = "catalogos"
+    adapter.headers = {"Authorization": "Bearer secret", "apikey": "secret"}
+    monkeypatch.setattr(adapter, "create_tus_upload", lambda *_args: "https://upload.test/id")
+    monkeypatch.setattr(api.requests, "patch", lambda *_args, **_kwargs: Response())
+
+    with pytest.raises(HTTPException) as error:
+        adapter.upload_once(
+            "tanaka", BytesIO(b"%PDF-test"), 9, "pdf", "application/pdf", "catalogo_portafolio"
+        )
+
+    assert error.value.status_code == 502
+    assert error.value.detail == "Falló la carga resumable de Supabase: ValueError"
+    assert "Unexpected catalog streaming failure" in caplog.text
+    assert "catalog_id=catalogo_portafolio" in caplog.text
+    assert "Traceback" in caplog.text
+
+
+def test_storage_health_rejects_bucket_below_backend_limit(monkeypatch):
+    class Response:
+        status_code = 200
+        text = ""
+
+        @staticmethod
+        def json():
+            return {"file_size_limit": 10 * 1024 * 1024}
+
+    adapter = object.__new__(api.CatalogStorageAdapter)
+    adapter.base_url = "https://project.supabase.co"
+    adapter.bucket = "catalogos"
+    adapter.headers = {"Authorization": "Bearer secret", "apikey": "secret"}
+    monkeypatch.setattr(api.requests, "get", lambda *_args, **_kwargs: Response())
+    monkeypatch.setattr(api.config, "DASHBOARD_MAX_CATALOG_MB", 100)
+
+    with pytest.raises(RuntimeError, match="menos que DASHBOARD_MAX_CATALOG_MB=100"):
+        adapter.health()

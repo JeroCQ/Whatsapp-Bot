@@ -77,3 +77,19 @@ con `has_file: false` y `file_status: "pending_upload"`; usa **Completar carga**
   Railway aislado de esa misma marca y cada key debe coincidir con su `DASHBOARD_API_KEY`.
 * Despliega el backend y el proxy. Después de esto, todas las altas y sustituciones se
   hacen exclusivamente en Lovable siguiendo los seis pasos anteriores.
+
+## Archivos grandes y diagnóstico en Railway
+
+El bucket canónico se configura para permitir hasta 200 MB, sujeto al límite global del plan
+de Supabase. `DASHBOARD_MAX_CATALOG_MB` puede imponer un límite
+menor por deployment (100 MB por defecto) y `/api/dashboard-health` avisa si el límite del
+bucket es inferior al configurado en Railway. Las cargas usan TUS resumable en bloques de
+6 MiB; `DASHBOARD_STORAGE_TIMEOUT_SECONDS` se aplica a la creación de la sesión y a cada
+bloque, no al request completo.
+
+Ante un fallo, busca `Catalog file request failed`, `Catalog Storage upload failed` o
+`Unexpected catalog streaming failure`. Esos eventos incluyen traceback, `catalog_id`,
+tamaño, MIME y timeout sin registrar la API key. Un `413` indica límite; un `502` identifica
+Storage, transporte o activación de metadatos. Durante un upgrade progresivo, si aún faltan
+`content_type`/`size_bytes`, el backend registra el error y activa el archivo con las columnas
+legadas; aun así debe ejecutarse `supabase/upgrade_existing_brand.sql` para recuperar paridad.
