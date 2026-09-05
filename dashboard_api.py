@@ -884,6 +884,22 @@ def catalog_rows(client_name: str) -> list[dict]:
         supabase.table("catalog_assets").select("*")
         .eq("business_id", client_name).order("created_at").execute().data or []
     )
+    for row in rows:
+        filename = row.get("filename")
+        content_type = row.get("content_type")
+        row["public_url"] = (
+            config.catalog_public_url(
+                client_name,
+                PurePosixPath(filename).suffix.lstrip("."),
+                row["catalog_id"],
+            )
+            if filename else None
+        )
+        # Keep both naming styles accepted by current Lovable cards.
+        row["media_type"] = row.get("media_type") or (
+            "image" if content_type and content_type.startswith("image/") else "document"
+        )
+    return rows
 
 
 def enrich_catalog_row(row: dict, client_name: str, storage: CatalogStorageAdapter) -> dict:
