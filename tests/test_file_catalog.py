@@ -1,6 +1,7 @@
 import unittest
 
 from file_catalog import (
+    advisor_catalog_command,
     catalog_prompt,
     extend_system_instruction,
     is_explicit_file_resend_request,
@@ -8,6 +9,13 @@ from file_catalog import (
     load_file_catalog,
     merge_managed_catalogs,
 )
+
+
+def test_advisor_catalog_command_accepts_only_exact_catalog_ids():
+    assert advisor_catalog_command("/catalogo catalogo_portafolio") == "catalogo_portafolio"
+    assert advisor_catalog_command(" /CATALOGO catalogo_ingredientes ") == "catalogo_ingredientes"
+    assert advisor_catalog_command("envía catalogo_portafolio") is None
+    assert advisor_catalog_command("/catalogo https://example.com/file.pdf") is None
 
 
 def test_managed_catalog_without_file_is_not_exposed_to_ai():

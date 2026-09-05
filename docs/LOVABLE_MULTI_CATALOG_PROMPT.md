@@ -95,38 +95,79 @@ Storage, transporte o activación de metadatos. Durante un upgrade progresivo, s
 `content_type`/`size_bytes`, el backend registra el error y activa el archivo con las columnas
 legadas; aun así debe ejecutarse `supabase/upgrade_existing_brand.sql` para recuperar paridad.
 
-## Recuperación y handoff manual desde la microapp
+## Recuperación de entregas (Lovable es solo lectura)
 
-La microapp de conversaciones puede mostrar un botón **Abrir en Chatwoot** para los pocos
-contactos históricos que quedaron sin handoff. Debe llamar exclusivamente al proxy autenticado:
+La microapp de conversaciones actual **solo lee Supabase y organiza los datos**: no envía
+WhatsApp, no crea conversaciones y no tiene conexión con Chatwoot. No debe mostrar botones que
+aparenten reenviar o abrir un handoff. Sirve para descubrir el incidente; la recuperación se
+ejecuta desde el backend aislado de Railway o directamente desde Chatwoot.
 
-`POST /api/manual-handoff` con JSON
-`{"phone_number":"573...","customer_name":"Cliente","reason":"Recuperar catálogo no entregado"}`.
-El proxy deriva `client_name`; el navegador no debe enviarlo ni elegir otra marca. La operación
-es idempotente: si ya existe conversación devuelve `already_open`; de lo contrario pausa el bot,
-crea la conversación y devuelve su `conversation_id`.
+Un fallo nuevo al entregar cualquier archivo genera handoff inmediatamente, registra el detalle
+técnico en `message_logs`, informa al cliente en lenguaje sencillo y añade al resumen privado de
+Chatwoot el motivo explícito. Para un contacto histórico, un operador también puede usar
+`POST /api/manual-handoff` directamente contra Railway, con `?client_name=<marca>` y el header
+`X-Dashboard-API-Key` de esa misma instancia. Nunca se debe poner esa clave en Lovable o en un
+navegador.
 
-Un fallo nuevo al entregar cualquier archivo ahora genera handoff inmediatamente, registra el
-detalle técnico en `message_logs`, informa al cliente en lenguaje sencillo y añade al resumen
-privado de Chatwoot el motivo explícito. Para contactos antiguos se recomienda handoff manual:
-un reenvío automático fuera de la ventana de atención de WhatsApp puede requerir una plantilla
-aprobada y además podría contactar a alguien que ya no espera respuesta. Una vez abierto el caso,
-el asesor puede reenviar el catálogo desde Chatwoot y cerrar la conversación al terminar.
+Este repositorio no contiene el código de la microapp de Lovable: cualquier cambio visual allí
+debe hacerse en su proyecto separado. Tampoco hace falta tener el backend clonado en una terminal.
+El workflow manual **Catalog delivery recovery** permite operar desde la pestaña **Actions** de
+GitHub. Crea un GitHub Environment por deployment (por ejemplo `tanaka-production`) con:
 
-Para dimensionar la recuperación, la microapp puede consultar
-`GET /api/catalog-delivery-recoveries`. Devuelve únicamente errores de catálogo sin una entrega
-exitosa o handoff posterior y marca `within_service_window`. No debe usar ese indicador como
-permiso irrevocable: la ventana se vuelve a evaluar al enviar. Para muchos contactos, presenta
-selección por lotes y confirmación; dentro de la ventana puede ofrecer **Reintentar catálogo** y
-fuera de ella **Abrir en Chatwoot** o una plantilla de WhatsApp previamente aprobada. Nunca envíes
-mensajes libres masivos fuera de la ventana ni marques el error como resuelto antes de la
-confirmación real de Meta.
+* secret `RECOVERY_BACKEND_URL`: URL del Railway de esa marca;
+* secret `DASHBOARD_API_KEY`: clave administrativa del mismo Railway;
+* variable `BUSINESS_ID`: identificador de esa marca.
 
-Para los seleccionados, `POST /api/catalog-delivery-recoveries/resend` acepta hasta 50 pares
-`phone_number`/`catalog_id` y exige `confirmation: "REENVIAR"`. Cada contacto se procesa en
-Redis, vuelve a validar el error y la ventana, y registra la entrega real. Si ya se resolvió no
-duplica; si salió de ventana o el reintento falla, abre handoff manual. La microapp debe mostrar
-el resumen antes de confirmar y nunca seleccionar contactos automáticamente.
+Primero ejecuta el workflow con `mode=audit`; no envía nada. La salida aparece en el log privado
+del job y contiene teléfonos, por lo que no debe copiarse a un issue público. Como alternativa
+para desarrolladores, el mismo análisis puede ejecutarse desde terminal:
+
+```bash
+RECOVERY_BACKEND_URL=https://<railway-de-la-marca> \
+DASHBOARD_API_KEY=<clave-de-esa-marca> BUSINESS_ID=<marca> \
+python scripts/recover_catalog_deliveries.py
+```
+
+El comando consulta `GET /api/catalog-delivery-recoveries`. Devuelve errores sin una entrega
+exitosa o handoff posterior y marca `within_service_window`. La ventana se vuelve a evaluar al
+procesar cada trabajo. Dentro de ella se puede reintentar el archivo; fuera de ella el backend
+abre un handoff para que el equipo use Chatwoot o una plantilla de WhatsApp aprobada. No se envían
+mensajes libres masivos fuera de la ventana.
+
+Para recuperar números revisados, repite `--phone`. El envío exige dos confirmaciones explícitas:
+
+```bash
+RECOVERY_BACKEND_URL=https://<railway-de-la-marca> \
+DASHBOARD_API_KEY=<clave-de-esa-marca> BUSINESS_ID=<marca> \
+python scripts/recover_catalog_deliveries.py --phone 573... --execute --confirm REENVIAR
+```
+
+También existe `--all`, pero solo debe utilizarse después de guardar y revisar la auditoría. El
+script divide automáticamente más de 50 resultados en lotes. Cada trabajo vuelve a validar el
+error: no duplica una entrega ya resuelta; si el catálogo falla nuevamente, abre handoff. La
+microapp permanece estrictamente de solo lectura.
+
+Desde GitHub Actions selecciona `mode=recover`, escribe los teléfonos separados por comas (o
+`ALL` después de auditar) y escribe `REENVIAR` en confirmación. El workflow se detiene sin enviar
+si falta cualquiera de esos datos. La selección del GitHub Environment mantiene URL, clave y
+`BUSINESS_ID` aislados por marca.
+
+### Enviar un catálogo grande desde Chatwoot
+
+El límite de adjuntos de Chatwoot es independiente del límite del bucket de Supabase. Si
+Chatwoot rechaza un PDF antes de crear el mensaje, el webhook del bot nunca recibe ese archivo y
+aumentar el bucket `catalogos` no lo soluciona.
+
+En una conversación que ya esté en handoff, el asesor puede escribir como mensaje público:
+
+```text
+/catalogo catalogo_portafolio
+```
+
+El backend acepta exclusivamente ese comando con un ID seguro, obtiene el archivo ya cargado en
+Supabase y lo entrega mediante la misma ruta de Meta que utiliza el bot. El comando técnico no se
+reenvía al cliente. Si el ID no existe o Meta rechaza el documento, el mensaje queda marcado como
+fallido en Chatwoot y Railway registra la causa. Así no hay que volver a subir el PDF a Chatwoot.
 
 ## Longitud de las descripciones y prompt efectivo
 

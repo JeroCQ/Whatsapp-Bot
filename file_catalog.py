@@ -21,6 +21,12 @@ def is_explicit_file_resend_request(text: str) -> bool:
     ))
 
 
+def advisor_catalog_command(text: str | None) -> str | None:
+    """Parse the safe Chatwoot command used to send an already-managed catalog."""
+    match = re.fullmatch(r"\s*/catalogo\s+(catalogo_[a-z0-9_]{1,52})\s*", text or "", re.IGNORECASE)
+    return match.group(1).lower() if match else None
+
+
 def last_delivered_file(history: list[dict], available_ids: set[str]) -> str | None:
     """Find the most recently logged successful file that is still available."""
     marker = "Archivos enviados:"

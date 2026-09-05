@@ -50,6 +50,7 @@ from chatwoot_security import chatwoot_scope, verify_chatwoot_signature
 from provider_errors import ProviderError, provider_error, sanitize_text
 from outage_recovery import find_recoveries
 from catalog_delivery_recovery import find_catalog_recoveries
+from file_catalog import advisor_catalog_command
 from dashboard_api import admin_auth, router as dashboard_router, validate_deployment_client
 
 app = FastAPI()
@@ -941,7 +942,19 @@ def process_chatwoot_event(data: dict, event_id: str = None):
             attachments = data.get("attachments")
             phone = get_phone_by_chatwoot_id(conv_id) if conv_id else None
             if phone:
-                if attachments:
+                catalog_command = advisor_catalog_command(content) if not attachments else None
+                if catalog_command:
+                    from bot import refresh_managed_catalogs
+
+                    refresh_managed_catalogs()
+                    delivered, technical_error = deliver_presaved_file(phone, catalog_command)
+                    if not delivered:
+                        raise ProviderError(
+                            "whatsapp", "advisor_catalog_command", None,
+                            message=technical_error or f"catalog unavailable: {catalog_command}",
+                        )
+                    save_message_log(phone, "asesor", f"Catálogo enviado por asesor: {catalog_command}")
+                elif attachments:
                     for attachment in attachments:
                         data_url = _attachment_url(attachment)
                         if not data_url:
@@ -954,9 +967,10 @@ def process_chatwoot_event(data: dict, event_id: str = None):
                         if not meta_media_id:
                             raise ProviderError("chatwoot", "forward_attachment", None, message="attachment upload failed")
                         send_whatsapp_media(phone, meta_media_id, whatsapp_media_type, content, attachment_filename)
-                if content and not attachments:
+                if content and not attachments and not catalog_command:
                     send_whatsapp_message(phone, content)
-                save_message_log(phone, "asesor", content or "[Adjunto enviado por asesor]")
+                if not catalog_command:
+                    save_message_log(phone, "asesor", content or "[Adjunto enviado por asesor]")
                 chatwoot_api.update_message_status(conv_id, message_id, "delivered")
                 print(
                     f"[CHATWOOT DELIVERY] forwarded event_id={event_id} conversation_id={conv_id} "
