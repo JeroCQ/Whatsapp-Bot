@@ -1,6 +1,13 @@
 import unittest
 
-from file_catalog import catalog_prompt, extend_system_instruction, load_file_catalog, merge_managed_catalogs
+from file_catalog import (
+    catalog_prompt,
+    extend_system_instruction,
+    is_explicit_file_resend_request,
+    last_delivered_file,
+    load_file_catalog,
+    merge_managed_catalogs,
+)
 
 
 def test_managed_catalog_without_file_is_not_exposed_to_ai():
@@ -16,6 +23,18 @@ def test_managed_catalog_without_file_is_not_exposed_to_ai():
     }]
 
     assert merge_managed_catalogs(catalog, rows, lambda file_id: f"https://files.test/{file_id}") == {}
+
+
+def test_explicit_resend_recognition_and_last_successful_file_resolution():
+    assert is_explicit_file_resend_request("¿Me lo reenvías porfa?") is True
+    assert is_explicit_file_resend_request("No me llegó, mándamelo otra vez") is True
+    assert is_explicit_file_resend_request("¿Qué productos venden?") is False
+    history = [
+        {"role": "system", "content": "Archivos enviados: catalogo_anterior"},
+        {"role": "system", "content": "ERROR enviando archivos: catalogo_nuevo"},
+        {"role": "system", "content": "Archivos enviados: catalogo_nuevo"},
+    ]
+    assert last_delivered_file(history, {"catalogo_anterior", "catalogo_nuevo"}) == "catalogo_nuevo"
 
 
 class FileCatalogTests(unittest.TestCase):

@@ -14,6 +14,11 @@ from fastapi.testclient import TestClient
 import dashboard_api as api
 
 
+@pytest.fixture(autouse=True)
+def reset_dashboard_rate_limits():
+    api._requests.clear()
+
+
 class FakeGemini:
     def __init__(self, answer):
         self.answer = answer
@@ -305,6 +310,8 @@ def test_catalog_list_is_isolated_and_returns_lovable_card_fields(monkeypatch):
     assert response.json()[0]["public_url"].endswith("/catalogos/client_1/catalogo_mochis.pdf")
     assert response.json()[0]["content_type"] == "application/pdf"
     assert response.json()[0]["size_bytes"] == 123
+    assert response.json()[0]["has_file"] is True
+    assert response.json()[0]["file_status"] == "ready"
     assert client.get("/api/catalogs?client_name=another_brand", headers=headers).status_code == 422
 
 
@@ -332,6 +339,28 @@ def test_catalog_metadata_body_cannot_override_query_client(monkeypatch):
 
     assert response.status_code == 422
     assert inserted == []
+
+
+def test_catalog_created_without_upload_reports_pending_file(monkeypatch):
+    class Query:
+        data = []
+        def insert(self, row):
+            self.data = [row]
+            return self
+        def execute(self): return self
+
+    monkeypatch.setattr(api, "supabase", type("Supabase", (), {"table": staticmethod(lambda _name: Query())})())
+    client, headers = make_client()
+
+    response = client.post("/api/catalogs?client_name=client_1", headers=headers, json={
+        "catalog_id": "catalogo_nuevo",
+        "public_name": "Catálogo Nuevo",
+        "description": "Enviar solamente cuando corresponda",
+    })
+
+    assert response.status_code == 200
+    assert response.json()["has_file"] is False
+    assert response.json()["file_status"] == "pending_upload"
 
 
 def test_catalog_prompt_preview_matches_runtime_rules_and_hides_empty_catalog(monkeypatch):

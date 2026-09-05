@@ -1,11 +1,38 @@
 """Configuration and prompt helpers for files the AI may send to customers."""
 
 import json
+import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Callable, Optional
 
 
 SUPPORTED_MEDIA_TYPES = {"audio", "document", "image", "video"}
+
+
+def is_explicit_file_resend_request(text: str) -> bool:
+    """Recognize a customer's direct request to retry a previously offered file."""
+    normalized = unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode().lower()
+    return bool(re.search(
+        r"\b(reenvia(?:me|s|r)?|vuelve\s+a\s+(?:enviar|mandar)|"
+        r"(?:envia|manda)\w*\s+(?:de\s+nuevo|otra\s+vez)|"
+        r"no\s+(?:me\s+)?(?:llego|recibi))\b",
+        normalized,
+    ))
+
+
+def last_delivered_file(history: list[dict], available_ids: set[str]) -> str | None:
+    """Find the most recently logged successful file that is still available."""
+    marker = "Archivos enviados:"
+    for message in reversed(history):
+        content = str(message.get("content") or "")
+        if message.get("role") != "system" or marker not in content:
+            continue
+        delivered = [item.strip() for item in content.split(marker, 1)[1].split(",")]
+        matches = [file_id for file_id in delivered if file_id in available_ids]
+        if matches:
+            return matches[-1]
+    return None
 
 
 @dataclass(frozen=True)

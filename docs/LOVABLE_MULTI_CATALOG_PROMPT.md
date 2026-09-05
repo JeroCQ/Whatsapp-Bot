@@ -7,6 +7,7 @@ Copia y pega este prompt completo en el proyecto Lovable del dashboard:
 > Muestra una tarjeta por catálogo y un botón visible **+ Agregar catálogo**. Al crear solicita: (1) **Nombre público**, el nombre bonito que verá el cliente en WhatsApp, obligatorio; (2) **ID de backend**, obligatorio solo técnicamente, autogenerado una única vez como `catalogo_<slug_en_minusculas>` y presentado bajo “Opciones avanzadas”; (3) descripción breve para que la IA sepa cuándo enviarlo; y (4) PDF/JPG/PNG/WEBP. Explica que el ID queda estable después de crear porque el system instruction lo referencia, mientras el nombre público sí se puede editar.
 >
 > En cada tarjeta deja únicamente estas acciones: **Editar nombre/descripción**, **Reemplazar archivo** y **Eliminar** con confirmación. No mezcles renombrar con reemplazar. Después de cada mutación vuelve a consultar el servidor y muestra nombre público, ID técnico, tipo, tamaño y última actualización. Presenta errores del backend sin ocultarlos y deshabilita doble submit.
+> Considera terminada una creación con archivo únicamente después de recibir 2xx tanto de `POST /api/catalogs` como de `POST /api/catalogs/{catalog_id}/file`. Comprueba luego que `GET /api/catalogs` devuelva `has_file: true` y `file_status: "ready"`. Si devuelve `pending_upload`, conserva el formulario o muestra **Completar carga**; nunca anuncies “catálogo subido” después de crear solamente los metadatos.
 >
 > Usa exclusivamente las rutas server-side autenticadas existentes: `GET /api/catalogs?client_name=...`, `POST /api/catalogs?client_name=...` con JSON `{catalog_id, public_name, description}`, `PATCH /api/catalogs/{catalog_id}?client_name=...` con el mismo JSON, `POST /api/catalogs/{catalog_id}/file?client_name=...` multipart campo `file`, `GET /api/catalogs/{catalog_id}/file` para abrir el archivo activo y `DELETE /api/catalogs/{catalog_id}?client_name=...`. No llames Railway ni Supabase desde el navegador; conserva el proxy Lovable que agrega `X-Dashboard-API-Key` del lado servidor. No almacenes service-role ni dashboard key en variables `VITE_*`/cliente. El GET del archivo queda vinculado al `BUSINESS_ID` del deployment y no debe confiar en un `client_name` enviado por el navegador.
 >
@@ -55,6 +56,15 @@ Lovable puede presentar el texto efectivo sin intentar recrearlo: `GET
 `catalog_ids`. La previsualización y el bot comparten el mismo compositor; los catálogos
 creados sin archivo siguen apareciendo como tarjetas administrativas, pero no aparecen en
 el prompt ni pueden ser seleccionados por Gemini hasta completar la carga.
+
+### Diagnóstico de una carga incompleta
+
+Una creación correcta con archivo deja dos peticiones distintas en Railway: primero
+`POST /api/catalogs` y después `POST /api/catalogs/<catalog_id>/file`. Si el log solo contiene
+la primera, el archivo **no llegó al backend**, aunque la ficha exista. La tarjeta lo confirma
+con `has_file: false` y `file_status: "pending_upload"`; usa **Completar carga** o
+**Reemplazar archivo**. Cuando la segunda petición termine, la lista debe devolver
+`has_file: true`, la previsualización debe incluir el ID y el bot podrá enviarlo.
 
 ## Puesta en marcha
 
