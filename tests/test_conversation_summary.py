@@ -40,6 +40,19 @@ def test_handoff_summary_includes_order_and_preserved_data():
     assert "**Pedido en curso:** Quiero un paquete de arepas" in summary
     assert "Documento: 123456" in summary
     assert "Pago: efectivo" in summary
+    assert "**Incidente operativo:** ninguno registrado" in summary
+
+
+def test_handoff_summary_surfaces_latest_technical_incident():
+    messages = [
+        {"role": "system", "content": "ERROR enviando archivos: catalogo_pdf. Detalle técnico: timeout"},
+        {"role": "system", "content": "ERROR enviando archivos: catalogo_nuevo. Detalle técnico: Meta 500"},
+    ]
+
+    summary = build_handoff_summary(messages)
+
+    assert "**Incidente operativo:** ERROR enviando archivos: catalogo_nuevo" in summary
+    assert "Detalle técnico: Meta 500" in summary
 
 
 def test_preserves_unlabelled_document_phone_and_address_form_answer():

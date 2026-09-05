@@ -27,7 +27,8 @@ def test_catalog_selection_is_instruction_driven_and_deduplicates_deliveries():
 
 def test_main_only_logs_successful_file_delivery():
     source = Path("main.py").read_text(encoding="utf-8")
-    assert "if send_presaved_file(sender_phone, file_id):" in source
+    assert "delivered, technical_error = deliver_presaved_file(sender_phone, file_id)" in source
+    assert "if delivered:" in source
     assert "ERROR enviando archivos" in source
 
 

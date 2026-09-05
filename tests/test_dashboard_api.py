@@ -14,6 +14,11 @@ from fastapi.testclient import TestClient
 import dashboard_api as api
 
 
+@pytest.fixture(autouse=True)
+def reset_dashboard_rate_limits():
+    api._requests.clear()
+
+
 class FakeGemini:
     def __init__(self, answer):
         self.answer = answer
@@ -58,13 +63,14 @@ class FakeStorage:
             "filename": f"{client_name}.{extension}",
         }
 
-    def metadata(self, client_name):
+    def metadata(self, client_name, catalog_id="catalogo_pdf"):
+        key = f"{client_name}.pdf" if catalog_id == "catalogo_pdf" else f"{client_name}/{catalog_id}.pdf"
         return {
-            "publicUrl": f"https://storage.test/catalogos/{client_name}.pdf",
+            "publicUrl": f"https://storage.test/catalogos/{key}",
             "updatedAt": "Tue, 04 Aug 2026 00:00:00 GMT",
             "sizeBytes": 123,
             "contentType": "application/pdf",
-            "filename": f"{client_name}.pdf",
+            "filename": key,
         }
 
     def health(self):
@@ -266,12 +272,133 @@ def test_auth_traversal_and_bad_pdfs():
     assert client.get("/api/current-si?client_name=../secret", headers=headers).status_code == 422
     assert client.get("/api/si-history?client_name=../secret", headers=headers).status_code == 422
     assert client.post("/api/upload-catalog?client_name=client_1", headers=headers,
-                       files={"file": ("x.txt", b"hello", "text/plain")}).status_code == 400
+                       files={"file": ("x.txt", b"hello", "text/plain")}).status_code == 415
     error = client.post("/api/upload-catalog?client_name=client_1", headers=headers,
                         files={"file": ("x.txt", b"hello", "text/plain")})
     assert "PDF, JPG/JPEG, PNG y WebP" in error.json()["detail"]
     assert client.post("/api/upload-catalog?client_name=client_1", headers=headers,
-                       files={"file": ("x.pdf", b"", "application/pdf")}).status_code == 400
+                       files={"file": ("x.pdf", b"", "application/pdf")}).status_code == 415
+
+
+def test_catalog_list_is_isolated_and_returns_lovable_card_fields(monkeypatch):
+    class Query:
+        data = [{
+            "business_id": "client_1",
+            "catalog_id": "catalogo_mochis",
+            "public_name": "Catálogo Mochis",
+            "description": "Enviar cuando pidan mochis al detal",
+            "filename": "client_1/catalogo_mochis.png",
+            "content_type": "image/png",
+            "size_bytes": 321,
+            "media_type": "image",
+            "updated_at": "2026-09-04T00:00:00Z",
+        }]
+
+        def select(self, *_args): return self
+        def eq(self, field, value):
+            assert (field, value) == ("business_id", "client_1")
+            return self
+        def order(self, *_args): return self
+        def execute(self): return self
+
+    monkeypatch.setattr(api, "supabase", type("Supabase", (), {"table": staticmethod(lambda _name: Query())})())
+    client, headers = make_client(storage=FakeStorage())
+
+    response = client.get("/api/catalogs?client_name=client_1", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()[0]["public_url"].endswith("/catalogos/client_1/catalogo_mochis.pdf")
+    assert response.json()[0]["content_type"] == "application/pdf"
+    assert response.json()[0]["size_bytes"] == 123
+    assert response.json()[0]["has_file"] is True
+    assert response.json()[0]["file_status"] == "ready"
+    assert client.get("/api/catalogs?client_name=another_brand", headers=headers).status_code == 422
+
+
+def test_catalog_metadata_body_cannot_override_query_client(monkeypatch):
+    inserted = []
+
+    class Query:
+        data = []
+        def insert(self, row):
+            inserted.append(row)
+            self.data = [row]
+            return self
+        def execute(self): return self
+
+    monkeypatch.setattr(api, "supabase", type("Supabase", (), {"table": staticmethod(lambda _name: Query())})())
+    client, headers = make_client()
+    body = {
+        "catalog_id": "catalogo_mochis",
+        "public_name": "Catálogo Mochis",
+        "description": "Enviar cuando pidan mochis",
+        "client_name": "another_brand",
+    }
+
+    response = client.post("/api/catalogs?client_name=client_1", headers=headers, json=body)
+
+    assert response.status_code == 422
+    assert inserted == []
+
+
+def test_catalog_created_without_upload_reports_pending_file(monkeypatch):
+    class Query:
+        data = []
+        def insert(self, row):
+            self.data = [row]
+            return self
+        def execute(self): return self
+
+    monkeypatch.setattr(api, "supabase", type("Supabase", (), {"table": staticmethod(lambda _name: Query())})())
+    client, headers = make_client()
+
+    response = client.post("/api/catalogs?client_name=client_1", headers=headers, json={
+        "catalog_id": "catalogo_nuevo",
+        "public_name": "Catálogo Nuevo",
+        "description": "Enviar solamente cuando corresponda",
+    })
+
+    assert response.status_code == 200
+    assert response.json()["has_file"] is False
+    assert response.json()["file_status"] == "pending_upload"
+
+
+def test_catalog_prompt_preview_matches_runtime_rules_and_hides_empty_catalog(monkeypatch):
+    class Query:
+        data = [
+            {
+                "catalog_id": "catalogo_mochis",
+                "public_name": "Catálogo Mochis",
+                "description": "Enviar para ventas al detal; no enviar al por mayor",
+                "media_type": "document",
+                "filename": "client_1/catalogo_mochis.pdf",
+            },
+            {
+                "catalog_id": "catalogo_vacio",
+                "public_name": "Pendiente",
+                "description": "Todavía no usar",
+                "media_type": "document",
+                "filename": None,
+            },
+        ]
+        def select(self, *_args): return self
+        def eq(self, field, value):
+            assert (field, value) == ("business_id", "client_1")
+            return self
+        def order(self, *_args): return self
+        def execute(self): return self
+
+    monkeypatch.setattr(api, "supabase", type("Supabase", (), {"table": staticmethod(lambda _name: Query())})())
+    monkeypatch.setattr(api.config, "PRESAVED_FILES_JSON", "[]")
+    client, headers = make_client()
+
+    response = client.get("/api/catalog-prompt-preview?client_name=client_1", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["catalog_ids"] == ["catalogo_mochis"]
+    assert "ARCHIVOS PREGUARDADOS DISPONIBLES" in response.json()["prompt"]
+    assert "Enviar para ventas al detal; no enviar al por mayor" in response.json()["prompt"]
+    assert "catalogo_vacio" not in response.json()["prompt"]
 
 
 def test_sha_conflict_is_sanitized(monkeypatch):
@@ -564,3 +691,94 @@ def test_catalog_metadata_finds_image_after_missing_pdf(monkeypatch):
         "contentType": "image/png",
         "filename": "client_1.png",
     }
+
+
+def test_real_40_mb_pdf_is_streamed_to_tus_in_bounded_chunks(monkeypatch, tmp_path):
+    """Exercise the real file size that failed on Railway without buffering it as one body."""
+    size_bytes = 40 * 1024 * 1024
+    pdf = tmp_path / "PORTAFOLIO TANAKA 19 AGOSTO 2026 (1).pdf"
+    with pdf.open("wb") as stream:
+        stream.write(b"%PDF-1.7\n")
+        stream.truncate(size_bytes)
+
+    class Response:
+        status_code = 204
+        text = ""
+
+        def __init__(self, offset):
+            self.headers = {"upload-offset": str(offset)}
+
+    chunks = []
+    offset = 0
+
+    def patch(_url, *, data, **_kwargs):
+        nonlocal offset
+        chunks.append(len(data))
+        offset += len(data)
+        return Response(offset)
+
+    adapter = object.__new__(api.CatalogStorageAdapter)
+    adapter.base_url = "https://project.supabase.co"
+    adapter.bucket = "catalogos"
+    adapter.headers = {"Authorization": "Bearer secret", "apikey": "secret"}
+    monkeypatch.setattr(adapter, "create_tus_upload", lambda *_args: "https://upload.test/id")
+    monkeypatch.setattr(api.requests, "patch", patch)
+
+    with pdf.open("rb") as stream:
+        result = adapter.upload_once(
+            "tanaka", stream, size_bytes, "pdf", "application/pdf", "catalogo_portafolio"
+        )
+
+    assert pdf.stat().st_size == size_bytes
+    assert sum(chunks) == size_bytes
+    assert max(chunks) == 6 * 1024 * 1024
+    assert len(chunks) == 7
+    assert result["filename"] == "tanaka/catalogo_portafolio.pdf"
+    assert result["publicUrl"].endswith("/catalogos/tanaka/catalogo_portafolio.pdf")
+
+
+def test_malformed_tus_offset_is_a_concrete_502_with_traceback(monkeypatch, caplog):
+    from io import BytesIO
+
+    class Response:
+        status_code = 204
+        text = ""
+        headers = {"upload-offset": "not-an-integer"}
+
+    adapter = object.__new__(api.CatalogStorageAdapter)
+    adapter.base_url = "https://project.supabase.co"
+    adapter.bucket = "catalogos"
+    adapter.headers = {"Authorization": "Bearer secret", "apikey": "secret"}
+    monkeypatch.setattr(adapter, "create_tus_upload", lambda *_args: "https://upload.test/id")
+    monkeypatch.setattr(api.requests, "patch", lambda *_args, **_kwargs: Response())
+
+    with pytest.raises(HTTPException) as error:
+        adapter.upload_once(
+            "tanaka", BytesIO(b"%PDF-test"), 9, "pdf", "application/pdf", "catalogo_portafolio"
+        )
+
+    assert error.value.status_code == 502
+    assert error.value.detail == "Falló la carga resumable de Supabase: ValueError"
+    assert "Unexpected catalog streaming failure" in caplog.text
+    assert "catalog_id=catalogo_portafolio" in caplog.text
+    assert "Traceback" in caplog.text
+
+
+def test_storage_health_rejects_bucket_below_backend_limit(monkeypatch):
+    class Response:
+        status_code = 200
+        text = ""
+
+        @staticmethod
+        def json():
+            return {"file_size_limit": 10 * 1024 * 1024}
+
+    adapter = object.__new__(api.CatalogStorageAdapter)
+    adapter.base_url = "https://project.supabase.co"
+    adapter.bucket = "catalogos"
+    adapter.headers = {"Authorization": "Bearer secret", "apikey": "secret"}
+    monkeypatch.setattr(api.requests, "get", lambda *_args, **_kwargs: Response())
+    monkeypatch.setattr(api.config, "DASHBOARD_MAX_CATALOG_MB", 100)
+
+    with pytest.raises(RuntimeError, match="menos que DASHBOARD_MAX_CATALOG_MB=100"):
+        adapter.health()
