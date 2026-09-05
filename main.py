@@ -6,7 +6,8 @@ import time
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import requests
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
+from pydantic import BaseModel, ConfigDict, Field
 from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -48,7 +49,8 @@ from webhook_utils import chatwoot_event_identity, is_restart_command
 from chatwoot_security import chatwoot_scope, verify_chatwoot_signature
 from provider_errors import ProviderError, provider_error, sanitize_text
 from outage_recovery import find_recoveries
-from dashboard_api import router as dashboard_router
+from catalog_delivery_recovery import find_catalog_recoveries
+from dashboard_api import admin_auth, router as dashboard_router, validate_deployment_client
 
 app = FastAPI()
 app.add_middleware(
@@ -59,6 +61,31 @@ app.add_middleware(
     allow_headers=["Content-Type", "X-Dashboard-API-Key"],
 )
 app.include_router(dashboard_router)
+
+
+class ManualHandoffRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    phone_number: str = Field(pattern=r"^\d{7,15}$")
+    customer_name: str = Field(default="Cliente", min_length=1, max_length=120)
+    reason: str = Field(default="Revisión manual solicitada desde el dashboard", min_length=3, max_length=500)
+
+
+class CatalogRecoverySelection(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    phone_number: str = Field(pattern=r"^\d{7,15}$")
+    catalog_id: str = Field(pattern=r"^catalogo_[a-z0-9_]{1,52}$")
+
+
+class BulkCatalogRecoveryRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    recoveries: list[CatalogRecoverySelection] = Field(min_length=1, max_length=50)
+    confirmation: str = Field(pattern=r"^REENVIAR$", description="Explicit operator confirmation")
+
+
+class FileDeliveryError(RuntimeError):
+    """Safe technical context for an operational file-delivery handoff."""
+
+
 app.mount("/public", StaticFiles(directory="public"), name="public")
 
 DEPLOYMENT_COMMIT_SHA = os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_COMMIT_SHA") or "unknown"
@@ -311,11 +338,13 @@ def upload_public_url_to_meta_media(file_url: str, filename: str, fallback_mime_
         return None
 
 
-def send_presaved_file(to_number: str, file_id: str):
+def send_presaved_file(to_number: str, file_id: str, *, raise_on_failure: bool = False):
     """Send one allow-listed file selected by Gemini from the configured catalog."""
     item = FILE_CATALOG.get(file_id)
     if not item:
         print(f"[FILE CATALOG] Ignoring unknown file id requested by AI: {file_id}")
+        if raise_on_failure:
+            raise FileDeliveryError(f"unknown_or_stale_file_id={file_id}")
         return
     resolved_filename = item.filename
     display_filename = item.filename
@@ -330,6 +359,8 @@ def send_presaved_file(to_number: str, file_id: str):
             current_catalog = current_catalog_for_whatsapp(file_id)
             if not current_catalog:
                 print("[FILE CATALOG] No active PDF/image catalog exists for this deployment")
+                if raise_on_failure:
+                    raise FileDeliveryError(f"storage_object_not_found catalog_id={file_id}")
                 return False
             source_link, catalog_content_type, media_type, catalog_extension = current_catalog
         resolved_link = catalog_link_for_whatsapp(file_id, source_link)
@@ -343,6 +374,8 @@ def send_presaved_file(to_number: str, file_id: str):
             media_id = upload_public_url_to_meta_media(resolved_link, resolved_filename, catalog_content_type)
             if not media_id:
                 print("[FILE CATALOG] Catalog delivery stopped because Meta upload failed")
+                if raise_on_failure:
+                    raise FileDeliveryError(f"meta_media_upload_failed catalog_id={file_id}")
                 return False
             media_reference = {"id": media_id}
     caption = item.default_caption
@@ -369,6 +402,22 @@ def send_presaved_file(to_number: str, file_id: str):
         return True
     except requests.exceptions.RequestException as exc:
         raise ProviderError("meta", "send_catalog", getattr(getattr(exc, "response", None), "status_code", None), message="transport error") from exc
+
+
+def deliver_presaved_file(to_number: str, file_id: str) -> tuple[bool, str | None]:
+    """Deliver one file and retain safe technical context instead of abandoning the turn."""
+    try:
+        delivered = send_presaved_file(to_number, file_id, raise_on_failure=True)
+        return bool(delivered), None
+    except Exception as exc:
+        technical = sanitize_text(exc, (config.WA_TOKEN, config.SUPABASE_KEY))
+        import traceback
+        print(
+            f"[FILE DELIVERY ERROR] phone={to_number} file_id={file_id} "
+            f"error_type={type(exc).__name__} detail={technical}"
+        )
+        traceback.print_exc()
+        return False, f"{file_id}: {type(exc).__name__}: {technical}"
 
 
 def upload_chatwoot_attachment_to_meta(attachment_url: str, fallback_mime_type: str = "application/octet-stream", filename: str = "archivo") -> str:
@@ -464,12 +513,16 @@ def _create_handoff_ticket_if_needed(sender_phone: str, sender_name: str, new_st
 
     update_chatwoot_conversation_id(sender_phone, conv_id)
     logs = get_message_logs(sender_phone, limit=50)
-    context_str = "\n".join([f"{'👤' if m['role']=='user' else '🤖'}: {m['content']}" for m in logs])
+    role_icons = {"user": "👤", "model": "🤖", "asesor": "🧑‍💼", "system": "⚠️"}
+    context_str = "\n".join([
+        f"{role_icons.get(m['role'], '❔')}: {m['content']}" for m in logs
+    ])
     reason = new_state.get("handoff_reason", "Razón no especificada")
     save_message_log(sender_phone, "system", f"HANDOFF: Transferido a humano. Razón: {reason}")
     short_alert = f"🔔 {reason}"
     context_details = (
-        f"{build_handoff_summary(logs, state_check.get('customer_data'), state_check.get('order_summary'))}\n\n"
+        f"{build_handoff_summary(logs, state_check.get('customer_data'), state_check.get('order_summary'))}\n"
+        f"**Motivo de transferencia:** {reason}\n\n"
         f"**Últimos mensajes:**\n{context_str}"
     )
 
@@ -490,6 +543,126 @@ def _create_handoff_ticket_if_needed(sender_phone: str, sender_name: str, new_st
     else:
         chatwoot_api.send_message_to_chatwoot(conv_id, context_details, is_private=True)
         chatwoot_api.send_message_to_chatwoot(conv_id, short_alert, is_private=True)
+
+
+@app.post("/api/manual-handoff", dependencies=[Depends(admin_auth)])
+def manual_handoff(body: ManualHandoffRequest, client_name: str = Query(min_length=1)):
+    """Let an authenticated read-only operations app open a Chatwoot conversation."""
+    try:
+        validate_deployment_client(client_name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    state = get_or_create_customer_state(body.phone_number, body.customer_name)
+    if not state:
+        raise HTTPException(502, "No fue posible recuperar el estado del contacto")
+    if state.get("chatwoot_conversation_id"):
+        return {"ok": True, "status": "already_open", "conversation_id": state["chatwoot_conversation_id"]}
+    pause_bot_for_handoff(body.phone_number, body.reason)
+    state = get_or_create_customer_state(body.phone_number, body.customer_name)
+    _create_handoff_ticket_if_needed(
+        body.phone_number, body.customer_name, state, None, "Handoff manual desde dashboard", None, None,
+    )
+    final_state = get_or_create_customer_state(body.phone_number, body.customer_name)
+    conversation_id = final_state.get("chatwoot_conversation_id") if final_state else None
+    if not conversation_id:
+        raise HTTPException(502, "No fue posible crear la conversación en Chatwoot")
+    return {"ok": True, "status": "created", "conversation_id": conversation_id}
+
+
+@app.get("/api/catalog-delivery-recoveries", dependencies=[Depends(admin_auth)])
+def catalog_delivery_recoveries(client_name: str = Query(min_length=1), limit: int = Query(500, ge=1, le=5000)):
+    """List unresolved legacy delivery errors so Lovable can recover them deliberately."""
+    try:
+        validate_deployment_client(client_name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    newest_rows = (
+        supabase.table("message_logs")
+        .select("phone_number,role,content,created_at,id")
+        .order("created_at", desc=True)
+        .order("id", desc=True)
+        .limit(limit)
+        .execute()
+        .data
+        or []
+    )
+    candidates = [item.as_dict() for item in find_catalog_recoveries(list(reversed(newest_rows)))]
+    return {"client_name": client_name, "count": len(candidates), "recoveries": candidates}
+
+
+def recover_catalog_delivery(phone_number: str, catalog_id: str):
+    """RQ job: retry one still-eligible delivery or create a safe manual handoff."""
+    from bot import refresh_managed_catalogs
+
+    with phone_lock(phone_number):
+        rows = (
+            supabase.table("message_logs")
+            .select("phone_number,role,content,created_at,id")
+            .eq("phone_number", phone_number)
+            .order("created_at")
+            .order("id")
+            .limit(500)
+            .execute().data or []
+        )
+        candidate = next(
+            (item for item in find_catalog_recoveries(rows) if item.catalog_id == catalog_id),
+            None,
+        )
+        if not candidate:
+            return {"status": "already_resolved"}
+        if not candidate.within_service_window:
+            reason = f"Recuperar manualmente catálogo no entregado: {catalog_id}. Fuera de ventana automática."
+            pause_bot_for_handoff(phone_number, reason)
+            state = get_or_create_customer_state(phone_number, "Cliente")
+            _create_handoff_ticket_if_needed(phone_number, "Cliente", state, None, reason, None, None)
+            return {"status": "manual_handoff", "catalog_id": catalog_id}
+
+        refresh_managed_catalogs()
+        send_whatsapp_message(
+            phone_number,
+            "Parece que hubo un error y el catálogo no se envió. Te lo comparto por aquí.",
+        )
+        delivered, technical_error = deliver_presaved_file(phone_number, catalog_id)
+        if delivered:
+            save_message_log(phone_number, "system", f"Archivos enviados: {catalog_id}. Recuperación administrativa.")
+            return {"status": "resent", "catalog_id": catalog_id}
+        reason = f"Falló el reenvío administrativo de {catalog_id}. Un asesor debe enviarlo manualmente."
+        save_message_log(phone_number, "system", f"ERROR reenviando archivo: {technical_error or catalog_id}")
+        pause_bot_for_handoff(phone_number, reason)
+        try:
+            send_whatsapp_message(
+                phone_number,
+                "El adjunto volvió a fallar. Ya avisé al equipo para que te ayude personalmente.",
+            )
+        except Exception:
+            print("[CATALOG RECOVERY] No fue posible enviar el aviso final al cliente")
+        state = get_or_create_customer_state(phone_number, "Cliente")
+        _create_handoff_ticket_if_needed(phone_number, "Cliente", state, None, reason, None, None)
+        return {"status": "manual_handoff", "catalog_id": catalog_id}
+
+
+@app.post("/api/catalog-delivery-recoveries/resend", dependencies=[Depends(admin_auth)])
+def enqueue_catalog_delivery_recoveries(body: BulkCatalogRecoveryRequest, client_name: str = Query(min_length=1)):
+    """Queue explicitly confirmed recovery attempts without blocking the admin request."""
+    try:
+        validate_deployment_client(client_name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if not queue_enabled():
+        raise HTTPException(503, "La cola Redis es obligatoria para reenvíos por lote")
+    queued = []
+    for selection in body.recoveries:
+        job = enqueue(
+            recover_catalog_delivery,
+            selection.phone_number,
+            selection.catalog_id,
+            job_id=(
+                f"catalog-recovery-{selection.phone_number}-{selection.catalog_id}-"
+                f"{time.time_ns()}"
+            ),
+        )
+        queued.append({"phone_number": selection.phone_number, "catalog_id": selection.catalog_id, "job_id": job.id})
+    return {"ok": True, "queued": queued}
 
 
 def recover_gemini_outage_handoffs(since: str):
@@ -545,6 +718,26 @@ def process_whatsapp_message(sender_phone: str, sender_name: str, message_body: 
         import traceback
         print("\n[ERROR CRÍTICO] Falló process_whatsapp_message:")
         traceback.print_exc()
+        technical = f"{type(e).__name__}: {sanitize_text(e, (config.WA_TOKEN, config.SUPABASE_KEY, config.CHATWOOT_API_TOKEN))}"
+        try:
+            save_message_log(sender_phone, "system", f"ERROR NO MANEJADO: {technical}")
+            reason = "El bot encontró un error técnico y no pudo completar la solicitud. Requiere revisión humana."
+            pause_bot_for_handoff(sender_phone, reason)
+            state = get_or_create_customer_state(sender_phone, sender_name or "Cliente")
+            _create_handoff_ticket_if_needed(
+                sender_phone, sender_name or "Cliente", state, None,
+                message_body, mime_type, filename,
+            )
+            try:
+                send_whatsapp_message(
+                    sender_phone,
+                    "Perdón, tuve un problema técnico y no pude completar tu solicitud. Ya avisé al equipo para ayudarte.",
+                )
+            except Exception:
+                print("[ERROR RECOVERY] No fue posible enviar el aviso de transferencia al cliente")
+        except Exception:
+            print("[ERROR RECOVERY] También falló la creación del handoff de emergencia")
+            traceback.print_exc()
         mark_webhook_event_processed("whatsapp", event_id, status="failed", error=str(e))
 
 
@@ -565,7 +758,7 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
     state_record = get_or_create_customer_state(sender_phone, sender_name or "Cliente")
     if not state_record:
         print("[DEBUG] 3. ERROR: No se pudo obtener ni crear el state_record")
-        return
+        raise RuntimeError("customer_state_unavailable")
 
     if state_record["is_paused"]:
         print("[DEBUG] 4. Bot pausado, derivando mensaje al asesor humano en Chatwoot")
@@ -607,7 +800,18 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
         audio_bytes, downloaded_mime_type = chatwoot_api.download_meta_media(effective_media_id) if effective_media_id else (None, None)
         transcript = transcribe_audio_message(audio_bytes, downloaded_mime_type or mime_type or "audio/ogg")
         if not transcript:
-            send_whatsapp_message(sender_phone, "Perdón, no pude entender bien la nota de voz. ¿Me la puedes escribir por texto, por favor? 🧀")
+            reason = "No fue posible transcribir la nota de voz. Requiere revisión humana."
+            save_message_log(sender_phone, "system", "ERROR procesando audio: transcription_failed")
+            pause_bot_for_handoff(sender_phone, reason)
+            send_whatsapp_message(
+                sender_phone,
+                "Perdón, no pude procesar bien tu nota de voz. Ya avisé al equipo para que pueda ayudarte.",
+            )
+            state = get_or_create_customer_state(sender_phone, sender_name or "Cliente")
+            _create_handoff_ticket_if_needed(
+                sender_phone, sender_name or "Cliente", state, effective_media_id,
+                message_body, mime_type, filename, effective_media_type, audio_bytes, downloaded_mime_type,
+            )
             return
         print(f"[DEBUG] 5.1 Transcripción de audio: {transcript}")
         message_body = transcript
@@ -619,23 +823,52 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
     if ai_turn:
         primary_delivered = not bool(ai_turn.response)
         delivered_files = []
+        file_errors = []
         if ai_turn.send_files_before_response:
             for file_id in ai_turn.requested_files:
-                if send_presaved_file(sender_phone, file_id):
+                delivered, technical_error = deliver_presaved_file(sender_phone, file_id)
+                if delivered:
                     delivered_files.append(file_id)
+                elif technical_error:
+                    file_errors.append(technical_error)
         if ai_turn.response:
             send_whatsapp_message(sender_phone, ai_turn.response)
             save_message_log(sender_phone, "model", ai_turn.response)
             primary_delivered = True
         if not ai_turn.send_files_before_response:
             for file_id in ai_turn.requested_files:
-                if send_presaved_file(sender_phone, file_id):
+                delivered, technical_error = deliver_presaved_file(sender_phone, file_id)
+                if delivered:
                     delivered_files.append(file_id)
+                elif technical_error:
+                    file_errors.append(technical_error)
         if delivered_files:
             save_message_log(sender_phone, "system", f"Archivos enviados: {', '.join(delivered_files)}")
         failed_files = [file_id for file_id in ai_turn.requested_files if file_id not in delivered_files]
         if failed_files:
-            save_message_log(sender_phone, "system", f"ERROR enviando archivos: {', '.join(failed_files)}")
+            technical_summary = "; ".join(file_errors) or "fallo_no_clasificado"
+            save_message_log(
+                sender_phone,
+                "system",
+                f"ERROR enviando archivos: {', '.join(failed_files)}. Detalle técnico: {technical_summary}",
+            )
+            reason = (
+                "No se pudo entregar el catálogo solicitado. "
+                f"Archivos afectados: {', '.join(failed_files)}. Un asesor debe enviarlo manualmente."
+            )
+            pause_bot_for_handoff(sender_phone, reason)
+            try:
+                send_whatsapp_message(
+                    sender_phone,
+                    "Perdón, no pude adjuntar el catálogo. Ya avisé al equipo para que te lo envíe manualmente.",
+                )
+                save_message_log(
+                    sender_phone,
+                    "model",
+                    "Perdón, no pude adjuntar el catálogo. Ya avisé al equipo para que te lo envíe manualmente.",
+                )
+            except Exception as exc:
+                print(f"[FILE DELIVERY ERROR] Could not send customer fallback: {sanitize_text(exc, (config.WA_TOKEN,))}")
         new_state = get_or_create_customer_state(sender_phone)
         _create_handoff_ticket_if_needed(
             sender_phone, sender_name, new_state, effective_media_id, message_body,
