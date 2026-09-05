@@ -34,6 +34,7 @@ Supabase ni GitHub para agregar o reemplazar catálogos:
 3. Escribe una descripción operacional: qué contiene, ante qué solicitud debe enviarse
    y, si aplica, cuándo **no** debe enviarse. Por ejemplo: “Precios de mochis al detal;
    enviar cuando pregunten sabores o precios unitarios; no usar para pedidos de 40 o más”.
+   La descripción admite hasta 2.000 caracteres.
 4. Revisa el ID generado `catalogo_<slug>`. Es permanente: no se renombra y no debe
    reutilizarse para otro propósito.
 5. Adjunta PDF, JPG, PNG o WebP (hasta `DASHBOARD_MAX_CATALOG_MB`) y confirma. Lovable
@@ -93,3 +94,32 @@ tamaño, MIME y timeout sin registrar la API key. Un `413` indica límite; un `5
 Storage, transporte o activación de metadatos. Durante un upgrade progresivo, si aún faltan
 `content_type`/`size_bytes`, el backend registra el error y activa el archivo con las columnas
 legadas; aun así debe ejecutarse `supabase/upgrade_existing_brand.sql` para recuperar paridad.
+
+## Recuperación y handoff manual desde la microapp
+
+La microapp de conversaciones puede mostrar un botón **Abrir en Chatwoot** para los pocos
+contactos históricos que quedaron sin handoff. Debe llamar exclusivamente al proxy autenticado:
+
+`POST /api/manual-handoff` con JSON
+`{"phone_number":"573...","customer_name":"Cliente","reason":"Recuperar catálogo no entregado"}`.
+El proxy deriva `client_name`; el navegador no debe enviarlo ni elegir otra marca. La operación
+es idempotente: si ya existe conversación devuelve `already_open`; de lo contrario pausa el bot,
+crea la conversación y devuelve su `conversation_id`.
+
+Un fallo nuevo al entregar cualquier archivo ahora genera handoff inmediatamente, registra el
+detalle técnico en `message_logs`, informa al cliente en lenguaje sencillo y añade al resumen
+privado de Chatwoot el motivo explícito. Para contactos antiguos se recomienda handoff manual:
+un reenvío automático fuera de la ventana de atención de WhatsApp puede requerir una plantilla
+aprobada y además podría contactar a alguien que ya no espera respuesta. Una vez abierto el caso,
+el asesor puede reenviar el catálogo desde Chatwoot y cerrar la conversación al terminar.
+
+## Longitud de las descripciones y prompt efectivo
+
+Cada descripción admite entre 1 y 2.000 caracteres tanto en la API como en PostgreSQL. El
+campo es `text` y el upgrade solamente reemplaza su constraint: no recorta ni reescribe datos
+existentes. `catalog-prompt-preview` y el runtime insertan la descripción completa, sin
+substring, resumen ni truncado. En consecuencia, el tamaño de la sección crece con la suma de
+todos los catálogos. Con una descripción máxima, el system instruction más grande incluido en
+este repositorio permanece ampliamente por debajo de 100.000 caracteres; si una marca agrega
+muchos catálogos extensos, el operador debe revisar la previsualización y mantener descripciones
+operacionales concisas para no consumir contexto innecesario.

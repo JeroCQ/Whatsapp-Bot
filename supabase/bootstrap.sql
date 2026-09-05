@@ -98,7 +98,7 @@ CREATE TABLE IF NOT EXISTS public.catalog_assets (
   business_id text NOT NULL,
   catalog_id text NOT NULL CHECK (catalog_id ~ '^catalogo_[a-z0-9_]{1,52}$'),
   public_name text NOT NULL CHECK (length(trim(public_name)) BETWEEN 1 AND 120),
-  description text NOT NULL CHECK (length(trim(description)) BETWEEN 1 AND 500),
+  description text NOT NULL CHECK (length(trim(description)) BETWEEN 1 AND 2000),
   media_type text NOT NULL DEFAULT 'document' CHECK (media_type IN ('document', 'image')),
   filename text,
   content_type text CHECK (content_type IN ('application/pdf', 'image/jpeg', 'image/png', 'image/webp')),

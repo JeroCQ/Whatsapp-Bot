@@ -25,6 +25,7 @@ def test_proxy_supports_multi_catalog_contract_and_isolated_backends():
     assert 'route === "catalogs"' in PROXY
     assert "catalogs\\/catalogo_" in PROXY
     assert '"catalog-prompt-preview"' in PROXY
+    assert 'route === "manual-handoff"' in PROXY
     assert 'return jsonResponse(424' in PROXY
 
 

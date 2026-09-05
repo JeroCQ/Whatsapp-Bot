@@ -38,6 +38,7 @@ def test_new_project_bootstrap_includes_all_incremental_tanaka_features():
         "file_size_limit = greatest",
         "content_type text",
         "size_bytes bigint",
+        "length(trim(description)) between 1 and 2000",
         "create table if not exists public.dashboard_admins",
         "enable row level security",
         "revoke all on table public.dashboard_admins from anon, authenticated",
@@ -77,6 +78,8 @@ def test_generic_existing_brand_upgrade_has_current_runtime_parity():
         "file_size_limit = greatest",
         "add column if not exists content_type",
         "add column if not exists size_bytes",
+        "drop constraint if exists catalog_assets_description_check",
+        "length(trim(description)) between 1 and 2000",
     ):
         assert required in sql
 

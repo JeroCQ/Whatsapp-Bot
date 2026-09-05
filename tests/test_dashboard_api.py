@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 import pytest
 
@@ -399,6 +400,49 @@ def test_catalog_prompt_preview_matches_runtime_rules_and_hides_empty_catalog(mo
     assert "ARCHIVOS PREGUARDADOS DISPONIBLES" in response.json()["prompt"]
     assert "Enviar para ventas al detal; no enviar al por mayor" in response.json()["prompt"]
     assert "catalogo_vacio" not in response.json()["prompt"]
+
+
+def test_catalog_description_accepts_2000_characters_without_prompt_truncation(monkeypatch):
+    description = "á" * 2000
+
+    class Query:
+        data = [{
+            "catalog_id": "catalogo_extenso",
+            "public_name": "Catálogo Extenso",
+            "description": description,
+            "media_type": "document",
+            "filename": "client_1/catalogo_extenso.pdf",
+        }]
+        def select(self, *_args): return self
+        def eq(self, *_args): return self
+        def order(self, *_args): return self
+        def execute(self): return self
+
+    monkeypatch.setattr(api, "supabase", type("Supabase", (), {"table": staticmethod(lambda _name: Query())})())
+    monkeypatch.setattr(api.config, "PRESAVED_FILES_JSON", "[]")
+    client, headers = make_client()
+
+    preview = client.get("/api/catalog-prompt-preview?client_name=client_1", headers=headers)
+
+    assert preview.status_code == 200
+    assert description in preview.json()["prompt"]
+    assert f": {description}; texto predeterminado:" in preview.json()["prompt"]
+    tanaka_instruction = Path("src/clients/tanaka/system_instruction.txt").read_text(encoding="utf-8")
+    assert len(tanaka_instruction) + len(preview.json()["prompt"]) < 100_000
+    assert api.CatalogMetadata(
+        catalog_id="catalogo_extenso",
+        public_name="Catálogo Extenso",
+        description=description,
+    ).description == description
+
+
+def test_catalog_description_rejects_more_than_2000_characters():
+    with pytest.raises(ValueError, match="at most 2000"):
+        api.CatalogMetadata(
+            catalog_id="catalogo_extenso",
+            public_name="Catálogo Extenso",
+            description="x" * 2001,
+        )
 
 
 def test_sha_conflict_is_sanitized(monkeypatch):
