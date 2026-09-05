@@ -2,7 +2,7 @@
 
 import json
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 
 SUPPORTED_MEDIA_TYPES = {"audio", "document", "image", "video"}
@@ -85,6 +85,36 @@ def catalog_prompt(catalog: dict[str, PresavedFile]) -> str:
         "No afirmes que un archivo fue enviado si su ID no aparece arriba.",
     ])
     return "\n".join(lines)
+
+
+def merge_managed_catalogs(
+    catalog: dict[str, PresavedFile],
+    rows: list[dict],
+    public_url: Callable[[str], str],
+) -> dict[str, PresavedFile]:
+    """Apply dashboard-managed rows using the same rules in runtime and preview APIs."""
+    if not rows:
+        return catalog
+    managed_ids = {row["catalog_id"] for row in rows}
+    for file_id in list(catalog):
+        if file_id.startswith("catalogo_") and file_id not in managed_ids:
+            del catalog[file_id]
+    for row in rows:
+        # A metadata-only catalog remains editable in Lovable but must not be
+        # offered to Gemini until there is a file the sender can deliver.
+        if not row.get("filename"):
+            catalog.pop(row["catalog_id"], None)
+            continue
+        file_id = row["catalog_id"]
+        catalog[file_id] = PresavedFile(
+            id=file_id,
+            description=row.get("description") or f"Catálogo público {row['public_name']}",
+            media_type=row.get("media_type") or "document",
+            link=public_url(file_id),
+            filename=row.get("public_name") or row.get("filename"),
+            default_caption=row.get("public_name"),
+        )
+    return catalog
 
 
 def extend_system_instruction(base_instruction: str, catalog: dict[str, PresavedFile]) -> str:

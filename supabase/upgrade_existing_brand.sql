@@ -82,10 +82,26 @@ CREATE TABLE IF NOT EXISTS public.catalog_assets (
   description text NOT NULL CHECK (length(trim(description)) BETWEEN 1 AND 500),
   media_type text NOT NULL DEFAULT 'document' CHECK (media_type IN ('document', 'image')),
   filename text,
+  content_type text CHECK (content_type IN ('application/pdf', 'image/jpeg', 'image/png', 'image/webp')),
+  size_bytes bigint CHECK (size_bytes IS NULL OR size_bytes >= 0),
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (business_id, catalog_id)
 );
+ALTER TABLE public.catalog_assets
+  ADD COLUMN IF NOT EXISTS content_type text,
+  ADD COLUMN IF NOT EXISTS size_bytes bigint;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'catalog_assets_content_type_check') THEN
+    ALTER TABLE public.catalog_assets ADD CONSTRAINT catalog_assets_content_type_check
+      CHECK (content_type IN ('application/pdf', 'image/jpeg', 'image/png', 'image/webp'));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'catalog_assets_size_bytes_check') THEN
+    ALTER TABLE public.catalog_assets ADD CONSTRAINT catalog_assets_size_bytes_check
+      CHECK (size_bytes IS NULL OR size_bytes >= 0);
+  END IF;
+END $$;
 ALTER TABLE public.catalog_assets ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.catalog_assets FROM anon, authenticated;
 
