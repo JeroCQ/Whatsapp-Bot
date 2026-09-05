@@ -23,6 +23,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from config import config
 from http_client import get, put
 from database import supabase
+from file_catalog import catalog_prompt, load_file_catalog, merge_managed_catalogs
 
 
 CLIENT_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
@@ -832,7 +833,7 @@ def validated_catalog_format(file: UploadFile) -> tuple[str, str]:
     expected_content_type = CATALOG_UPLOAD_FORMATS.get(extension)
     supplied_content_type = (file.content_type or "").lower().split(";", 1)[0]
     if not expected_content_type or supplied_content_type not in {expected_content_type, "application/octet-stream"}:
-        raise HTTPException(400, CATALOG_FORMAT_ERROR)
+        raise HTTPException(415, CATALOG_FORMAT_ERROR)
 
     header = file.file.read(12)
     file.file.seek(0)
@@ -843,7 +844,7 @@ def validated_catalog_format(file: UploadFile) -> tuple[str, str]:
         "image/webp": header.startswith(b"RIFF") and header[8:12] == b"WEBP",
     }[expected_content_type]
     if not valid_header:
-        raise HTTPException(400, f"El archivo está vacío o su contenido no coincide. {CATALOG_FORMAT_ERROR}")
+        raise HTTPException(415, f"El archivo está vacío o su contenido no coincide. {CATALOG_FORMAT_ERROR}")
     return extension.lstrip("."), expected_content_type
 
 
@@ -877,21 +878,96 @@ def upload_catalog(file: Annotated[UploadFile, File()], client_name: str | None 
     return {"ok": True, **result}
 
 
-@router.get("/catalogs")
-def list_catalogs(client_name: str = Query(min_length=1)):
-    validate_deployment_client(client_name)
+def catalog_rows(client_name: str) -> list[dict]:
+    """Read catalog metadata only from this deployment's isolated business."""
     return (
         supabase.table("catalog_assets").select("*")
         .eq("business_id", client_name).order("created_at").execute().data or []
     )
 
 
+def enrich_catalog_row(row: dict, client_name: str, storage: CatalogStorageAdapter) -> dict:
+    """Return Lovable card fields, recovering legacy null metadata from Storage."""
+    result = dict(row)
+    filename = result.get("filename")
+    if not filename:
+        result.update(
+            public_url=None,
+            content_type=None,
+            size_bytes=None,
+            has_file=False,
+            file_status="pending_upload",
+        )
+        return result
+    result.update(has_file=True, file_status="ready")
+    try:
+        stored = storage.metadata(client_name, result["catalog_id"])
+    except HTTPException as exc:
+        logger.warning(
+            "Could not refresh catalog card metadata: client=%s catalog_id=%s status=%s",
+            client_name, result["catalog_id"], exc.status_code,
+        )
+        extension = PurePosixPath(filename).suffix.lstrip(".").lower()
+        result["public_url"] = config.catalog_public_url(client_name, extension, result["catalog_id"])
+        return result
+    result.update({
+        "public_url": stored.get("publicUrl"),
+        "updated_at": stored.get("updatedAt") or result.get("updated_at"),
+        "size_bytes": stored.get("sizeBytes"),
+        "content_type": stored.get("contentType"),
+        "filename": stored.get("filename") or filename,
+    })
+    result["media_type"] = "image" if str(result.get("content_type", "")).startswith("image/") else "document"
+    return result
+
+
+@router.get("/catalogs")
+def list_catalogs(
+    client_name: str = Query(min_length=1),
+    storage: CatalogStorageAdapter = Depends(get_catalog_storage),
+):
+    try:
+        validate_deployment_client(client_name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return [enrich_catalog_row(row, client_name, storage) for row in catalog_rows(client_name)]
+
+
+@router.get("/catalog-prompt-preview")
+def catalog_prompt_preview(client_name: str = Query(min_length=1)):
+    """Expose exactly the dynamic file section the bot composes for Gemini."""
+    try:
+        validate_deployment_client(client_name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    rows = catalog_rows(client_name)
+    effective = load_file_catalog(config.PRESAVED_FILES_JSON, "PRESAVED_FILES_JSON")
+    merge_managed_catalogs(
+        effective,
+        rows,
+        lambda file_id: config.catalog_public_url(client_name, catalog_id=file_id),
+    )
+    return {
+        "client_name": client_name,
+        "prompt": catalog_prompt(effective),
+        "catalog_ids": list(effective),
+    }
+
+
 @router.post("/catalogs")
 def create_catalog(metadata: CatalogMetadata, client_name: str = Query(min_length=1)):
-    validate_deployment_client(client_name)
+    try:
+        validate_deployment_client(client_name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     row = {"business_id": client_name, **metadata.model_dump()}
     try:
-        return supabase.table("catalog_assets").insert(row).execute().data[0]
+        created = supabase.table("catalog_assets").insert(row).execute().data[0]
+        logger.info(
+            "Catalog metadata created; file upload still required: client=%s catalog_id=%s",
+            client_name, metadata.catalog_id,
+        )
+        return {**created, "has_file": False, "file_status": "pending_upload"}
     except Exception as exc:
         raise HTTPException(409, "El nombre de backend ya existe para este negocio") from exc
 
@@ -995,7 +1071,17 @@ def replace_catalog_file(
     file.file.seek(0)
     result = storage.upload(client_name, file.file, size_bytes, extension, content_type, catalog_id)
     media_type = "image" if content_type.startswith("image/") else "document"
-    supabase.table("catalog_assets").update({"media_type": media_type, "filename": result["filename"], "updated_at": datetime.now(timezone.utc).isoformat()}).eq("business_id", client_name).eq("catalog_id", catalog_id).execute()
+    supabase.table("catalog_assets").update({
+        "media_type": media_type,
+        "content_type": content_type,
+        "size_bytes": size_bytes,
+        "filename": result["filename"],
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }).eq("business_id", client_name).eq("catalog_id", catalog_id).execute()
+    logger.info(
+        "Catalog file activated: client=%s catalog_id=%s size_bytes=%s content_type=%s",
+        client_name, catalog_id, size_bytes, content_type,
+    )
     return {"ok": True, **result}
 
 
