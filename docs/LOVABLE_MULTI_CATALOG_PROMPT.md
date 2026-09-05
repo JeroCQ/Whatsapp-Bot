@@ -10,6 +10,8 @@ Copia y pega este prompt completo en el proyecto Lovable del dashboard:
 >
 > Usa exclusivamente las rutas server-side autenticadas existentes: `GET /api/catalogs?client_name=...`, `POST /api/catalogs?client_name=...` con JSON `{catalog_id, public_name, description}`, `PATCH /api/catalogs/{catalog_id}?client_name=...` con el mismo JSON, `POST /api/catalogs/{catalog_id}/file?client_name=...` multipart campo `file`, `GET /api/catalogs/{catalog_id}/file` para abrir el archivo activo y `DELETE /api/catalogs/{catalog_id}?client_name=...`. No llames Railway ni Supabase desde el navegador; conserva el proxy Lovable que agrega `X-Dashboard-API-Key` del lado servidor. No almacenes service-role ni dashboard key en variables `VITE_*`/cliente. El GET del archivo queda vinculado al `BUSINESS_ID` del deployment y no debe confiar en un `client_name` enviado por el navegador.
 >
+> Añade una vista de solo lectura **Así ve la IA los archivos disponibles**. Cárgala desde `GET /api/catalog-prompt-preview?client_name=...` y muestra literalmente el campo `prompt`, con una acción para actualizar. No reconstruyas el texto en el frontend: esta ruta comparte las reglas del runtime y excluye automáticamente las fichas que todavía no tienen archivo.
+>
 > La eliminación debe advertir: “Elimina el archivo y deja inválida cualquier referencia a este ID en el system instruction”. No permitas eliminar mientras se guarda o reemplaza.
 >
 > Añade validación y pruebas de UI para perfiles con un catálogo legado, tres catálogos y ninguno; aislamiento de dos `client_name`; creación, edición pública, reemplazo, eliminación, error 409 por ID duplicado y archivos inválidos/muy grandes. No cambies el editor de system instruction, pero muestra junto al ID un botón para copiarlo y el texto “Usa este ID exacto en requested_files”.
@@ -47,6 +49,12 @@ esa descripción junto con la conversación y solo puede devolver IDs existentes
 `requested_files`. Por eso editar la descripción en Lovable cambia la selección desde el
 siguiente mensaje sin editar GitHub ni volver a desplegar. El editor de system instruction
 sigue reservado para reglas generales o relaciones más complejas entre catálogos.
+
+Lovable puede presentar el texto efectivo sin intentar recrearlo: `GET
+/api/catalog-prompt-preview?client_name=<marca>` devuelve `client_name`, `prompt` y
+`catalog_ids`. La previsualización y el bot comparten el mismo compositor; los catálogos
+creados sin archivo siguen apareciendo como tarjetas administrativas, pero no aparecen en
+el prompt ni pueden ser seleccionados por Gemini hasta completar la carga.
 
 ## Puesta en marcha
 

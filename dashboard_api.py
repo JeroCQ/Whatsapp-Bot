@@ -23,6 +23,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from config import config
 from http_client import get, put
 from database import supabase
+from file_catalog import catalog_prompt, load_file_catalog, merge_managed_catalogs
 
 
 CLIENT_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
@@ -877,13 +878,9 @@ def upload_catalog(file: Annotated[UploadFile, File()], client_name: str | None 
     return {"ok": True, **result}
 
 
-@router.get("/catalogs")
-def list_catalogs(client_name: str = Query(min_length=1)):
-    try:
-        validate_deployment_client(client_name)
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
-    rows = (
+def catalog_rows(client_name: str) -> list[dict]:
+    """Read catalog metadata only from this deployment's isolated business."""
+    return (
         supabase.table("catalog_assets").select("*")
         .eq("business_id", client_name).order("created_at").execute().data or []
     )
@@ -903,6 +900,67 @@ def list_catalogs(client_name: str = Query(min_length=1)):
             "image" if content_type and content_type.startswith("image/") else "document"
         )
     return rows
+
+
+def enrich_catalog_row(row: dict, client_name: str, storage: CatalogStorageAdapter) -> dict:
+    """Return Lovable card fields, recovering legacy null metadata from Storage."""
+    result = dict(row)
+    filename = result.get("filename")
+    if not filename:
+        result.update(public_url=None, content_type=None, size_bytes=None)
+        return result
+    try:
+        stored = storage.metadata(client_name, result["catalog_id"])
+    except HTTPException as exc:
+        logger.warning(
+            "Could not refresh catalog card metadata: client=%s catalog_id=%s status=%s",
+            client_name, result["catalog_id"], exc.status_code,
+        )
+        extension = PurePosixPath(filename).suffix.lstrip(".").lower()
+        result["public_url"] = config.catalog_public_url(client_name, extension, result["catalog_id"])
+        return result
+    result.update({
+        "public_url": stored.get("publicUrl"),
+        "updated_at": stored.get("updatedAt") or result.get("updated_at"),
+        "size_bytes": stored.get("sizeBytes"),
+        "content_type": stored.get("contentType"),
+        "filename": stored.get("filename") or filename,
+    })
+    result["media_type"] = "image" if str(result.get("content_type", "")).startswith("image/") else "document"
+    return result
+
+
+@router.get("/catalogs")
+def list_catalogs(
+    client_name: str = Query(min_length=1),
+    storage: CatalogStorageAdapter = Depends(get_catalog_storage),
+):
+    try:
+        validate_deployment_client(client_name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return [enrich_catalog_row(row, client_name, storage) for row in catalog_rows(client_name)]
+
+
+@router.get("/catalog-prompt-preview")
+def catalog_prompt_preview(client_name: str = Query(min_length=1)):
+    """Expose exactly the dynamic file section the bot composes for Gemini."""
+    try:
+        validate_deployment_client(client_name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    rows = catalog_rows(client_name)
+    effective = load_file_catalog(config.PRESAVED_FILES_JSON, "PRESAVED_FILES_JSON")
+    merge_managed_catalogs(
+        effective,
+        rows,
+        lambda file_id: config.catalog_public_url(client_name, catalog_id=file_id),
+    )
+    return {
+        "client_name": client_name,
+        "prompt": catalog_prompt(effective),
+        "catalog_ids": list(effective),
+    }
 
 
 @router.post("/catalogs")

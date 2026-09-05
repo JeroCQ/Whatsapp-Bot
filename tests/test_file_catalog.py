@@ -1,6 +1,21 @@
 import unittest
 
-from file_catalog import catalog_prompt, extend_system_instruction, load_file_catalog
+from file_catalog import catalog_prompt, extend_system_instruction, load_file_catalog, merge_managed_catalogs
+
+
+def test_managed_catalog_without_file_is_not_exposed_to_ai():
+    catalog = load_file_catalog(
+        '[{"id":"catalogo_vacio","description":"old","type":"document"}]'
+    )
+    rows = [{
+        "catalog_id": "catalogo_vacio",
+        "public_name": "Vacío",
+        "description": "No usar todavía",
+        "media_type": "document",
+        "filename": None,
+    }]
+
+    assert merge_managed_catalogs(catalog, rows, lambda file_id: f"https://files.test/{file_id}") == {}
 
 
 class FileCatalogTests(unittest.TestCase):
