@@ -88,9 +88,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_conversation_states_active_chatwoot_convers
   ON public.conversation_states(chatwoot_conversation_id)
   WHERE chatwoot_conversation_id IS NOT NULL;
 
-INSERT INTO storage.buckets (id, name, public)
-VALUES ('catalogos', 'catalogos', true)
-ON CONFLICT (id) DO UPDATE SET public = true;
+INSERT INTO storage.buckets AS catalog_bucket (id, name, public, file_size_limit)
+VALUES ('catalogos', 'catalogos', true, 209715200)
+ON CONFLICT (id) DO UPDATE SET
+  public = true,
+  file_size_limit = GREATEST(COALESCE(catalog_bucket.file_size_limit, 0), 209715200);
 
 CREATE TABLE IF NOT EXISTS public.catalog_assets (
   business_id text NOT NULL,
@@ -99,6 +101,8 @@ CREATE TABLE IF NOT EXISTS public.catalog_assets (
   description text NOT NULL CHECK (length(trim(description)) BETWEEN 1 AND 500),
   media_type text NOT NULL DEFAULT 'document' CHECK (media_type IN ('document', 'image')),
   filename text,
+  content_type text CHECK (content_type IN ('application/pdf', 'image/jpeg', 'image/png', 'image/webp')),
+  size_bytes bigint CHECK (size_bytes IS NULL OR size_bytes >= 0),
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (business_id, catalog_id)

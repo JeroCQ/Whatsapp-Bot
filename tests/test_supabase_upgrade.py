@@ -34,7 +34,10 @@ def test_new_project_bootstrap_includes_all_incremental_tanaka_features():
         "add column if not exists order_summary",
         "uq_conversation_states_active_chatwoot_conversation_id",
         "idx_message_logs_phone_created_at",
-        "values ('catalogos', 'catalogos', true)",
+        "values ('catalogos', 'catalogos', true, 209715200)",
+        "file_size_limit = greatest",
+        "content_type text",
+        "size_bytes bigint",
         "create table if not exists public.dashboard_admins",
         "enable row level security",
         "revoke all on table public.dashboard_admins from anon, authenticated",
@@ -70,7 +73,10 @@ def test_generic_existing_brand_upgrade_has_current_runtime_parity():
         "uq_conversation_states_active_chatwoot_conversation_id",
         "create table if not exists public.dashboard_admins",
         "enable row level security",
-        "values ('catalogos', 'catalogos', true)",
+        "values ('catalogos', 'catalogos', true, 209715200)",
+        "file_size_limit = greatest",
+        "add column if not exists content_type",
+        "add column if not exists size_bytes",
     ):
         assert required in sql
 
