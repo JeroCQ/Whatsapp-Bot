@@ -71,21 +71,44 @@ CREATE TABLE IF NOT EXISTS public.dashboard_admins (
 ALTER TABLE public.dashboard_admins ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.dashboard_admins FROM anon, authenticated;
 
-INSERT INTO storage.buckets (id, name, public)
-VALUES ('catalogos', 'catalogos', true)
-ON CONFLICT (id) DO UPDATE SET public = true;
+INSERT INTO storage.buckets AS catalog_bucket (id, name, public, file_size_limit)
+VALUES ('catalogos', 'catalogos', true, 209715200)
+ON CONFLICT (id) DO UPDATE SET
+  public = true,
+  file_size_limit = GREATEST(COALESCE(catalog_bucket.file_size_limit, 0), 209715200);
 
 CREATE TABLE IF NOT EXISTS public.catalog_assets (
   business_id text NOT NULL,
   catalog_id text NOT NULL CHECK (catalog_id ~ '^catalogo_[a-z0-9_]{1,52}$'),
   public_name text NOT NULL CHECK (length(trim(public_name)) BETWEEN 1 AND 120),
-  description text NOT NULL CHECK (length(trim(description)) BETWEEN 1 AND 500),
+  description text NOT NULL CHECK (length(trim(description)) BETWEEN 1 AND 2000),
   media_type text NOT NULL DEFAULT 'document' CHECK (media_type IN ('document', 'image')),
   filename text,
+  content_type text CHECK (content_type IN ('application/pdf', 'image/jpeg', 'image/png', 'image/webp')),
+  size_bytes bigint CHECK (size_bytes IS NULL OR size_bytes >= 0),
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (business_id, catalog_id)
 );
+ALTER TABLE public.catalog_assets
+  ADD COLUMN IF NOT EXISTS content_type text,
+  ADD COLUMN IF NOT EXISTS size_bytes bigint;
+ALTER TABLE public.catalog_assets
+  DROP CONSTRAINT IF EXISTS catalog_assets_description_check;
+ALTER TABLE public.catalog_assets
+  ADD CONSTRAINT catalog_assets_description_check
+  CHECK (length(trim(description)) BETWEEN 1 AND 2000);
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'catalog_assets_content_type_check') THEN
+    ALTER TABLE public.catalog_assets ADD CONSTRAINT catalog_assets_content_type_check
+      CHECK (content_type IN ('application/pdf', 'image/jpeg', 'image/png', 'image/webp'));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'catalog_assets_size_bytes_check') THEN
+    ALTER TABLE public.catalog_assets ADD CONSTRAINT catalog_assets_size_bytes_check
+      CHECK (size_bytes IS NULL OR size_bytes >= 0);
+  END IF;
+END $$;
 ALTER TABLE public.catalog_assets ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.catalog_assets FROM anon, authenticated;
 

@@ -12,7 +12,14 @@ from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
 from config import config
-from file_catalog import PresavedFile, extend_system_instruction, load_file_catalog
+from file_catalog import (
+    PresavedFile,
+    extend_system_instruction,
+    is_explicit_file_resend_request,
+    last_delivered_file,
+    load_file_catalog,
+    merge_managed_catalogs,
+)
 from conversation_summary import compact_order_summary, supplied_customer_data
 from gemini_errors import is_depleted_prepaid_credits
 from webhook_utils import is_simple_greeting
@@ -56,24 +63,20 @@ FILE_CATALOG = load_file_catalog(config.PRESAVED_FILES_JSON, "PRESAVED_FILES_JSO
 def refresh_managed_catalogs() -> dict[str, PresavedFile]:
     """Merge Lovable-managed metadata in place so senders see additions immediately."""
     rows = get_catalog_assets()
+    refreshed = load_file_catalog(config.PRESAVED_FILES_JSON, "PRESAVED_FILES_JSON")
     if not rows:
-        if "catalogo_pdf" in FILE_CATALOG:
-            FILE_CATALOG["catalogo_pdf"] = replace(FILE_CATALOG["catalogo_pdf"], link=config.catalog_public_url())
+        if "catalogo_pdf" in refreshed:
+            refreshed["catalogo_pdf"] = replace(refreshed["catalogo_pdf"], link=config.catalog_public_url())
+        FILE_CATALOG.clear()
+        FILE_CATALOG.update(refreshed)
         return FILE_CATALOG
-    managed_ids = {row["catalog_id"] for row in rows}
-    for file_id in list(FILE_CATALOG):
-        if file_id.startswith("catalogo_") and file_id not in managed_ids:
-            del FILE_CATALOG[file_id]
-    for row in rows:
-        file_id = row["catalog_id"]
-        FILE_CATALOG[file_id] = PresavedFile(
-            id=file_id,
-            description=row.get("description") or f"Catálogo público {row['public_name']}",
-            media_type=row.get("media_type") or "document",
-            link=config.catalog_public_url(catalog_id=file_id),
-            filename=row.get("public_name") or row.get("filename"),
-            default_caption=row.get("public_name"),
-        )
+    merge_managed_catalogs(
+        refreshed,
+        rows,
+        lambda file_id: config.catalog_public_url(catalog_id=file_id),
+    )
+    FILE_CATALOG.clear()
+    FILE_CATALOG.update(refreshed)
     return FILE_CATALOG
 
 
@@ -139,6 +142,7 @@ def serialize_untrusted_messages(messages) -> str:
 
 def serialize_current_message(text: str) -> str:
     return json.dumps({"text": text}, ensure_ascii=False).replace("<", "\\u003c").replace(">", "\\u003e")
+
 
 def process_message_logic(phone: str, text: str, is_image: bool = False) -> BotTurn:
     """
@@ -229,14 +233,30 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> BotT
             trigger_handoff = False
             reason = ""
 
-        if trigger_handoff:
-            print(f"[IA HANDOFF TRIGGERED] Razón: {reason}")
-            pause_bot_for_handoff(phone, reason)
-
         requested_files = list(dict.fromkeys(
             file_id for file_id in ai_data.get("requested_files", []) if file_id in FILE_CATALOG
         ))
-        requested_files = [file_id for file_id in requested_files if file_id not in delivered_catalogs]
+        resend_requested = is_explicit_file_resend_request(text)
+        if resend_requested and not requested_files:
+            previous_file = last_delivered_file(history, set(FILE_CATALOG))
+            if previous_file:
+                requested_files = [previous_file]
+            elif len(FILE_CATALOG) == 1:
+                requested_files = [next(iter(FILE_CATALOG))]
+        if resend_requested and requested_files and trigger_handoff and not is_image:
+            print("[IA HANDOFF SUPPRESSED] Reenvío de archivo disponible se resuelve automáticamente")
+            trigger_handoff = False
+            reason = ""
+        if not resend_requested:
+            requested_files = [file_id for file_id in requested_files if file_id not in delivered_catalogs]
+        print(
+            "[FILE CATALOG] Decision "
+            f"available={list(FILE_CATALOG)} requested={requested_files} resend={resend_requested}"
+        )
+
+        if trigger_handoff:
+            print(f"[IA HANDOFF TRIGGERED] Razón: {reason}")
+            pause_bot_for_handoff(phone, reason)
         follow_up_message = str(ai_data.get("follow_up_message") or "").strip()
         try:
             follow_up_delay_minutes = max(1, min(int(ai_data.get("follow_up_delay_minutes", 120)), 10080))
