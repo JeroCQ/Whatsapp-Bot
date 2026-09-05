@@ -1230,6 +1230,74 @@ def catalog_prompt_preview(client_name: str = Query(min_length=1)):
     }
 
 
+def enrich_catalog_row(row: dict, client_name: str, storage: CatalogStorageAdapter) -> dict:
+    """Return Lovable card fields, recovering legacy null metadata from Storage."""
+    result = dict(row)
+    filename = result.get("filename")
+    if not filename:
+        result.update(
+            public_url=None,
+            content_type=None,
+            size_bytes=None,
+            has_file=False,
+            file_status="pending_upload",
+        )
+        return result
+    result.update(has_file=True, file_status="ready")
+    try:
+        stored = storage.metadata(client_name, result["catalog_id"])
+    except HTTPException as exc:
+        logger.warning(
+            "Could not refresh catalog card metadata: client=%s catalog_id=%s status=%s",
+            client_name, result["catalog_id"], exc.status_code,
+        )
+        extension = PurePosixPath(filename).suffix.lstrip(".").lower()
+        result["public_url"] = config.catalog_public_url(client_name, extension, result["catalog_id"])
+        return result
+    result.update({
+        "public_url": stored.get("publicUrl"),
+        "updated_at": stored.get("updatedAt") or result.get("updated_at"),
+        "size_bytes": stored.get("sizeBytes"),
+        "content_type": stored.get("contentType"),
+        "filename": stored.get("filename") or filename,
+    })
+    result["media_type"] = "image" if str(result.get("content_type", "")).startswith("image/") else "document"
+    return result
+
+
+@router.get("/catalogs")
+def list_catalogs(
+    client_name: str = Query(min_length=1),
+    storage: CatalogStorageAdapter = Depends(get_catalog_storage),
+):
+    try:
+        validate_deployment_client(client_name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return [enrich_catalog_row(row, client_name, storage) for row in catalog_rows(client_name)]
+
+
+@router.get("/catalog-prompt-preview")
+def catalog_prompt_preview(client_name: str = Query(min_length=1)):
+    """Expose exactly the dynamic file section the bot composes for Gemini."""
+    try:
+        validate_deployment_client(client_name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    rows = catalog_rows(client_name)
+    effective = load_file_catalog(config.PRESAVED_FILES_JSON, "PRESAVED_FILES_JSON")
+    merge_managed_catalogs(
+        effective,
+        rows,
+        lambda file_id: config.catalog_public_url(client_name, catalog_id=file_id),
+    )
+    return {
+        "client_name": client_name,
+        "prompt": catalog_prompt(effective),
+        "catalog_ids": list(effective),
+    }
+
+
 @router.post("/catalogs")
 def create_catalog(metadata: CatalogMetadata, client_name: str = Query(min_length=1)):
     try:

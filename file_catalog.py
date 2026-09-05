@@ -101,14 +101,17 @@ def catalog_prompt(catalog: dict[str, PresavedFile]) -> str:
         "ARCHIVOS PREGUARDADOS DISPONIBLES:",
         "Solicita archivos solo por su ID exacto en requested_files. Nunca inventes un ID.",
         "Decide cuándo enviarlos usando estas descripciones y las reglas del prompt:",
+        "Si un archivo específico responde la petición, priorízalo sobre un catálogo general.",
+        "No copies en el chat listas extensas que ya están en un archivo: usa una introducción de máximo dos líneas y solicita el archivo.",
+        "Cuando la respuesta depende principalmente del archivo, usa send_files_before_response=true para entregar primero el adjunto.",
+        "La introducción breve puede conservar un único siguiente paso comercial si ya existe una compra activa; no conviertas una consulta informativa aislada en presión de venta.",
     ]
     for item in catalog.values():
         extras = f"; texto predeterminado: {item.default_caption}" if item.default_caption else ""
         lines.append(f"- ID {item.id!r} ({item.media_type}): {item.description}{extras}")
     lines.extend([
         "Incluye cada ID como máximo una vez.",
-        "send_files_before_response indica si los archivos deben llegar antes del texto; "
-        "normalmente usa false para introducirlos primero con el mensaje.",
+        "send_files_before_response indica si los archivos deben llegar antes del texto.",
         "No afirmes que un archivo fue enviado si su ID no aparece arriba.",
     ])
     return "\n".join(lines)

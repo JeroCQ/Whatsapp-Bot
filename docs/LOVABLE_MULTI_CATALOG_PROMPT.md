@@ -113,6 +113,21 @@ un reenvío automático fuera de la ventana de atención de WhatsApp puede reque
 aprobada y además podría contactar a alguien que ya no espera respuesta. Una vez abierto el caso,
 el asesor puede reenviar el catálogo desde Chatwoot y cerrar la conversación al terminar.
 
+Para dimensionar la recuperación, la microapp puede consultar
+`GET /api/catalog-delivery-recoveries`. Devuelve únicamente errores de catálogo sin una entrega
+exitosa o handoff posterior y marca `within_service_window`. No debe usar ese indicador como
+permiso irrevocable: la ventana se vuelve a evaluar al enviar. Para muchos contactos, presenta
+selección por lotes y confirmación; dentro de la ventana puede ofrecer **Reintentar catálogo** y
+fuera de ella **Abrir en Chatwoot** o una plantilla de WhatsApp previamente aprobada. Nunca envíes
+mensajes libres masivos fuera de la ventana ni marques el error como resuelto antes de la
+confirmación real de Meta.
+
+Para los seleccionados, `POST /api/catalog-delivery-recoveries/resend` acepta hasta 50 pares
+`phone_number`/`catalog_id` y exige `confirmation: "REENVIAR"`. Cada contacto se procesa en
+Redis, vuelve a validar el error y la ventana, y registra la entrega real. Si ya se resolvió no
+duplica; si salió de ventana o el reintento falla, abre handoff manual. La microapp debe mostrar
+el resumen antes de confirmar y nunca seleccionar contactos automáticamente.
+
 ## Longitud de las descripciones y prompt efectivo
 
 Cada descripción admite entre 1 y 2.000 caracteres tanto en la API como en PostgreSQL. El

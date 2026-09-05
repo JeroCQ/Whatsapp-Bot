@@ -66,7 +66,8 @@ function routeAllowed(route: string, method: string): boolean {
   if (route === "login") return method === "POST";
   if (["generate-si-changes", "format-and-save-si", "upload-catalog"].includes(route)) return method === "POST";
   if (route === "manual-handoff") return method === "POST";
-  if (["current-si", "si-history", "dashboard-health", "current-catalog", "catalog-prompt-preview"].includes(route)) return method === "GET";
+  if (route === "catalog-delivery-recoveries/resend") return method === "POST";
+  if (["current-si", "si-history", "dashboard-health", "current-catalog", "catalog-prompt-preview", "catalog-delivery-recoveries"].includes(route)) return method === "GET";
   if (route === "catalogs") return ["GET", "POST"].includes(method);
   if (/^catalogs\/catalogo_[a-z0-9_]{1,52}$/.test(route)) return ["PATCH", "DELETE"].includes(method);
   if (/^catalogs\/catalogo_[a-z0-9_]{1,52}\/file$/.test(route)) return ["GET", "POST"].includes(method);

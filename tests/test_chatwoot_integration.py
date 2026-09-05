@@ -179,6 +179,19 @@ def test_authenticated_manual_handoff_creates_chatwoot_conversation(monkeypatch)
     assert response.json() == {"ok": True, "status": "created", "conversation_id": 456}
 
 
+def test_bulk_catalog_recovery_requires_explicit_confirmation():
+    with pytest.raises(ValueError):
+        main.BulkCatalogRecoveryRequest(
+            recoveries=[{"phone_number": "573001112233", "catalog_id": "catalogo_pdf"}],
+            confirmation="SI",
+        )
+    request = main.BulkCatalogRecoveryRequest(
+        recoveries=[{"phone_number": "573001112233", "catalog_id": "catalogo_pdf"}],
+        confirmation="REENVIAR",
+    )
+    assert request.recoveries[0].catalog_id == "catalogo_pdf"
+
+
 def test_handoff_summary_and_media_alert_are_private(monkeypatch):
     _mock_handoff_dependencies(monkeypatch)
     events = []

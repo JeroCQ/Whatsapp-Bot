@@ -49,6 +49,7 @@ from webhook_utils import chatwoot_event_identity, is_restart_command
 from chatwoot_security import chatwoot_scope, verify_chatwoot_signature
 from provider_errors import ProviderError, provider_error, sanitize_text
 from outage_recovery import find_recoveries
+from catalog_delivery_recovery import find_catalog_recoveries
 from dashboard_api import admin_auth, router as dashboard_router, validate_deployment_client
 
 app = FastAPI()
@@ -67,6 +68,18 @@ class ManualHandoffRequest(BaseModel):
     phone_number: str = Field(pattern=r"^\d{7,15}$")
     customer_name: str = Field(default="Cliente", min_length=1, max_length=120)
     reason: str = Field(default="Revisión manual solicitada desde el dashboard", min_length=3, max_length=500)
+
+
+class CatalogRecoverySelection(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    phone_number: str = Field(pattern=r"^\d{7,15}$")
+    catalog_id: str = Field(pattern=r"^catalogo_[a-z0-9_]{1,52}$")
+
+
+class BulkCatalogRecoveryRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    recoveries: list[CatalogRecoverySelection] = Field(min_length=1, max_length=50)
+    confirmation: str = Field(pattern=r"^REENVIAR$", description="Explicit operator confirmation")
 
 
 class FileDeliveryError(RuntimeError):
@@ -554,6 +567,102 @@ def manual_handoff(body: ManualHandoffRequest, client_name: str = Query(min_leng
     if not conversation_id:
         raise HTTPException(502, "No fue posible crear la conversación en Chatwoot")
     return {"ok": True, "status": "created", "conversation_id": conversation_id}
+
+
+@app.get("/api/catalog-delivery-recoveries", dependencies=[Depends(admin_auth)])
+def catalog_delivery_recoveries(client_name: str = Query(min_length=1), limit: int = Query(500, ge=1, le=5000)):
+    """List unresolved legacy delivery errors so Lovable can recover them deliberately."""
+    try:
+        validate_deployment_client(client_name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    newest_rows = (
+        supabase.table("message_logs")
+        .select("phone_number,role,content,created_at,id")
+        .order("created_at", desc=True)
+        .order("id", desc=True)
+        .limit(limit)
+        .execute()
+        .data
+        or []
+    )
+    candidates = [item.as_dict() for item in find_catalog_recoveries(list(reversed(newest_rows)))]
+    return {"client_name": client_name, "count": len(candidates), "recoveries": candidates}
+
+
+def recover_catalog_delivery(phone_number: str, catalog_id: str):
+    """RQ job: retry one still-eligible delivery or create a safe manual handoff."""
+    from bot import refresh_managed_catalogs
+
+    with phone_lock(phone_number):
+        rows = (
+            supabase.table("message_logs")
+            .select("phone_number,role,content,created_at,id")
+            .eq("phone_number", phone_number)
+            .order("created_at")
+            .order("id")
+            .limit(500)
+            .execute().data or []
+        )
+        candidate = next(
+            (item for item in find_catalog_recoveries(rows) if item.catalog_id == catalog_id),
+            None,
+        )
+        if not candidate:
+            return {"status": "already_resolved"}
+        if not candidate.within_service_window:
+            reason = f"Recuperar manualmente catálogo no entregado: {catalog_id}. Fuera de ventana automática."
+            pause_bot_for_handoff(phone_number, reason)
+            state = get_or_create_customer_state(phone_number, "Cliente")
+            _create_handoff_ticket_if_needed(phone_number, "Cliente", state, None, reason, None, None)
+            return {"status": "manual_handoff", "catalog_id": catalog_id}
+
+        refresh_managed_catalogs()
+        send_whatsapp_message(
+            phone_number,
+            "Parece que hubo un error y el catálogo no se envió. Te lo comparto por aquí.",
+        )
+        delivered, technical_error = deliver_presaved_file(phone_number, catalog_id)
+        if delivered:
+            save_message_log(phone_number, "system", f"Archivos enviados: {catalog_id}. Recuperación administrativa.")
+            return {"status": "resent", "catalog_id": catalog_id}
+        reason = f"Falló el reenvío administrativo de {catalog_id}. Un asesor debe enviarlo manualmente."
+        save_message_log(phone_number, "system", f"ERROR reenviando archivo: {technical_error or catalog_id}")
+        pause_bot_for_handoff(phone_number, reason)
+        try:
+            send_whatsapp_message(
+                phone_number,
+                "El adjunto volvió a fallar. Ya avisé al equipo para que te ayude personalmente.",
+            )
+        except Exception:
+            print("[CATALOG RECOVERY] No fue posible enviar el aviso final al cliente")
+        state = get_or_create_customer_state(phone_number, "Cliente")
+        _create_handoff_ticket_if_needed(phone_number, "Cliente", state, None, reason, None, None)
+        return {"status": "manual_handoff", "catalog_id": catalog_id}
+
+
+@app.post("/api/catalog-delivery-recoveries/resend", dependencies=[Depends(admin_auth)])
+def enqueue_catalog_delivery_recoveries(body: BulkCatalogRecoveryRequest, client_name: str = Query(min_length=1)):
+    """Queue explicitly confirmed recovery attempts without blocking the admin request."""
+    try:
+        validate_deployment_client(client_name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if not queue_enabled():
+        raise HTTPException(503, "La cola Redis es obligatoria para reenvíos por lote")
+    queued = []
+    for selection in body.recoveries:
+        job = enqueue(
+            recover_catalog_delivery,
+            selection.phone_number,
+            selection.catalog_id,
+            job_id=(
+                f"catalog-recovery-{selection.phone_number}-{selection.catalog_id}-"
+                f"{time.time_ns()}"
+            ),
+        )
+        queued.append({"phone_number": selection.phone_number, "catalog_id": selection.catalog_id, "job_id": job.id})
+    return {"ok": True, "queued": queued}
 
 
 def recover_gemini_outage_handoffs(since: str):
