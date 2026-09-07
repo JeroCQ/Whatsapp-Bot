@@ -14,9 +14,9 @@ from google.genai import types
 from config import config
 from file_catalog import (
     PresavedFile,
+    catalogs_for_customer_request,
     extend_system_instruction,
     is_explicit_file_resend_request,
-    last_delivered_file,
     load_file_catalog,
     merge_managed_catalogs,
 )
@@ -236,15 +236,19 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> BotT
         requested_files = list(dict.fromkeys(
             file_id for file_id in ai_data.get("requested_files", []) if file_id in FILE_CATALOG
         ))
+        model_selected_available_file = bool(requested_files)
         resend_requested = is_explicit_file_resend_request(text)
-        if resend_requested and not requested_files:
-            previous_file = last_delivered_file(history, set(FILE_CATALOG))
-            if previous_file:
-                requested_files = [previous_file]
-            elif len(FILE_CATALOG) == 1:
-                requested_files = [next(iter(FILE_CATALOG))]
-        if resend_requested and requested_files and trigger_handoff and not is_image:
-            print("[IA HANDOFF SUPPRESSED] Reenvío de archivo disponible se resuelve automáticamente")
+        deterministic_files = catalogs_for_customer_request(text, FILE_CATALOG, history)
+        if not requested_files and deterministic_files:
+            requested_files = deterministic_files
+            print(f"[FILE CATALOG] Deterministic fallback selected={requested_files}")
+        if (
+            requested_files
+            and trigger_handoff
+            and not is_image
+            and (resend_requested or not model_selected_available_file)
+        ):
+            print("[IA HANDOFF SUPPRESSED] Solicitud de catálogo disponible se resuelve automáticamente")
             trigger_handoff = False
             reason = ""
         if not resend_requested:

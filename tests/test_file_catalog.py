@@ -1,8 +1,10 @@
 import unittest
 
 from file_catalog import (
+    PresavedFile,
     advisor_catalog_command,
     catalog_prompt,
+    catalogs_for_customer_request,
     extend_system_instruction,
     is_explicit_file_resend_request,
     last_delivered_file,
@@ -69,6 +71,34 @@ def test_explicit_resend_recognition_and_last_successful_file_resolution():
         {"role": "system", "content": "Archivos enviados: catalogo_nuevo"},
     ]
     assert last_delivered_file(history, {"catalogo_anterior", "catalogo_nuevo"}) == "catalogo_nuevo"
+
+
+def test_catalog_request_uses_generic_asset_without_brand_specific_id():
+    catalog = {
+        "catalogo_empresa": PresavedFile("catalogo_empresa", "Productos, presentaciones y precios", "document"),
+        "catalogo_ingredientes_empresa": PresavedFile(
+            "catalogo_ingredientes_empresa", "Ingredientes y alérgenos", "document"
+        ),
+    }
+
+    assert catalogs_for_customer_request("No puedo ver el catálogo y los precios", catalog) == [
+        "catalogo_empresa"
+    ]
+    assert catalogs_for_customer_request("¿Cuáles son los ingredientes?", catalog) == [
+        "catalogo_ingredientes_empresa"
+    ]
+
+
+def test_catalog_retry_prefers_last_successful_asset_across_brands():
+    catalog = {
+        "catalogo_actual": PresavedFile("catalogo_actual", "Catálogo general", "document"),
+        "catalogo_ficha": PresavedFile("catalogo_ficha", "Ficha técnica", "document"),
+    }
+    history = [{"role": "system", "content": "Archivos enviados: catalogo_ficha"}]
+
+    assert catalogs_for_customer_request("No me llegó, ¿me lo reenvías?", catalog, history) == [
+        "catalogo_ficha"
+    ]
 
 
 class FileCatalogTests(unittest.TestCase):
