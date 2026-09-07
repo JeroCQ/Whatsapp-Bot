@@ -41,6 +41,48 @@ def last_delivered_file(history: list[dict], available_ids: set[str]) -> str | N
     return None
 
 
+def catalogs_for_customer_request(
+    text: str,
+    catalog: dict[str, "PresavedFile"],
+    history: list[dict] | None = None,
+) -> list[str]:
+    """Resolve explicit catalog requests without asking the model to know deployment IDs.
+
+    Dashboard catalog IDs are deliberately brand-scoped and can change independently
+    from the instruction text.  Customer-facing catalog requests therefore need a
+    deterministic fallback after model output validation.  A retry targets the last
+    successfully delivered file; ingredient requests prefer an ingredient-specific
+    asset; all other catalog/price/product-list requests prefer the least specialised
+    asset.
+    """
+    if not catalog:
+        return []
+    normalized = unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode().lower()
+    if is_explicit_file_resend_request(text):
+        previous = last_delivered_file(history or [], set(catalog))
+        if previous:
+            return [previous]
+
+    catalog_intent = re.search(
+        r"\b(catalogo|portafolio|lista\s+de\s+(?:productos|precios)|"
+        r"precios?|productos|opciones|presentaciones|sabores)\b",
+        normalized,
+    )
+    ingredient_intent = re.search(r"\b(ingredientes?|alergenos?|composicion|ficha\s+tecnica)\b", normalized)
+    if not catalog_intent and not ingredient_intent:
+        return []
+
+    def specialization(item: PresavedFile) -> tuple[int, int, str]:
+        metadata = f"{item.id} {item.description} {item.filename or ''} {item.default_caption or ''}"
+        metadata = unicodedata.normalize("NFKD", metadata).encode("ascii", "ignore").decode().lower()
+        ingredient_asset = bool(re.search(r"ingred|alergen|composicion|ficha", metadata))
+        # Prefer a specialised asset only when the customer explicitly asks for it.
+        mismatch = int(ingredient_asset != bool(ingredient_intent))
+        return mismatch, len(metadata), item.id
+
+    return [min(catalog.values(), key=specialization).id]
+
+
 @dataclass(frozen=True)
 class PresavedFile:
     id: str
