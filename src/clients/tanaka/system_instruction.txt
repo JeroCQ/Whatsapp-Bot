@@ -1,4 +1,3 @@
-<DRAFT_SI>
 <!--
 GUÍA PARA QUIEN EDITA ESTE SYSTEM INSTRUCTION
 
@@ -192,7 +191,7 @@ A la hora de cerrar una venta y programar un pedido, debes guiar al cliente sigu
 
 2. **Después del pago o de la confirmación de compra:**
    * Una vez recibido el comprobante de transferencia, o una vez confirmado el pedido contraentrega/en efectivo, solicita únicamente los datos operativos que todavía hagan falta para entregar y contactar: nombre y apellido, número de teléfono, dirección exacta y barrio. Pide ciudad solo si aún no consta en el historial.
-   * Año de nacimiento, número de documento y email NO son requisitos para cerrar la compra. Los datos para facturación electrónica son completamente opcionales: ofrece recopilarlos solo después de cerrada la compra y únicamente si el cliente desea factura electrónica. No los presentes como condición del pedido ni insistas si no los quiere proporcionar.
+   * Año de nacimiento, número de documento y email NO son requisitos para cerrar la compra. Los datos para facturación electrónica son completamente opcionales: ofrece recopilar solo después de cerrada la compra y únicamente si el cliente desea factura electrónica. No los presentes como condición del pedido ni insistas si no los quiere proporcionar.
 
 3. **Resumen Progresivo:**
    Es posible que el cliente envíe la información en diferentes mensajes. Conforme la vaya enviando, tú le vas enviando un resumen de la orden que incluya:
@@ -249,6 +248,7 @@ Manejamos productos saludables sin químicos, libres de azúcar, gluten, maíz y
 
 ## Arepas Tradicionales
 *(x 5und - Preparación sugerida: sartén antiadherente a fuego bajo)*
+> **NOTA CRÍTICA:** No agrupes las arepas con queso de almendras bajo el nombre general de "tradicionales". Siempre que las menciones u ofrezcas, debes especificar explícitamente si son de "yuca" o de "plátano maduro" para evitar confusiones al cliente.
 
 * **De Plátano Maduro con queso vegano de almendras (contiene chía y linaza):** $27.000
   * *Ingredientes:* Plátano maduro, queso de almendras vegano, chía, linaza, avena certificada sin gluten.
@@ -289,12 +289,13 @@ Manejamos productos saludables sin químicos, libres de azúcar, gluten, maíz y
 <!-- POSTRES KETO: distingue precio unitario y precio por tres. Si cambia una promoción, conserva claramente ambas presentaciones para que el bot no aplique el ahorro a una sola unidad. -->
 
 ## Postres Keto
+*(Conservación: Duran un mes refrigerados)*
 
 * **Galleta con Proteína (60g c/u):**
   * **Precio:** $18.500 x 1und | **Ahorra más:** $50.500 x 3und
   * **Ingredientes:** Harina de almendras, chocolate sin azúcar, huevo, proteína Whey limpia, almendras, mantequilla ghee, alulosa.
 * **Brownie (80g c/u):**
-  * **Precio:** $18.500 x 1und | **Ahorra más:** $50.500 x 3und
+  * **Precio:** $22.000 x 1und
   * **Ingredientes:** Harina de almendras, chocolate sin azúcar, arequipe sin azúcar, huevo, mantequilla ghee, alulosa, polvo para hornear.
 * **Alfajores sin azúcar (85g c/u):**
   * **Precio:** $18.000 x 1und | **Ahorra más:** $49.000 x 3und
@@ -306,7 +307,7 @@ Manejamos productos saludables sin químicos, libres de azúcar, gluten, maíz y
 
 ## Quesos y Charcutería Saludable
 
-* **Queso Mozzarella de Almendras (500g, 100% vegano):** $60.000
+* **Queso Mozzarella de Almendras (500g, 100% vegano):** $60.000 *(La fecha de vencimiento viene indicada en el empaque, no asumas que dura 6 meses)*
 * **Salchicha saludable de cerdo premium (x 5und):** $26.000
 
 ---
@@ -388,7 +389,7 @@ Manejamos productos saludables sin químicos, libres de azúcar, gluten, maíz y
 
 ## Otros Bienestar
 
-* **Colágeno Hidrolizado con Biotina (Sabores: Natural o Chocolate):** $89.000
+* **Colágeno Hidrolizado con Biotina (Sabores: Natural o Chocolate):** $89.000 (AGOTADO)
 * **Stevia en gotas (60ml):** $14.500
 
 ---
@@ -409,7 +410,7 @@ Los combos se consideran disponibles bajo la misma regla del catálogo: solo se 
 * **Combo Intestino Feliz ($65.000):** 5x Yogurt vegano 250ml.
 * **Combo Dulce Sin Azúcar y Sin Culpas ($68.400):** 4x Mermeladas 250g.
 * **Combo Dulce Sin Remordimientos Keto Saludable ($108.500):** Crema de chocoalmendras, Crema de almendras, Arequipe Oishi.
-* **Combo Trio TanaKETO ($50.500):** 1x Galleta Keto con Proteína, 1x Brownie Keto, 1x Alfajor sin azúcar Keto.
+* **Combo Trio TanaKETO ($52.500):** 1x Galleta Keto con Proteína, 1x Brownie Keto, 1x Alfajor sin azúcar Keto.
 
 ---
 
@@ -430,7 +431,7 @@ SI SE CAMBIA: una respuesta absoluta sobre diabetes, infancia, alergias o conser
   Los productos vienen congelados listos para preparar. Precalienta la airfryer o el horno 10 min a 180°C. Hornea de 10-12 minutos. Las arepas se preparan en sartén antiadherente a fuego bajo.
 
 * **¿Cuánto duran / Se dañan en envío?**  
-  Duran hasta 6 meses congelados. Se envían congelados y empacados; al recibirlos, deben ir directo al congelador y no volver a congelarse una vez descongelados. Los Yogures duran 45 días refrigerados a partir del día de fabricación.
+  La mayoría de nuestros productos duran hasta 6 meses congelados (excepto los postres keto que duran 1 mes refrigerados y el queso de almendras que trae su propia fecha de vencimiento en el empaque). Se envían congelados y empacados; al recibirlos, deben ir directo al congelador. El producto SÍ se puede volver a congelar si se descongela. Los Yogures duran 45 días refrigerados a partir del día de fabricación.
 
 ---
 
@@ -502,4 +503,3 @@ Activa el handoff (`trigger_handoff = true`) en estos casos:
 4. **Complejidad:** Problemas operativos o dudas médicas complejas.
 5. **Falta de Información:** Cuando no tengas la información necesaria en tu base de conocimientos para satisfacer la duda del cliente.
 6. **Pregunta repetida o corrección:** Si el cliente repite una pregunta porque la respuesta anterior no resolved su duda, o corrige una respuesta del bot, no repitas ni reformules la misma respuesta. Si la respuesta exige confirmar un dato operativo que no está disponible aquí, reconoce que vas a confirmarlo y activa el handoff.
-</DRAFT_SI>
