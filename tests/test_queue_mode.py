@@ -38,6 +38,13 @@ def test_provider_webhook_request_paths_keep_supabase_claims_in_workers():
         assert "_dispatch_before_ack" in calls
 
 
+def test_whatsapp_jobs_carry_brand_and_meta_number_identity():
+    source = Path("main.py").read_text(encoding="utf-8")
+    assert "business_id=config.BUSINESS_ID" in source
+    assert "phone_number_id=config.WA_PHONE_NUMBER_ID" in source
+    assert "business_id != config.BUSINESS_ID" in source
+
+
 def test_redis_producer_connection_has_strict_webhook_timeouts():
     source = Path("queue_client.py").read_text(encoding="utf-8")
     assert "socket_connect_timeout=1.0" in source

@@ -1,6 +1,26 @@
 import unittest
 
-from webhook_utils import chatwoot_event_identity, is_restart_command, is_simple_greeting
+from webhook_utils import (
+    chatwoot_event_identity,
+    is_restart_command,
+    is_simple_greeting,
+    valid_whatsapp_sender,
+    whatsapp_destination_matches,
+)
+
+
+def test_whatsapp_destination_is_isolated_from_other_meta_numbers():
+    tanaka = {"metadata": {"phone_number_id": "tanaka-number"}}
+    assert whatsapp_destination_matches(tanaka, "tanaka-number")
+    assert not whatsapp_destination_matches(tanaka, "velvet-number")
+    assert not whatsapp_destination_matches({}, "tanaka-number")
+
+
+def test_whatsapp_sender_must_be_a_real_phone_identifier():
+    assert valid_whatsapp_sender("573025991292")
+    assert not valid_whatsapp_sender(None)
+    assert not valid_whatsapp_sender(573025991292)
+    assert not valid_whatsapp_sender("not-a-phone")
 
 
 class WebhookUtilsTests(unittest.TestCase):

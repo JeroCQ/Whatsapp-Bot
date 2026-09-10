@@ -452,6 +452,32 @@ payload varía entre eventos/versiones.
   conectada a `https://chat.briosos.org`, que el usuario Tanaka tenga una sesión push
   registrada y que la preferencia de notificación por asignación esté habilitada.
 
+### Diagnóstico: Tanaka responde con la personalidad de otra marca
+
+Aplica **tanto a un proyecto nuevo como a uno existente**. No borres datos ni ejecutes
+SQL para este síntoma: el aislamiento adicional ocurre en el webhook y en la cola y
+no requiere migración. El log `business_id=tanaka` en consultas de catálogo solo
+demuestra qué filas leyó ese proceso; no demuestra que otro worker no haya tomado el
+trabajo desde un Redis o `QUEUE_NAME` compartido.
+
+1. En Meta, confirma que el callback del número Tanaka apunta exclusivamente a
+   `https://DOMINIO-TANAKA/webhook`. El runtime ahora compara
+   `metadata.phone_number_id` de cada cambio con `WA_PHONE_NUMBER_ID`; un número
+   cruzado se registra como `[WEBHOOK ISOLATION]` y no llega a Gemini.
+2. Confirma que `WA_PHONE_NUMBER_ID` sea el ID del número Tanaka, no el número visible
+   ni el WABA ID. Un payload sin remitente (`from`) se descarta como
+   `[WEBHOOK INVALID]` en vez de escribir clientes `null` o ejecutar el handoff.
+3. Confirma que `REDIS_URL` sea una referencia al Redis Tanaka y que ningún servicio
+   Velvet escuche `whatsapp-events-tanaka`. Cada trabajo nuevo lleva además
+   `BUSINESS_ID` y `WA_PHONE_NUMBER_ID`; un worker de otra marca lo rechaza antes de
+   reclamar el evento, consultar Supabase o responder.
+4. Busca y detén workers dedicados antiguos si el web ya inicia el worker embebido.
+   Luego vuelve a desplegar **todos** los servicios de la marca con el mismo commit.
+
+Los `POST /chatwoot-webhook` con `403` son un problema separado: indican que la cuenta
+o inbox del payload no corresponde al despliegue. No explican por sí solos una
+respuesta de Gemini enviada por el webhook de Meta.
+
 ### Push móvil con la app oficial de Chatwoot
 
 La app oficial de App Store/Google Play registra tokens FCM del proyecto móvil de

@@ -45,7 +45,12 @@ from queue_client import (
     queue_enabled,
     register_follow_up,
 )
-from webhook_utils import chatwoot_event_identity, is_restart_command
+from webhook_utils import (
+    chatwoot_event_identity,
+    is_restart_command,
+    valid_whatsapp_sender,
+    whatsapp_destination_matches,
+)
 from chatwoot_security import chatwoot_scope, verify_chatwoot_signature
 from provider_errors import ProviderError, provider_error, sanitize_text
 from outage_recovery import find_recoveries
@@ -1043,9 +1048,24 @@ def _dispatch_before_ack(background_tasks: BackgroundTasks, func, *args, event_i
     return "background_task"
 
 
-def process_claimed_whatsapp_event(*args, event_id: str = None):
+def process_claimed_whatsapp_event(
+    *args,
+    event_id: str = None,
+    business_id: str = None,
+    phone_number_id: str = None,
+):
     """Claim a Meta event off the request path, then perform the expensive work."""
     sender_phone = args[0] if args else None
+    if business_id != config.BUSINESS_ID or str(phone_number_id or "") != str(config.WA_PHONE_NUMBER_ID or ""):
+        print(
+            "[WEBHOOK ISOLATION] Rejected queued WhatsApp event for a different deployment "
+            f"event_id={event_id} job_business={business_id!r}",
+            flush=True,
+        )
+        return
+    if not valid_whatsapp_sender(sender_phone):
+        print(f"[WEBHOOK INVALID] Rejected WhatsApp event without a valid sender event_id={event_id}", flush=True)
+        return
     if not claim_webhook_event("whatsapp", event_id, sender_phone):
         print(f"[WEBHOOK DEBUG] WhatsApp duplicado ignorado: {event_id}")
         return
@@ -1076,6 +1096,7 @@ async def verify_webhook(
 async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
     data = await request.json()
     accepted = 0
+    rejected = 0
     try:
         if data.get("object") == "whatsapp_business_account":
             for entry in data.get("entry", []):
@@ -1083,12 +1104,27 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                     value = change.get("value", {})
                     if "messages" not in value:
                         continue
+                    if not whatsapp_destination_matches(value, config.WA_PHONE_NUMBER_ID):
+                        rejected += len(value.get("messages") or [])
+                        print(
+                            "[WEBHOOK ISOLATION] Rejected Meta change for a different or missing "
+                            "phone_number_id",
+                            flush=True,
+                        )
+                        continue
                     contacts = value.get("contacts", [])
                     sender_name = contacts[0].get("profile", {}).get("name", "Cliente") if contacts else "Cliente"
                     for message in value["messages"]:
                         sender_phone = message.get("from")
                         message_type = message.get("type")
                         event_id = message.get("id")
+                        if not valid_whatsapp_sender(sender_phone):
+                            rejected += 1
+                            print(
+                                f"[WEBHOOK INVALID] Rejected message without a valid sender event_id={event_id}",
+                                flush=True,
+                            )
+                            continue
                         if message_type == "text":
                             body = message.get("text", {}).get("body")
                             _dispatch_before_ack(
@@ -1102,6 +1138,8 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                                 False,
                                 None,
                                 event_id=event_id,
+                                business_id=config.BUSINESS_ID,
+                                phone_number_id=config.WA_PHONE_NUMBER_ID,
                             )
                             accepted += 1
                         elif message_type in WHATSAPP_MEDIA_TYPES:
@@ -1123,9 +1161,16 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                                 media_payload.get("mime_type"),
                                 media_payload.get("filename"),
                                 event_id=event_id,
+                                business_id=config.BUSINESS_ID,
+                                phone_number_id=config.WA_PHONE_NUMBER_ID,
                             )
                             accepted += 1
-        return {"status": "success", "accepted": accepted, "queue_enabled": queue_enabled()}
+        return {
+            "status": "success",
+            "accepted": accepted,
+            "rejected": rejected,
+            "queue_enabled": queue_enabled(),
+        }
     except Exception as e:
         print(f"Error Webhook Meta: {e}")
         return {"status": "error"}
