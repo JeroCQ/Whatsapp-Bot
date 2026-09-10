@@ -13,6 +13,22 @@ def is_simple_greeting(text: str) -> bool:
     return bool(text) and text.strip().lower().strip("!¡., ") in SIMPLE_GREETINGS
 
 
+def valid_whatsapp_sender(value) -> bool:
+    """Return whether Meta supplied a usable E.164-style sender identifier."""
+    return isinstance(value, str) and value.isdigit() and 7 <= len(value) <= 15
+
+
+def whatsapp_destination_matches(value: dict, expected_phone_number_id: str) -> bool:
+    """Keep a deployment from consuming another Meta number's webhook events.
+
+    Meta identifies the receiving number in every message-bearing change.  Checking
+    it is independent of ``BUSINESS_ID`` and protects against a webhook callback
+    accidentally being configured on more than one brand.
+    """
+    actual = (value.get("metadata") or {}).get("phone_number_id")
+    return bool(actual and expected_phone_number_id and str(actual) == str(expected_phone_number_id))
+
+
 def chatwoot_event_identity(data: dict) -> str:
     """Build an idempotency key without confusing a conversation id for an event id."""
     event = str(data.get("event") or "")
