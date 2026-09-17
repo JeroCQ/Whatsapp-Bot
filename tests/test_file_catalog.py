@@ -64,7 +64,16 @@ def test_two_purpose_specific_ingredient_documents_reach_the_prompt():
 def test_explicit_resend_recognition_and_last_successful_file_resolution():
     assert is_explicit_file_resend_request("¿Me lo reenvías porfa?") is True
     assert is_explicit_file_resend_request("No me llegó, mándamelo otra vez") is True
+    # This was already supported before the regression report and must stay so.
+    assert is_explicit_file_resend_request("¿Me lo envías de nuevo?") is True
+    assert is_explicit_file_resend_request("¿Me envías el catálogo de nuevo porfa?") is True
+    assert is_explicit_file_resend_request("Manda los precios de nuevo") is True
+    assert is_explicit_file_resend_request("Envíame de nuevo") is True
+    assert is_explicit_file_resend_request("Vuelve a enviar") is True
     assert is_explicit_file_resend_request("¿Qué productos venden?") is False
+    assert is_explicit_file_resend_request(
+        "Envía uno dos tres cuatro cinco seis de nuevo"
+    ) is False
     history = [
         {"role": "system", "content": "Archivos enviados: catalogo_anterior"},
         {"role": "system", "content": "ERROR enviando archivos: catalogo_nuevo"},
@@ -97,6 +106,12 @@ def test_catalog_retry_prefers_last_successful_asset_across_brands():
     history = [{"role": "system", "content": "Archivos enviados: catalogo_ficha"}]
 
     assert catalogs_for_customer_request("No me llegó, ¿me lo reenvías?", catalog, history) == [
+        "catalogo_ficha"
+    ]
+    assert catalogs_for_customer_request("¿Me envías el catálogo de nuevo porfa?", catalog, history) == [
+        "catalogo_ficha"
+    ]
+    assert catalogs_for_customer_request("¿Me lo envías de nuevo?", catalog, history) == [
         "catalogo_ficha"
     ]
 

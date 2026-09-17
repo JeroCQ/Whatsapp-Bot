@@ -15,7 +15,11 @@ def is_explicit_file_resend_request(text: str) -> bool:
     normalized = unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode().lower()
     return bool(re.search(
         r"\b(reenvia(?:me|s|r)?|vuelve\s+a\s+(?:enviar|mandar)|"
-        r"(?:envia|manda)\w*\s+(?:de\s+nuevo|otra\s+vez)|"
+        # Keep the verb inflection separate from the optional intervening words.
+        # This preserves the previously working "envias de nuevo" form while also
+        # accepting "envias el catalogo de nuevo" without matching an unbounded
+        # amount of unrelated text.
+        r"(?:envia|manda)\w*(?:\s+\w+){0,5}\s+(?:de\s+nuevo|otra\s+vez)|"
         r"no\s+(?:me\s+)?(?:llego|recibi))\b",
         normalized,
     ))
