@@ -68,6 +68,7 @@ function routeAllowed(route: string, method: string): boolean {
   if (route === "manual-handoff") return method === "POST";
   if (route === "catalog-delivery-recoveries/resend") return method === "POST";
   if (["current-si", "si-history", "dashboard-health", "current-catalog", "catalog-prompt-preview", "catalog-delivery-recoveries"].includes(route)) return method === "GET";
+  if (/^si-job\/[0-9a-f-]{36}$/.test(route)) return method === "GET";
   if (route === "catalogs") return ["GET", "POST"].includes(method);
   if (/^catalogs\/catalogo_[a-z0-9_]{1,52}$/.test(route)) return ["PATCH", "DELETE"].includes(method);
   if (/^catalogs\/catalogo_[a-z0-9_]{1,52}\/file$/.test(route)) return ["GET", "POST"].includes(method);
@@ -126,8 +127,14 @@ Deno.serve(async (request) => {
   try {
     const upstream = await fetch(target, { method: request.method, headers, body });
     if (upstream.status >= 500) {
-      const detail = await upstream.text();
-      return jsonResponse(424, { detail: detail || "El backend administrativo falló" }, cors);
+      let detail = "El backend administrativo falló";
+      try {
+        const payload = await upstream.json();
+        if (typeof payload?.detail === "string") detail = payload.detail;
+      } catch {
+        // Keep the sanitized fallback; never wrap raw provider or HTML responses.
+      }
+      return jsonResponse(upstream.status, { detail }, cors);
     }
     const responseHeaders = new Headers(cors);
     responseHeaders.set("Content-Type", upstream.headers.get("content-type") ?? "application/json");
