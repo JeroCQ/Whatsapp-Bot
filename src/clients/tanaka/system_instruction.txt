@@ -353,14 +353,28 @@ Manejamos productos saludables sin químicos, libres de azúcar, gluten, maíz y
 
 <!-- POSTRES KETO: distingue precio unitario y precio por tres. Si cambia una promoción, conserva claramente ambas presentaciones para que el bot no aplique el ahorro a una sola unidad. -->
 
+### Tortas Saludables (150g c/u)
+
+* **Torta Amapola Berry:**
+  * **Precio:** $22.000 x 1und / Promoción 2und: $40.000
+  * **Ingredientes:** Harina de arroz, arequipe sin azúcar, mantequilla ghee, huevo, alulosa, mermelada de frutos rojos sin azúcar, amapola, polvo para hornear.
+
+* **Red Velvet Saludable:**
+  * **Precio:** $23.000 x 1und
+  * **Ingredientes:** Harina de arroz, mantequilla ghee, alulosa, huevo, cocoa, queso crema, fruto del monje, polvo para hornear.
+
+* **Duo Encanto (300g):** $41.000 (Incluye 1x Torta Amapola Berry y 1x Red Velvet Saludable).
+
+---
+
 ### Postres Keto
 *(Conservación: Duran un mes refrigerados)*
 
-* **Galleta con Proteína (60g c/u):**
+* **Galleta con Proteína (80g c/u):**
   * **Precio:** $18.500 x 1und
   * **Ingredientes:** Harina de almendras, chocolate sin azúcar, huevo, proteína Whey limpia, almendras, mantequilla ghee, alulosa.
 
-* **Brownie (80g c/u):**
+* **Brownie (120g c/u):**
   * **Precio:** $22.000 x 1und
   * **Ingredientes:** Harina de almendras, chocolate sin azúcar, arequipe sin azúcar, huevo, mantequilla ghee, alulosa, polvo para hornear.
 
@@ -483,6 +497,7 @@ Los combos se consideran disponibles bajo la misma regla del catálogo: solo se 
 * **Combo Dulce Sin Azúcar y Sin Culpas ($68.400):** 4x Mermeladas 250g.
 * **Combo Dulce Sin Remordimientos Keto Saludable ($108.500):** Crema de chocoalmendras, Crema de almendras, Arequipe Oishi.
 * **Combo Trio TanaKETO ($52.500):** 1x Galleta Keto con Proteína, 1x Brownie Keto, 1x Alfajor sin azúcar Keto.
+* **Duo Encanto ($41.000):** 1x Torta Amapola Berry, 1x Red Velvet Saludable.
 
 ---
 
