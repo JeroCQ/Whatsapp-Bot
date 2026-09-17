@@ -15,7 +15,7 @@ def is_explicit_file_resend_request(text: str) -> bool:
     normalized = unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode().lower()
     return bool(re.search(
         r"\b(reenvia(?:me|s|r)?|vuelve\s+a\s+(?:enviar|mandar)|"
-        r"(?:envia|manda)\w*\s+(?:de\s+nuevo|otra\s+vez)|"
+        r"(?:envia|manda)(?:\w*\s+){0,5}(?:de\s+nuevo|otra\s+vez)|"
         r"no\s+(?:me\s+)?(?:llego|recibi))\b",
         normalized,
     ))
@@ -198,3 +198,4 @@ def merge_managed_catalogs(
 def extend_system_instruction(base_instruction: str, catalog: dict[str, PresavedFile]) -> str:
     """Append file capabilities without editing or replacing the business prompt."""
     return f"{base_instruction.rstrip()}\n\n{catalog_prompt(catalog)}\n"
+
