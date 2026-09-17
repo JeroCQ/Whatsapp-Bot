@@ -71,9 +71,27 @@ IDs to `gemini-3.6-flash` and retries fallback models from
 `GEMINI_DASHBOARD_FALLBACK_MODELS` before returning a provider error. If both
 `GOOGLE_API_KEY` and `GEMINI_API_KEY` are set in Railway, remove
 `GOOGLE_API_KEY` unless it is intentionally the same key, because the Google SDK
-warns that it may prefer it. Full-system-instruction formatting can take longer
-than proposal generation; use `DASHBOARD_FORMAT_TIMEOUT_SECONDS` (default `90`)
-to control the save endpoint timeout separately from other dashboard calls.
+warns that it may prefer it.
+
+Saving no longer sends the full system instruction to Gemini by default. POST
+`/api/format-and-save-si` accepts `skip_format` (default `true`): in that mode it
+commits the submitted text directly and returns HTTP 200. GitHub's Contents API
+writes the complete file in one commit using the previously read blob SHA, so a
+failed request cannot leave a partial file and concurrent changes return 409.
+
+When the panel explicitly sends `"skip_format": false`, formatting is asynchronous:
+the POST returns HTTP 202 with `{"job_id":"<uuid>","status":"pending"}`. Poll GET
+`/api/si-job/<job_id>?client_name=<BUSINESS_ID>` until it returns `status: "done"`
+and `result` (the same commit metadata as synchronous saving), or `status: "error"`
+and `error: {"status_code": 502|504, "detail": "<motivo>"}`. Jobs live in the
+Railway process that accepted them, so the panel should stop polling on 404 and
+offer a retry. The deployment proxy injects its fixed brand as `client_name`, which
+prevents one brand from observing another brand's jobs. Set
+`DASHBOARD_FORMAT_TIMEOUT_SECONDS` (default `45`) below the platform proxy timeout;
+GitHub read and commit calls use `GITHUB_TIMEOUT_SECONDS` (default `10`). Logs emit
+separate `model_format`, `github_read`, and `github_commit` durations. This runtime
+and panel contract applies equally to fresh projects and existing deployments and
+requires no database migration.
 
 Catalog PDFs and images are stored outside GitHub in Supabase Storage because real catalogs can
 be tens of megabytes. Create a public Supabase Storage bucket named `catalogos`

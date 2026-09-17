@@ -556,6 +556,103 @@ def test_format_and_save_ignores_lovable_metadata_without_echoing_prompt():
     assert "sensitive prompt body" not in response.text
 
 
+def test_format_and_save_skips_model_by_default_and_commits_draft(caplog):
+    class UnexpectedGemini:
+        def generate(self, *_args, **_kwargs):
+            pytest.fail("Gemini must not be called for the default save path")
+
+    github = FakeGitHub()
+    client, headers = make_client(UnexpectedGemini(), github)
+    with caplog.at_level("INFO"):
+        response = client.post(
+            "/api/format-and-save-si?client_name=client_1",
+            headers=headers,
+            json={"draft_si": "x" * 60_000},
+        )
+
+    assert response.status_code == 200
+    assert github.updated[1] == ("x" * 60_000).encode()
+    assert "operation=github_read" in caplog.text
+    assert "operation=github_commit" in caplog.text
+    assert "operation=model_format" not in caplog.text
+
+
+def test_requested_formatting_is_async_and_reports_result(caplog):
+    github = FakeGitHub()
+    client, headers = make_client(FakeGemini("formatted async"), github)
+    with caplog.at_level("INFO"):
+        created = client.post(
+            "/api/format-and-save-si?client_name=client_1",
+            headers=headers,
+            json={"draft_si": "draft", "skip_format": False},
+        )
+        assert created.status_code == 202
+        job_id = created.json()["job_id"]
+        for _ in range(100):
+            status = client.get(f"/api/si-job/{job_id}?client_name=client_1", headers=headers)
+            if status.json()["status"] != "pending":
+                break
+            import time
+            time.sleep(0.01)
+
+    assert status.status_code == 200
+    assert status.json()["status"] == "done"
+    assert status.json()["result"]["commit_sha"] == "new-sha"
+    assert github.updated[1] == b"formatted async"
+    assert "operation=model_format" in caplog.text
+
+
+def test_format_job_error_is_sanitized_and_job_is_brand_scoped():
+    class TimedOutGemini:
+        def generate(self, *_args, **_kwargs):
+            raise HTTPException(504, "Gemini excedió el tiempo límite")
+
+    client, headers = make_client(TimedOutGemini(), FakeGitHub())
+    created = client.post(
+        "/api/format-and-save-si?client_name=client_1",
+        headers=headers,
+        json={"draft_si": "draft", "skip_format": False},
+    )
+    job_id = created.json()["job_id"]
+    for _ in range(100):
+        status = client.get(f"/api/si-job/{job_id}?client_name=client_1", headers=headers)
+        if status.json()["status"] != "pending":
+            break
+        import time
+        time.sleep(0.01)
+
+    assert status.json() == {
+        "job_id": job_id,
+        "status": "error",
+        "error": {"status_code": 504, "detail": "Gemini excedió el tiempo límite"},
+    }
+    other_brand = client.get(f"/api/si-job/{job_id}?client_name=other_brand", headers=headers)
+    assert other_brand.status_code == 422
+    assert job_id not in other_brand.text
+
+
+def test_failed_github_commit_does_not_replace_existing_content():
+    class AtomicFailingGitHub(FakeGitHub):
+        def __init__(self):
+            super().__init__()
+            self.persisted = b"current system instruction"
+
+        def update_file(self, path, content, sha, message):
+            raise HTTPException(502, "GitHub rechazó el commit atómico")
+
+    github = AtomicFailingGitHub()
+    client, headers = make_client(FakeGemini("unused"), github)
+    response = client.post(
+        "/api/format-and-save-si?client_name=client_1",
+        headers=headers,
+        json={"draft_si": "replacement"},
+    )
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": "GitHub rechazó el commit atómico"}
+    assert github.persisted == b"current system instruction"
+
+
 def test_catalog_storage_maps_provider_entity_too_large_to_413():
     class Response:
         status_code = 400

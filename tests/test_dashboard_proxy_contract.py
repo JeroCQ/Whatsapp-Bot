@@ -28,7 +28,8 @@ def test_proxy_supports_multi_catalog_contract_and_isolated_backends():
     assert 'route === "manual-handoff"' in PROXY
     assert '"catalog-delivery-recoveries"' in PROXY
     assert 'route === "catalog-delivery-recoveries/resend"' in PROXY
-    assert 'return jsonResponse(424' in PROXY
+    assert "si-job\\/[0-9a-f-]{36}" in PROXY
+    assert "return jsonResponse(upstream.status, { detail }, cors)" in PROXY
 
 
 def test_password_only_proxy_disables_platform_jwt_check():

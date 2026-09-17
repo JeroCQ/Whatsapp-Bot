@@ -8,6 +8,7 @@ import re
 import threading
 import time
 import unicodedata
+import uuid
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from datetime import datetime, timezone
@@ -17,7 +18,7 @@ from typing import Annotated, Any
 
 import requests
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from config import config
@@ -49,6 +50,7 @@ class SaveRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="ignore")
     client_name: str | None = None
     draft_si: str = Field(min_length=1, validation_alias=AliasChoices("draft_si", "new_si", "system_instruction"))
+    skip_format: bool = True
 
     @field_validator("client_name")
     @classmethod
@@ -679,6 +681,71 @@ def admin_auth(request: Request, x_dashboard_api_key: Annotated[str | None, Head
 router = APIRouter(prefix="/api", dependencies=[Depends(admin_auth)])
 
 
+_si_jobs: dict[str, dict[str, Any]] = {}
+_si_jobs_lock = threading.Lock()
+_si_job_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="si-format")
+
+
+def _timed(operation: str, job_id: str | None, callback):
+    started = time.monotonic()
+    try:
+        return callback()
+    finally:
+        logger.info(
+            "System instruction operation completed: operation=%s duration_ms=%.1f job_id=%s",
+            operation,
+            (time.monotonic() - started) * 1000,
+            job_id or "sync",
+        )
+
+
+def _commit_system_instruction(github: GitHubAdapter, client_name: str, content: str,
+                               *, job_id: str | None = None) -> dict[str, Any]:
+    path = system_instruction_path(client_name)
+    existing = _timed("github_read", job_id, lambda: github.get_file(path))
+    if not existing or not existing.get("sha"):
+        raise HTTPException(404, "El archivo configurado no existe en GitHub")
+    stamp = datetime.now(timezone.utc).isoformat()
+    # GitHub's Contents API applies this as one commit: a failed PUT cannot leave
+    # a partially written file, and the SHA makes concurrent edits fail with 409.
+    result = _timed(
+        "github_commit",
+        job_id,
+        lambda: github.update_file(
+            path, content.encode("utf-8"), existing["sha"], f"Update SI via Dashboard - {stamp}"
+        ),
+    )
+    commit = result.get("commit") or {}
+    return {"success": True, "path": path, "commit_sha": commit.get("sha"), "commit_url": commit.get("html_url")}
+
+
+def _run_format_job(job_id: str, client_name: str, draft: str,
+                    gemini: GeminiAdapter, github: GitHubAdapter) -> None:
+    try:
+        prompt = (
+            "Formatea el siguiente texto para mejorar exclusivamente su presentación. RESTRICCIÓN ABSOLUTA: "
+            "no agregar, resumir ni eliminar contexto. Devuelve solamente el texto formateado.\n<DRAFT_SI>\n"
+            + draft + "\n</DRAFT_SI>"
+        )
+        formatted = _timed(
+            "model_format",
+            job_id,
+            lambda: gemini_call(gemini, prompt, timeout_seconds=config.DASHBOARD_FORMAT_TIMEOUT_SECONDS),
+        ).strip()
+        if not formatted:
+            raise HTTPException(502, "Gemini devolvió una respuesta vacía")
+        result = _commit_system_instruction(github, client_name, formatted, job_id=job_id)
+        with _si_jobs_lock:
+            _si_jobs[job_id].update(status="done", result=result)
+    except HTTPException as exc:
+        with _si_jobs_lock:
+            _si_jobs[job_id].update(status="error", error={"status_code": exc.status_code, "detail": str(exc.detail)})
+    except Exception:
+        logger.exception("Unexpected system instruction job failure: job_id=%s", job_id)
+        with _si_jobs_lock:
+            _si_jobs[job_id].update(status="error", error={"status_code": 502, "detail": "No fue posible guardar el system instruction"})
+
+
 def gemini_call(adapter: GeminiAdapter, prompt: str, *, schema: Any = None, system_instruction: str | None = None,
                 timeout_seconds: float | None = None) -> str:
     pool = ThreadPoolExecutor(max_workers=1)
@@ -755,20 +822,28 @@ def format_and_save_si(body: SaveRequest, client_name: str | None = Query(None),
         resolved_client_name = validate_deployment_client(resolved_client_name)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
-    prompt = ("Formatea el siguiente texto para mejorar exclusivamente su presentación. RESTRICCIÓN ABSOLUTA: "
-              "no agregar, resumir ni eliminar contexto. Devuelve solamente el texto formateado.\n<DRAFT_SI>\n" +
-              body.draft_si + "\n</DRAFT_SI>")
-    formatted = gemini_call(gemini, prompt, timeout_seconds=config.DASHBOARD_FORMAT_TIMEOUT_SECONDS).strip()
-    if not formatted:
-        raise HTTPException(502, "Gemini devolvió una respuesta vacía")
-    path = system_instruction_path(resolved_client_name)
-    existing = github.get_file(path)
-    if not existing or not existing.get("sha"):
-        raise HTTPException(404, "El archivo configurado no existe en GitHub")
-    stamp = datetime.now(timezone.utc).isoformat()
-    result = github.update_file(path, formatted.encode("utf-8"), existing["sha"], f"Update SI via Dashboard - {stamp}")
-    commit = result.get("commit") or {}
-    return {"success": True, "path": path, "commit_sha": commit.get("sha"), "commit_url": commit.get("html_url")}
+    if body.skip_format:
+        return _commit_system_instruction(github, resolved_client_name, body.draft_si)
+
+    job_id = str(uuid.uuid4())
+    with _si_jobs_lock:
+        _si_jobs[job_id] = {"job_id": job_id, "client_name": resolved_client_name, "status": "pending"}
+    _si_job_pool.submit(_run_format_job, job_id, resolved_client_name, body.draft_si, gemini, github)
+    return JSONResponse(status_code=202, content={"job_id": job_id, "status": "pending"})
+
+
+@router.get("/si-job/{job_id}")
+def system_instruction_job(job_id: str, client_name: str = Query(min_length=1)):
+    try:
+        resolved_client_name = validate_deployment_client(client_name)
+        uuid.UUID(job_id)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    with _si_jobs_lock:
+        job = _si_jobs.get(job_id)
+        if not job or job["client_name"] != resolved_client_name:
+            raise HTTPException(404, "Trabajo de system instruction no encontrado")
+        return {key: value for key, value in job.items() if key != "client_name"}
 
 
 @router.get("/current-si")
