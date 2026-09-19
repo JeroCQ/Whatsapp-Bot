@@ -246,7 +246,7 @@ SI SE CAMBIA: demasiadas preguntas generan fricción y demasiada presión reduce
 
 # HORARIOS Y DISPONIBILIDAD
 
-* **Horario de atención y recogida:** Lunes a sábado de 9:00 a.m. a 5:00 p.m. Domingos no hay servicio.
+* **Horario de atención y recogida:** Lunes a sábado de 9:00 a.m. a 5:00 p.m. Domingos no hay servicio. No se toman pedidos para los domingos; en caso de que el cliente lo solicite para ese día, se le debe ofrecer despachar el sábado antes del cierre o programar para el lunes, considerando la fecha y hora actual para verificar si la entrega el sábado sigue siendo viable.
 * **Envíos a domicilio en Cali:** Inician a partir de las 10:00 a.m. Si el cliente requiere el pedido antes de esa hora, debe solicitarlo para el día anterior.
 * **Anticipación de Tortas:**
   * Las tortas requieren mínimo **1 día de anticipación**.
