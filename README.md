@@ -364,6 +364,14 @@ Search Railway logs for these markers:
 - `[METRIC] whatsapp_message_processed` - full WhatsApp message processing time.
 - `[METRIC] chatwoot_event_processed` - full Chatwoot webhook processing time.
 
+If a job log shows `process_claimed_whatsapp_event(None, ...)`, the incoming Meta
+notification omitted `messages[].from`. Current deployments recover the sender from
+the single valid `contacts[].wa_id`; ambiguous or invalid payloads are rejected with
+`[WEBHOOK INVALID]` instead of attempting a database insert with a null phone. This
+runtime-only safeguard applies to both fresh and existing deployments and requires
+no Supabase migration. Redeploy the web service and every separate worker from the
+same commit; a worker boot line showing an older commit is still running old code.
+
 You can also open the root endpoint in a browser. It returns queue diagnostics without exposing secrets, including queued jobs, failed jobs, and how many RQ workers Redis can currently see.
 ## Recuperar handoffs después de una caída de Gemini
 

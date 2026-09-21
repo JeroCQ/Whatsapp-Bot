@@ -50,6 +50,7 @@ from webhook_utils import (
     is_restart_command,
     valid_whatsapp_sender,
     whatsapp_destination_matches,
+    whatsapp_sender,
 )
 from chatwoot_security import chatwoot_scope, verify_chatwoot_signature
 from provider_errors import ProviderError, provider_error, sanitize_text
@@ -1123,7 +1124,7 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                     contacts = value.get("contacts", [])
                     sender_name = contacts[0].get("profile", {}).get("name", "Cliente") if contacts else "Cliente"
                     for message in value["messages"]:
-                        sender_phone = message.get("from")
+                        sender_phone = whatsapp_sender(message, contacts)
                         message_type = message.get("type")
                         event_id = message.get("id")
                         if not valid_whatsapp_sender(sender_phone):
