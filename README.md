@@ -349,6 +349,10 @@ Railway shows app logs per service:
 
 - Web service logs show webhook receipt, queue status, Meta send metrics, and fallback queue errors.
 - Worker service logs show Gemini processing, media forwarding, Chatwoot handling, and end-to-end message duration.
+- Agent audio attachments are normalized to MP3 before upload to Meta when Chatwoot
+  supplies a format such as WAV that WhatsApp does not accept. This runtime behavior
+  applies equally to fresh projects and existing brand deployments; no SQL migration
+  or shared cross-brand media resource is required.
 
 Search Railway logs for these markers:
 

@@ -495,6 +495,28 @@ def test_cross_origin_storage_redirect_does_not_leak_chatwoot_credentials(monkey
     ]
 
 
+def test_chatwoot_wav_is_converted_before_meta_upload(monkeypatch):
+    uploaded = {}
+    monkeypatch.setattr(
+        main, "get",
+        lambda *a, **k: Response(200, headers={"Content-Type": "audio/x-wav"}, chunks=[b"wav"]),
+    )
+    monkeypatch.setattr(
+        chatwoot_api, "prepare_audio_for_delivery",
+        lambda data, mime: (b"mp3", "audio/mpeg", ".mp3"),
+    )
+
+    def fake_post(url, **kwargs):
+        uploaded.update(files=kwargs["files"], data=kwargs["data"])
+        return Response(200, {"id": "media-audio"})
+
+    monkeypatch.setattr(main, "post", fake_post)
+
+    assert main.upload_chatwoot_attachment_to_meta("/voice.wav", filename="voice.wav") == "media-audio"
+    assert uploaded["files"]["file"] == ("voice.mp3", b"mp3", "audio/mpeg")
+    assert uploaded["data"] == {"messaging_product": "whatsapp"}
+
+
 def test_attachment_forwarding_failure_is_retriable(monkeypatch):
     event = payload()
     event["attachments"] = [{"data_url": "/file.png", "content_type": "image/png"}]
