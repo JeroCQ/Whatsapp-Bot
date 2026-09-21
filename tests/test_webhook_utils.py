@@ -19,9 +19,31 @@ def test_whatsapp_destination_is_isolated_from_other_meta_numbers():
 
 def test_whatsapp_sender_must_be_a_real_phone_identifier():
     assert valid_whatsapp_sender("573025991292")
+    assert valid_whatsapp_sender("1733747451036137")
     assert not valid_whatsapp_sender(None)
     assert not valid_whatsapp_sender(573025991292)
     assert not valid_whatsapp_sender("not-a-phone")
+    assert not valid_whatsapp_sender("1" * 26)
+
+
+def test_whatsapp_sender_prefers_message_from():
+    contacts = [{"wa_id": "573111111111"}]
+    assert whatsapp_sender({"from": "573222222222"}, contacts) == "573222222222"
+
+
+def test_whatsapp_sender_recovers_from_one_meta_contact():
+    contacts = [{"wa_id": "573172807459", "profile": {"name": "Cliente"}}]
+    assert whatsapp_sender({"type": "text"}, contacts) == "573172807459"
+
+
+def test_whatsapp_sender_accepts_a_long_business_scoped_meta_identifier():
+    contacts = [{"wa_id": "1733747451036137", "profile": {"name": "Manager"}}]
+    assert whatsapp_sender({"from": "1733747451036137"}, contacts) == "1733747451036137"
+
+
+def test_whatsapp_sender_does_not_guess_an_invalid_or_ambiguous_contact():
+    assert whatsapp_sender({}, [{"wa_id": "invalid"}]) is None
+    assert whatsapp_sender({}, [{"wa_id": "573111111111"}, {"wa_id": "573222222222"}]) is None
 
 
 def test_whatsapp_sender_prefers_message_from():
