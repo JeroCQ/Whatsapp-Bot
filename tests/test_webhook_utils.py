@@ -46,6 +46,21 @@ def test_whatsapp_sender_does_not_guess_an_invalid_or_ambiguous_contact():
     assert whatsapp_sender({}, [{"wa_id": "573111111111"}, {"wa_id": "573222222222"}]) is None
 
 
+def test_whatsapp_sender_prefers_message_from():
+    contacts = [{"wa_id": "573111111111"}]
+    assert whatsapp_sender({"from": "573222222222"}, contacts) == "573222222222"
+
+
+def test_whatsapp_sender_recovers_from_one_meta_contact():
+    contacts = [{"wa_id": "573172807459", "profile": {"name": "Cliente"}}]
+    assert whatsapp_sender({"type": "text"}, contacts) == "573172807459"
+
+
+def test_whatsapp_sender_does_not_guess_an_invalid_or_ambiguous_contact():
+    assert whatsapp_sender({}, [{"wa_id": "invalid"}]) is None
+    assert whatsapp_sender({}, [{"wa_id": "573111111111"}, {"wa_id": "573222222222"}]) is None
+
+
 class WebhookUtilsTests(unittest.TestCase):
     def test_restart_accepts_both_commands(self):
         self.assertTrue(is_restart_command(" /restart "))
