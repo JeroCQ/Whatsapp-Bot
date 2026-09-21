@@ -202,13 +202,13 @@ def extension_from_mime(mime_type: str, default: str = ".ogg"):
     return mimetypes.guess_extension(mime_type.split(";")[0].strip()) or default
 
 
-def _prepare_audio_for_chatwoot(audio_bytes: bytes, mime_type: str) -> tuple[bytes, str, str]:
-    """Return audio in a format browsers can play reliably.
+def prepare_audio_for_delivery(audio_bytes: bytes, mime_type: str) -> tuple[bytes, str, str]:
+    """Return audio in a broadly supported MP3-compatible format.
 
     WhatsApp voice notes are commonly Ogg/Opus. Chatwoot can store those files,
-    but browser playback support is inconsistent, so transcode unsupported input
-    to MP3 with ffmpeg. Keeping this helper byte-oriented also lets callers reuse
-    media already downloaded for transcription.
+    while Chatwoot can also produce formats such as WAV that Meta rejects. Transcode
+    unsupported input to MP3 with ffmpeg so both delivery directions can use the
+    same byte-oriented normalization.
     """
     source_mime = (mime_type or "audio/ogg").split(";", 1)[0].strip().lower()
     compatible = {
@@ -234,6 +234,10 @@ def _prepare_audio_for_chatwoot(audio_bytes: bytes, mime_type: str) -> tuple[byt
     if not converted:
         raise ValueError("ffmpeg produced empty audio")
     return converted, "audio/mpeg", ".mp3"
+
+
+# Backward-compatible alias for integrations/tests that used the original helper.
+_prepare_audio_for_chatwoot = prepare_audio_for_delivery
 
 
 def send_audio_to_chatwoot(conversation_id: int, audio_bytes: bytes, mime_type: str = "audio/ogg",

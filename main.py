@@ -471,6 +471,13 @@ def upload_chatwoot_attachment_to_meta(attachment_url: str, fallback_mime_type: 
         res.close()
         mime_type = (res.headers.get("Content-Type") or fallback_mime_type or "application/octet-stream").split(";")[0]
 
+        # Meta does not accept every audio container that Chatwoot accepts (WAV
+        # recordings are a common example). Normalize agent audio to a supported
+        # MP3 before uploading it instead of forwarding Chatwoot's MIME verbatim.
+        if normalize_media_type(mime_type=mime_type, url=filename) == "audio":
+            media_bytes, mime_type, extension = chatwoot_api.prepare_audio_for_delivery(media_bytes, mime_type)
+            filename = f"{os.path.splitext(filename)[0] or 'audio'}{extension}"
+
         url = f"https://graph.facebook.com/v20.0/{config.WA_PHONE_NUMBER_ID}/media"
         headers = {"Authorization": f"Bearer {config.WA_TOKEN}"}
         files = {"file": (filename, media_bytes, mime_type)}
@@ -484,7 +491,8 @@ def upload_chatwoot_attachment_to_meta(attachment_url: str, fallback_mime_type: 
         return media_id
     except requests.exceptions.RequestException as e:
         response = getattr(e, "response", None)
-        print(f"[PROVIDER ERROR] provider=chatwoot operation=download_attachment status={getattr(response, 'status_code', None)} message=transport_error")
+        operation = "upload_attachment_to_meta" if response is not None and "graph.facebook.com" in str(getattr(response, "url", "")) else "download_attachment"
+        print(f"[PROVIDER ERROR] provider=chatwoot operation={operation} status={getattr(response, 'status_code', None)} message=transport_error")
         return None
     except Exception as e:
         print(f"[PROVIDER ERROR] provider=chatwoot operation=download_attachment status=none message={sanitize_text(e, (config.CHATWOOT_API_TOKEN, config.WA_TOKEN))}")
