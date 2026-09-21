@@ -18,6 +18,28 @@ def valid_whatsapp_sender(value) -> bool:
     return isinstance(value, str) and value.isdigit() and 7 <= len(value) <= 15
 
 
+def whatsapp_sender(message: dict, contacts: list) -> str | None:
+    """Resolve the sender from a Meta message, with a safe contact fallback.
+
+    Normal Cloud API notifications put the identifier in ``message.from``.  Some
+    otherwise valid notifications omit it while still supplying the same WhatsApp
+    identifier as ``contacts[].wa_id``.  Only use the fallback when there is one
+    unambiguous, valid contact; never guess between multiple customers.
+    """
+    direct_sender = message.get("from")
+    if valid_whatsapp_sender(direct_sender):
+        return direct_sender
+
+    contact_senders = {
+        contact.get("wa_id")
+        for contact in contacts
+        if isinstance(contact, dict) and valid_whatsapp_sender(contact.get("wa_id"))
+    }
+    if len(contact_senders) == 1:
+        return contact_senders.pop()
+    return None
+
+
 def whatsapp_destination_matches(value: dict, expected_phone_number_id: str) -> bool:
     """Keep a deployment from consuming another Meta number's webhook events.
 
