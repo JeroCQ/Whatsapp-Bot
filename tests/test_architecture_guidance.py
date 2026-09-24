@@ -30,3 +30,20 @@ def test_existing_brand_runbook_preserves_brand_isolation_and_uses_generic_upgra
     assert "CHATWOOT_ASSIGNMENT_MODE=automatic" in runbook
     assert "nunca `hmac_token`" in runbook
     assert "API inbox a `delivered`" in runbook
+
+
+def test_gemini_retry_runbooks_cover_fresh_and_existing_isolated_deployments():
+    new_brand = (ROOT / "docs" / "NEW_BUSINESS_SETUP.md").read_text(encoding="utf-8")
+    existing_brand = (ROOT / "docs" / "UPGRADE_EXISTING_BRANDS.md").read_text(encoding="utf-8")
+
+    for variable in (
+        "GEMINI_RETRY_ATTEMPTS",
+        "GEMINI_RETRY_BASE_SECONDS",
+        "GEMINI_RETRY_MAX_SECONDS",
+        "GEMINI_RETRY_JITTER_SECONDS",
+    ):
+        assert variable in new_brand
+        assert variable in existing_brand
+    normalized_existing_brand = " ".join(existing_brand.split())
+    assert "no requieren migración SQL" in normalized_existing_brand
+    assert "proyecto de cada marca" in existing_brand

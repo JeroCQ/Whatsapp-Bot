@@ -92,6 +92,29 @@ class SupabaseKeyConfigTests(TestCase):
         with mock.patch.dict(os.environ, REQUIRED_ENV, clear=True):
             self.assertEqual(load_config().DASHBOARD_STORAGE_TIMEOUT_SECONDS, 300)
 
+    def test_gemini_retry_defaults_are_bounded(self):
+        with mock.patch.dict(os.environ, REQUIRED_ENV, clear=True):
+            config = load_config()
+            self.assertEqual(config.GEMINI_RETRY_ATTEMPTS, 3)
+            self.assertEqual(config.GEMINI_RETRY_BASE_SECONDS, 1)
+            self.assertEqual(config.GEMINI_RETRY_MAX_SECONDS, 8)
+            self.assertEqual(config.GEMINI_RETRY_JITTER_SECONDS, 0.5)
+
+    def test_gemini_retry_settings_can_be_tuned_per_isolated_deployment(self):
+        env = {
+            **REQUIRED_ENV,
+            "GEMINI_RETRY_ATTEMPTS": "4",
+            "GEMINI_RETRY_BASE_SECONDS": "0.25",
+            "GEMINI_RETRY_MAX_SECONDS": "3",
+            "GEMINI_RETRY_JITTER_SECONDS": "0.1",
+        }
+        with mock.patch.dict(os.environ, env, clear=True):
+            config = load_config()
+            self.assertEqual(config.GEMINI_RETRY_ATTEMPTS, 4)
+            self.assertEqual(config.GEMINI_RETRY_BASE_SECONDS, 0.25)
+            self.assertEqual(config.GEMINI_RETRY_MAX_SECONDS, 3)
+            self.assertEqual(config.GEMINI_RETRY_JITTER_SECONDS, 0.1)
+
 
 class ChatwootAssignmentConfigTests(TestCase):
     CHATWOOT_ENV = {

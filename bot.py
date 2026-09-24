@@ -22,6 +22,7 @@ from file_catalog import (
 )
 from conversation_summary import compact_order_summary, supplied_customer_data
 from gemini_errors import is_depleted_prepaid_credits
+from gemini_retry import call_gemini_with_retry
 from webhook_utils import is_simple_greeting
 from database import (
     get_or_create_customer_state,
@@ -36,6 +37,22 @@ from database import (
 # 1. Inicializar el cliente con el nuevo SDK
 client = genai.Client(api_key=config.GEMINI_API_KEY)
 _gemini_semaphore = threading.BoundedSemaphore(config.GEMINI_MAX_CONCURRENT)
+
+
+def _call_gemini(operation: str, generate):
+    """Apply the deployment-wide retry policy without holding a slot while sleeping."""
+    def limited_call():
+        with _gemini_semaphore:
+            return generate()
+
+    return call_gemini_with_retry(
+        operation,
+        limited_call,
+        attempts=config.GEMINI_RETRY_ATTEMPTS,
+        base_seconds=config.GEMINI_RETRY_BASE_SECONDS,
+        max_seconds=config.GEMINI_RETRY_MAX_SECONDS,
+        jitter_seconds=config.GEMINI_RETRY_JITTER_SECONDS,
+    )
 
 # 2. Definir el esquema estricto
 class BotResponse(BaseModel):
@@ -101,9 +118,10 @@ def transcribe_audio_message(audio_bytes: bytes, mime_type: str = "audio/ogg") -
         return None
 
     try:
-        with _gemini_semaphore:
-            started_at = time.perf_counter()
-            response = client.models.generate_content(
+        started_at = time.perf_counter()
+        response = _call_gemini(
+            "audio_transcription",
+            lambda: client.models.generate_content(
                 model="gemini-flash-latest",
                 contents=[
                     "Transcribe este audio de WhatsApp en español. "
@@ -114,9 +132,10 @@ def transcribe_audio_message(audio_bytes: bytes, mime_type: str = "audio/ogg") -
                     ),
                 ],
                 config=types.GenerateContentConfig(temperature=0),
-            )
-            duration_ms = int((time.perf_counter() - started_at) * 1000)
-            print(f"[METRIC] gemini_audio_transcription duration_ms={duration_ms}")
+            ),
+        )
+        duration_ms = int((time.perf_counter() - started_at) * 1000)
+        print(f"[METRIC] gemini_audio_transcription duration_ms={duration_ms}")
         transcript = (response.text or "").strip()
         return transcript or None
     except Exception:
@@ -205,9 +224,10 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> BotT
     """
 
     try:
-        with _gemini_semaphore:
-            started_at = time.perf_counter()
-            response = client.models.generate_content(
+        started_at = time.perf_counter()
+        response = _call_gemini(
+            "message_logic",
+            lambda: client.models.generate_content(
                 model="gemini-flash-latest",
                 contents=prompt,
                 config=types.GenerateContentConfig(
@@ -216,9 +236,10 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> BotT
                     response_schema=BotResponse,
                     temperature=0.1, # Bajamos un poco más la temperatura para máxima adherencia a las reglas
                 ),
-            )
-            duration_ms = int((time.perf_counter() - started_at) * 1000)
-            print(f"[METRIC] gemini_message_logic phone={phone} duration_ms={duration_ms}")
+            ),
+        )
+        duration_ms = int((time.perf_counter() - started_at) * 1000)
+        print(f"[METRIC] gemini_message_logic phone={phone} duration_ms={duration_ms}")
         
         ai_data = json.loads(response.text)
         
