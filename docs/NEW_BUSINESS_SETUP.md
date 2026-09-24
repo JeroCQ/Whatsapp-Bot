@@ -151,6 +151,10 @@ lectura/edición de la instrucción, historial y carga del catálogo al objeto
 | `CATALOG_STORAGE_BUCKET` | Opcional | `catalogos` por defecto; bucket creado por bootstrap. |
 | `APP_ENV` | Opcional | `production` por defecto. |
 | `GEMINI_MAX_CONCURRENT` | Opcional | Entero; default `8`. |
+| `GEMINI_RETRY_ATTEMPTS` | Opcional | Intentos totales ante `429/5xx` transitorios; default `3`. |
+| `GEMINI_RETRY_BASE_SECONDS` | Opcional | Espera exponencial inicial; default `1`. |
+| `GEMINI_RETRY_MAX_SECONDS` | Opcional | Tope de cada espera, incluido jitter; default `8`. |
+| `GEMINI_RETRY_JITTER_SECONDS` | Opcional | Jitter máximo para separar reintentos concurrentes; default `0.5`. |
 | `PHONE_LOCK_TTL_SECONDS` | Opcional | Segundos; default `180`. |
 | `GEMINI_OUTAGE_RECOVERY_SINCE` | Solo reparación controlada | Timestamp de inicio de una caída; normalmente omitida y retirada tras recuperar. |
 

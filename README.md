@@ -357,6 +357,11 @@ Railway shows app logs per service:
 Search Railway logs for these markers:
 
 - `[QUEUE ERROR]` - Redis/RQ enqueue failed and the web process fell back to a FastAPI background task.
+- `[GEMINI RETRY]` - a transient Gemini response (`429`, `500`, `502`, `503` or
+  `504`) will be retried with bounded exponential backoff and jitter. The wait
+  does not hold a `GEMINI_MAX_CONCURRENT` slot.
+- `[GEMINI RETRY EXHAUSTED]` - all configured attempts failed; the normal
+  customer fallback and Chatwoot handoff run after this marker.
 - `[METRIC] gemini_message_logic` - Gemini text response latency.
 - `[METRIC] gemini_audio_transcription` - Gemini audio transcription latency.
 - `[METRIC] http_request host=graph.facebook.com` - WhatsApp/Meta API request latency/status.
@@ -381,8 +386,18 @@ evita duplicarlos durante un redeploy.
 El endpoint `/health` expone `gemini_outage_recovery.status` y los contadores
 `candidates`, `tickets_created`, `skipped` y `failed`.
 
-Todo error de inferencia nuevo pausa el bot y crea un handoff. Cuando la causa es
-facturación, el motivo distingue expresamente `no hay créditos prepagados`.
+Los errores transitorios de Gemini se reintentan antes de pausar el bot. La
+política predeterminada hace tres intentos totales, con backoff exponencial y
+jitter, y se puede ajustar por despliegue con `GEMINI_RETRY_ATTEMPTS`,
+`GEMINI_RETRY_BASE_SECONDS`, `GEMINI_RETRY_MAX_SECONDS` y
+`GEMINI_RETRY_JITTER_SECONDS`. Un error permanente, o un error transitorio que
+agota esos intentos, pausa el bot y crea un handoff. Cuando la causa es
+facturación, el motivo distingue expresamente `no hay créditos prepagados` y no
+se reintenta.
+
+Esta política aplica por igual a instalaciones nuevas y actualizaciones de marcas
+existentes, no agrega estado compartido y no requiere cambios en Supabase. Cada
+Railway lee sus propios valores y mantiene aislados su cuota, cola y credenciales.
 
 Los follow-ups de texto libre que quedarían programados 24 horas o más después
 del mensaje del cliente se cancelan: no se intenta enviarlos fuera de la ventana

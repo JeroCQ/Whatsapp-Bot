@@ -38,6 +38,14 @@ existentes y verifica solamente su correspondencia:
 Conserva el `PRESAVED_FILES_JSON` propio y el objeto `catalogos/{BUSINESS_ID}.*` de
 cada Supabase. No copies la imagen Velvet ni cambies el catálogo vigente.
 
+Los reintentos transitorios de Gemini se habilitan al desplegar el código y no
+requieren migración SQL ni alteran datos existentes. Cada Railway puede conservar
+los defaults (tres intentos totales, espera inicial de 1 segundo, tope de 8 y
+jitter de 0,5) o definir sus propios `GEMINI_RETRY_ATTEMPTS`,
+`GEMINI_RETRY_BASE_SECONDS`, `GEMINI_RETRY_MAX_SECONDS` y
+`GEMINI_RETRY_JITTER_SECONDS`. Configúralos en el proyecto de cada marca; no copies
+variables desde otro Railway como mecanismo de despliegue.
+
 En cada API inbox, configura su webhook URL hacia `/chatwoot-webhook` del Railway
 de esa misma marca y guarda el `secret` del canal como
 `CHATWOOT_API_INBOX_WEBHOOK_SECRET`. Es distinto del HMAC token de identidad y del

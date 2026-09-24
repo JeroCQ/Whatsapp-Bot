@@ -107,6 +107,16 @@ class Settings:
     REDIS_URL = os.getenv("REDIS_URL")
     QUEUE_NAME = os.getenv("QUEUE_NAME", "whatsapp-events")
     GEMINI_MAX_CONCURRENT = int(os.getenv("GEMINI_MAX_CONCURRENT", "8"))
+    # Total provider attempts for transient Gemini failures. Delays happen
+    # outside the concurrency semaphore so an overloaded request never blocks
+    # another brand-local worker slot while it waits to retry.
+    GEMINI_RETRY_ATTEMPTS = max(1, int(os.getenv("GEMINI_RETRY_ATTEMPTS", "3")))
+    GEMINI_RETRY_BASE_SECONDS = max(0.0, float(os.getenv("GEMINI_RETRY_BASE_SECONDS", "1")))
+    GEMINI_RETRY_MAX_SECONDS = max(
+        GEMINI_RETRY_BASE_SECONDS,
+        float(os.getenv("GEMINI_RETRY_MAX_SECONDS", "8")),
+    )
+    GEMINI_RETRY_JITTER_SECONDS = max(0.0, float(os.getenv("GEMINI_RETRY_JITTER_SECONDS", "0.5")))
     # Optional one-time Railway repair. When set to the outage start timestamp,
     # deployment startup creates Chatwoot handoffs for still-unanswered turns.
     GEMINI_OUTAGE_RECOVERY_SINCE = os.getenv("GEMINI_OUTAGE_RECOVERY_SINCE", "").strip()
