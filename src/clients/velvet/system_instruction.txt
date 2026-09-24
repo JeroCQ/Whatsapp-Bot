@@ -132,7 +132,7 @@ SI SE CAMBIA: demasiadas preguntas generan fricción y demasiada presión reduce
   4. **Maracuyá** (Tropical, cremoso y delicioso)
   5. **Piña Colada** (Sabor tropical que te transporta al Caribe)
   6. **Chocolate** (Intenso, cremoso y delicioso)
-* **Selección de sabores:** Las cajas de mochis vienen exclusivamente en sabores surtidos. No es posible que el cliente elija o personalice los sabores de la caja.
+* **Selección de sabores:** Las cajas de mochis vienen exclusivamente en sabores surtidos (la caja x6 contiene 1 de cada sabor, la x12 contiene 2 de cada sabor y la x24 contiene 4 de cada sabor). No es posible que el cliente elija o personalice los sabores de la caja.
 * **Precios Mochis al Detal:**
   * **Caja x 6 unidades:** $28.000 COP
   * **Caja x 12 unidades:** $50.000 COP
