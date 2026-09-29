@@ -23,6 +23,11 @@ if redis.call('GET', KEYS[1]) == ARGV[1] then
 end
 return 0
 """
+_CLAIM_ATTEMPT_SCRIPT = """
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+if redis.call('SET', KEYS[2], '1', 'NX', 'EX', ARGV[2]) then return 1 end
+return 0
+"""
 
 
 def follow_up_delay_seconds(delay_minutes: int, environ=None, now=None) -> int:
@@ -78,6 +83,22 @@ def claim_follow_up(phone_number: str, token: str) -> bool:
         return bool(queue.connection.eval(_CLAIM_TOKEN_SCRIPT, 1, _follow_up_key(phone_number), token))
     except Exception as exc:
         logger.warning("Could not claim follow-up for %s: %s", phone_number, exc)
+        return False
+
+
+def claim_follow_up_attempt(phone_number: str, token: str, stage: str, attempt: int) -> bool:
+    """Claim one attempt without consuming the active three-message sequence."""
+    try:
+        queue = get_queue()
+        if queue is None:
+            return False
+        attempt_key = f"{_follow_up_key(phone_number)}:{stage}:{attempt}"
+        return bool(queue.connection.eval(
+            _CLAIM_ATTEMPT_SCRIPT, 2, _follow_up_key(phone_number), attempt_key,
+            token, str(8 * 24 * 60 * 60),
+        ))
+    except Exception as exc:
+        logger.warning("Could not claim follow-up attempt for %s: %s", phone_number, exc)
         return False
 
 

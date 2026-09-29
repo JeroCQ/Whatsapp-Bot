@@ -24,6 +24,8 @@ from conversation_summary import compact_order_summary, supplied_customer_data
 from gemini_errors import is_depleted_prepaid_credits
 from gemini_retry import call_gemini_with_retry
 from webhook_utils import is_simple_greeting
+from commercial_intents import b2b_actions
+from observability import operational_event
 from database import (
     get_or_create_customer_state,
     get_catalog_assets,
@@ -72,6 +74,8 @@ class BotTurn:
     send_files_before_response: bool = False
     follow_up_message: str = ""
     follow_up_delay_minutes: int = 120
+    handoff_requested: bool = False
+    handoff_reason: str = ""
 
 
 FILE_CATALOG = load_file_catalog(config.PRESAVED_FILES_JSON, "PRESAVED_FILES_JSON")
@@ -247,6 +251,20 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> BotT
         trigger_handoff = ai_data.get("trigger_handoff", False)
         reason = ai_data.get("handoff_reason", "Transferencia por IA")
 
+        # High-value commercial intents cannot depend on probabilistic JSON.  The
+        # model still writes the conversational answer, while this classifier
+        # guarantees the backend action for every configured brand.
+        deterministic_b2b_reason, deterministic_b2b_files = (
+            b2b_actions(text, FILE_CATALOG) if not is_image else (None, [])
+        )
+        if deterministic_b2b_reason:
+            trigger_handoff = True
+            reason = deterministic_b2b_reason
+            response_text = (
+                "Gracias por contarnos sobre tu proyecto 😊 "
+                "Nuestro equipo comercial revisará contigo los detalles."
+            )
+
         # A greeting by itself can never satisfy a handoff rule. Keep this deterministic
         # so a model classification error cannot pause a newly resolved conversation.
         if trigger_handoff and is_simple_greeting(text) and not is_image:
@@ -260,6 +278,8 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> BotT
         model_selected_available_file = bool(requested_files)
         resend_requested = is_explicit_file_resend_request(text)
         deterministic_files = catalogs_for_customer_request(text, FILE_CATALOG, history)
+        if deterministic_b2b_reason:
+            requested_files = list(dict.fromkeys([*requested_files, *deterministic_b2b_files]))
         if not requested_files and deterministic_files:
             requested_files = deterministic_files
             print(f"[FILE CATALOG] Deterministic fallback selected={requested_files}")
@@ -267,6 +287,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> BotT
             requested_files
             and trigger_handoff
             and not is_image
+            and not deterministic_b2b_reason
             and (resend_requested or not model_selected_available_file)
         ):
             print("[IA HANDOFF SUPPRESSED] Solicitud de catálogo disponible se resuelve automáticamente")
@@ -280,6 +301,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> BotT
         )
 
         if trigger_handoff:
+            operational_event("HANDOFF_REQUESTED", phone=phone, stage="B2B_HIGH_VALUE" if deterministic_b2b_reason else "MODEL_HANDOFF", reason=reason, result="state_paused")
             print(f"[IA HANDOFF TRIGGERED] Razón: {reason}")
             pause_bot_for_handoff(phone, reason)
         follow_up_message = str(ai_data.get("follow_up_message") or "").strip()
@@ -295,6 +317,8 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> BotT
             bool(ai_data.get("send_files_before_response", False)),
             follow_up_message,
             follow_up_delay_minutes,
+            trigger_handoff,
+            reason if trigger_handoff else "",
         )
 
     except Exception as e:

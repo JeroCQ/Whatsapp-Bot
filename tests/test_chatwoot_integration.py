@@ -116,6 +116,25 @@ def test_handoff_summary_and_text_alert_are_private(monkeypatch):
     assert messages[1][1]["is_private"] is True
 
 
+def test_b2b_without_advisor_after_five_minutes_creates_priority_alert(monkeypatch):
+    messages = []
+    monkeypatch.setattr(main, "get_message_logs", lambda *args, **kwargs: [
+        {"role": "system", "content": "HANDOFF: Transferido a humano. Razón: B2B_HIGH_VALUE: interés en maquila"}
+    ])
+    monkeypatch.setattr(main, "get_or_create_customer_state", lambda *_args: {
+        "is_paused": True, "chatwoot_conversation_id": 34,
+    })
+    monkeypatch.setattr(chatwoot_api, "send_message_to_chatwoot", lambda *args, **kwargs: messages.append((args, kwargs)))
+
+    main.escalate_unattended_b2b_handoff(
+        "57300", 34, "B2B_HIGH_VALUE: interés en maquila"
+    )
+
+    assert len(messages) == 1
+    assert "PRIORIDAD" in messages[0][0][1]
+    assert messages[0][1]["is_private"] is True
+
+
 def test_catalog_delivery_failure_pauses_and_creates_explicit_handoff(monkeypatch):
     state = {"is_paused": False, "chatwoot_conversation_id": None}
     turn = type("Turn", (), {

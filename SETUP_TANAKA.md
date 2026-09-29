@@ -401,6 +401,27 @@ valor global no verificado.
 
 ## Diagnóstico: no hay notificación de handoff o Resolve no reactiva la IA
 
+### Automatización comercial B2B y seguimientos (proyectos nuevos y existentes)
+
+Esta versión no agrega columnas: tanto una instalación nueva con
+`supabase/bootstrap.sql` como una marca existente actualizada con
+`supabase/upgrade_existing_brand.sql` conservan paridad. Las secuencias activas y
+sus claves idempotentes viven en el Redis aislado de la marca; por eso el worker RQ
+con scheduler debe permanecer activo.
+
+* Una intención `B2B_HIGH_VALUE` pausa el bot, crea el handoff de Chatwoot y cancela
+  el seguimiento minorista. Si no aparece una respuesta pública de asesor en cinco
+  minutos, el mismo ticket recibe una alerta privada prioritaria.
+* Una respuesta inicial agenda intentos a 10 y 90 minutos; un catálogo, a 15 y 120;
+  una intención incompleta, a 10, 45 y 180; y pago/cotización, a 8, 30 y 120. El
+  tercer intento de las dos primeras etapas se mueve a la siguiente apertura por la
+  ventana 08:00–18:00 y se omite si excede la ventana de mensajería sin plantilla.
+* Cada respuesta entrante, intervención del asesor, handoff, rechazo o cierre
+  invalida el token Redis completo. Los jobs viejos pueden seguir visibles en RQ,
+  pero se omiten sin enviar al no poder reclamar la clave vigente.
+* Busca `[OPERATIONAL_EVENT]` para auditar `HANDOFF_*` y `FOLLOW_UP_*`, incluyendo
+  marca, conversación, etapa, intento, programación, razón y resultado.
+
 Estos dos síntomas dependen de recursos Chatwoot distintos:
 
 * Durante el handoff, tanto el resumen como la alerta inicial permanecen como notas
