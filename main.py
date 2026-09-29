@@ -3,6 +3,8 @@ import hashlib
 import json
 import os
 import time
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import requests
@@ -18,14 +20,11 @@ from conversation_summary import build_handoff_summary
 from config import config
 from database import (
     claim_webhook_event,
-    claim_follow_up,
     get_message_logs,
     get_or_create_customer_state,
     get_phone_by_chatwoot_id,
     mark_webhook_event_processed,
     pause_bot_for_handoff,
-    invalidate_follow_up,
-    register_follow_up,
     reset_client_history,
     recover_failed_handoff,
     resume_bot_state,
@@ -36,15 +35,20 @@ from database import (
 from http_client import MEDIA_TIMEOUT, get, post
 from processing_lock import phone_lock
 from queue_client import (
-    claim_follow_up,
+    claim_follow_up_attempt,
+    colombia_service_window_is_open,
     enqueue,
     enqueue_in,
     follow_up_delay_seconds,
     get_queue_stats,
     invalidate_follow_up,
+    meta_window_is_open,
+    next_colombia_opening_delay_seconds,
     queue_enabled,
     register_follow_up,
 )
+from commercial_intents import follow_up_plan, is_terminal_customer_message
+from observability import operational_event
 from webhook_utils import (
     chatwoot_event_identity,
     is_restart_command,
@@ -205,14 +209,45 @@ def send_whatsapp_message(to_number: str, text: str):
         raise ProviderError("meta", "send_text", getattr(getattr(e, "response", None), "status_code", None), message="transport error") from e
 
 
-def send_scheduled_follow_up(phone_number: str, token: str, message: str):
-    """Send a follow-up only if no newer customer message invalidated it."""
-    if not claim_follow_up(phone_number, token):
-        print(f"[FOLLOW UP] Cancelado o reemplazado para {phone_number}")
+def send_scheduled_follow_up(phone_number: str, token: str, message: str,
+                             stage: str = "LEGACY", attempt: int = 1,
+                             scheduled_at: str = "", meta_window_expires_at: str = ""):
+    """Idempotently send one attempt only while its sequence remains current."""
+    if not claim_follow_up_attempt(phone_number, token, stage, attempt):
+        operational_event("FOLLOW_UP_SKIPPED", phone=phone_number, stage=stage,
+                          reason="cancelled_replaced_or_duplicate", attempt=attempt,
+                          scheduled_at=scheduled_at, result="not_sent")
         return
-    send_whatsapp_message(phone_number, message)
-    save_message_log(phone_number, "model", message)
-    print(f"[FOLLOW UP] Enviado a {phone_number}")
+    if not meta_window_is_open(meta_window_expires_at):
+        invalidate_follow_up(phone_number)
+        operational_event("FOLLOW_UP_SKIPPED", phone=phone_number, stage=stage,
+                          reason="meta_24h_window_closed_no_approved_template", attempt=attempt,
+                          scheduled_at=scheduled_at, result="not_sent")
+        return
+    if not colombia_service_window_is_open():
+        invalidate_follow_up(phone_number)
+        operational_event("FOLLOW_UP_SKIPPED", phone=phone_number, stage=stage,
+                          reason="outside_colombia_service_window", attempt=attempt,
+                          scheduled_at=scheduled_at, result="not_sent")
+        return
+    state = get_or_create_customer_state(phone_number)
+    if not state or state.get("is_paused"):
+        invalidate_follow_up(phone_number)
+        operational_event("FOLLOW_UP_SKIPPED", phone=phone_number, stage=stage,
+                          reason="human_control", attempt=attempt,
+                          scheduled_at=scheduled_at, result="not_sent")
+        return
+    try:
+        send_whatsapp_message(phone_number, message)
+        save_message_log(phone_number, "model", message)
+        operational_event("FOLLOW_UP_SENT", phone=phone_number, stage=stage,
+                          reason="customer_silent", attempt=attempt,
+                          scheduled_at=scheduled_at, result="sent")
+    except Exception as exc:
+        operational_event("FOLLOW_UP_SKIPPED", phone=phone_number, stage=stage,
+                          reason="provider_failure", attempt=attempt,
+                          scheduled_at=scheduled_at, result=type(exc).__name__)
+        raise
 
 
 def schedule_follow_up(phone_number: str, message: str, delay_minutes: int):
@@ -239,6 +274,47 @@ def schedule_follow_up(phone_number: str, message: str, delay_minutes: int):
         # A reminder must never turn an otherwise successful customer reply into
         # a failed/retried webhook (for example, while the SQL migration is pending).
         print(f"[FOLLOW UP WARN] No se pudo programar para {phone_number}: {exc}")
+
+
+def schedule_follow_up_sequence(phone_number: str, plan, *, customer_message_received_at=None):
+    """Replace the prior sequence and enqueue at most three durable attempts."""
+    if not queue_enabled():
+        operational_event("FOLLOW_UP_SKIPPED", phone=phone_number, stage=plan.stage,
+                          reason="redis_unavailable", result="not_scheduled")
+        return
+    try:
+        resolved = [
+            next_colombia_opening_delay_seconds() if delay == -1 else follow_up_delay_seconds(delay)
+            for delay in plan.delays_minutes
+        ]
+        eligible = [(i, seconds) for i, seconds in enumerate(resolved, 1) if seconds < 24 * 60 * 60]
+        if not eligible:
+            operational_event("FOLLOW_UP_SKIPPED", phone=phone_number, stage=plan.stage,
+                              reason="outside_whatsapp_window_no_template", result="not_scheduled")
+            return
+        token = register_follow_up(phone_number, max(seconds for _, seconds in eligible))
+        # This sequence is created while processing the customer's inbound
+        # message, so all free-form attempts are anchored to that event's window.
+        window_start = customer_message_received_at or datetime.now(timezone.utc)
+        if window_start.tzinfo is None:
+            window_start = window_start.replace(tzinfo=timezone.utc)
+        meta_window_expires_at = (window_start.astimezone(timezone.utc) + timedelta(hours=24)).isoformat()
+        now = datetime.now(ZoneInfo("America/Bogota"))
+        for attempt, seconds in eligible:
+            scheduled = now + timedelta(seconds=seconds)
+            enqueue_in(
+                seconds, send_scheduled_follow_up, phone_number, token,
+                plan.messages[attempt - 1], plan.stage, attempt, scheduled.isoformat(),
+                meta_window_expires_at,
+                job_id=f"follow-up-{phone_number}-{plan.stage}-{attempt}-{token}",
+            )
+            operational_event("FOLLOW_UP_SCHEDULED", phone=phone_number, stage=plan.stage,
+                              reason="customer_silent", attempt=attempt,
+                              scheduled_at=scheduled, result="queued")
+    except Exception as exc:
+        invalidate_follow_up(phone_number)
+        operational_event("FOLLOW_UP_SKIPPED", phone=phone_number, stage=plan.stage,
+                          reason="queue_failure", result=type(exc).__name__)
 
 
 def send_whatsapp_media(to_number: str, media_id: str, media_type: str, caption: str = None, filename: str = None):
@@ -503,6 +579,8 @@ def _create_handoff_ticket_if_needed(sender_phone: str, sender_name: str, new_st
     if not new_state["is_paused"] or new_state.get("chatwoot_conversation_id"):
         return
 
+    invalidate_follow_up(sender_phone)
+
     print("[DEBUG] 8. Bot decidió pausarse, creando ticket...")
     print(
         f"[CHATWOOT CONFIG] account_id={config.CHATWOOT_ACCOUNT_ID} "
@@ -517,11 +595,13 @@ def _create_handoff_ticket_if_needed(sender_phone: str, sender_name: str, new_st
     display_name = f"{sender_name} (+{sender_phone})"
     contact_id = chatwoot_api.get_or_create_contact(sender_phone, name=display_name)
     if not contact_id:
+        operational_event("HANDOFF_FAILED", phone=sender_phone, stage="HANDOFF", reason=new_state.get("handoff_reason", "contact_creation"), result="contact_failed")
         recover_failed_handoff(sender_phone)
         return
 
     conv_id = chatwoot_api.create_conversation(contact_id)
     if not conv_id:
+        operational_event("HANDOFF_FAILED", phone=sender_phone, stage="HANDOFF", reason=new_state.get("handoff_reason", "conversation_creation"), result="conversation_failed")
         recover_failed_handoff(sender_phone)
         return
 
@@ -533,6 +613,7 @@ def _create_handoff_ticket_if_needed(sender_phone: str, sender_name: str, new_st
     ])
     reason = new_state.get("handoff_reason", "Razón no especificada")
     save_message_log(sender_phone, "system", f"HANDOFF: Transferido a humano. Razón: {reason}")
+    operational_event("HANDOFF_CREATED", phone=sender_phone, stage="B2B_HIGH_VALUE" if reason.startswith("B2B_HIGH_VALUE") else "HANDOFF", reason=reason, result="chatwoot_created")
     short_alert = f"🔔 {reason}"
     context_details = (
         f"{build_handoff_summary(logs, state_check.get('customer_data'), state_check.get('order_summary'))}\n"
@@ -557,6 +638,33 @@ def _create_handoff_ticket_if_needed(sender_phone: str, sender_name: str, new_st
     else:
         chatwoot_api.send_message_to_chatwoot(conv_id, context_details, is_private=True)
         chatwoot_api.send_message_to_chatwoot(conv_id, short_alert, is_private=True)
+    if reason.startswith("B2B_HIGH_VALUE") and queue_enabled():
+        enqueue_in(
+            5 * 60, escalate_unattended_b2b_handoff, sender_phone, conv_id, reason,
+            job_id=f"b2b-escalation-{config.BUSINESS_ID}-{conv_id}",
+        )
+
+
+def escalate_unattended_b2b_handoff(phone_number: str, conversation_id: int, reason: str):
+    """Raise one priority reminder when no advisor has logged a public response."""
+    logs = get_message_logs(phone_number, limit=50)
+    handoff_index = max((i for i, row in enumerate(logs) if row.get("role") == "system" and str(row.get("content", "")).startswith("HANDOFF:")), default=-1)
+    if any(row.get("role") == "asesor" for row in logs[handoff_index + 1:]):
+        operational_event("FOLLOW_UP_CANCELLED", phone=phone_number, stage="B2B_ESCALATION",
+                          reason="advisor_intervened", attempt=1, result="not_alerted")
+        return
+    state = get_or_create_customer_state(phone_number)
+    if not state or state.get("chatwoot_conversation_id") != conversation_id:
+        operational_event("FOLLOW_UP_SKIPPED", phone=phone_number, stage="B2B_ESCALATION",
+                          reason="handoff_no_longer_active", attempt=1, result="not_alerted")
+        return
+    chatwoot_api.send_message_to_chatwoot(
+        conversation_id,
+        f"🚨 PRIORIDAD: lead empresarial sin gestión después de 5 minutos. {reason}",
+        is_private=True,
+    )
+    operational_event("FOLLOW_UP_SENT", phone=phone_number, stage="B2B_ESCALATION",
+                      reason="advisor_sla_exceeded", attempt=1, result="priority_alert_created")
 
 
 @app.post("/api/manual-handoff", dependencies=[Depends(admin_auth)])
@@ -756,13 +864,18 @@ def process_whatsapp_message(sender_phone: str, sender_name: str, message_body: 
 
 
 def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, message_body: str, is_image: bool = False, media_id: str = None, is_audio: bool = False, audio_media_id: str = None, media_type: str = None, mime_type: str = None, filename: str = None):
+    customer_message_received_at = datetime.now(timezone.utc)
     effective_media_id = media_id or audio_media_id
     effective_media_type = normalize_media_type(media_type or ("image" if is_image else "audio" if is_audio else None), mime_type) if effective_media_id else None
     is_image = effective_media_type == "image"
     is_audio = effective_media_type == "audio"
     print(f"\n[DEBUG] 1. Recibido mensaje de {sender_phone} (Media: {effective_media_type or 'texto'})")
     # Any inbound customer activity cancels the previously planned reminder.
+    terminal_customer_signal = is_terminal_customer_message(message_body)
     invalidate_follow_up(sender_phone)
+    operational_event("FOLLOW_UP_CANCELLED", phone=sender_phone, stage="ACTIVE",
+                      reason="customer_replied" if not terminal_customer_signal else "terminal_customer_signal",
+                      result="invalidated")
 
     if is_restart_command(message_body):
         reset_client_history(sender_phone)
@@ -888,8 +1001,12 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
             sender_phone, sender_name, new_state, effective_media_id, message_body,
             mime_type, filename, effective_media_type, audio_bytes, downloaded_mime_type,
         )
-        if primary_delivered and not new_state.get("is_paused"):
-            schedule_follow_up(sender_phone, ai_turn.follow_up_message, ai_turn.follow_up_delay_minutes)
+        if primary_delivered and not new_state.get("is_paused") and not terminal_customer_signal:
+            plan = follow_up_plan(ai_turn.response, delivered_files, ai_turn.follow_up_message)
+            schedule_follow_up_sequence(
+                sender_phone, plan,
+                customer_message_received_at=customer_message_received_at,
+            )
 
 
 def resolved_customer_message() -> str:
@@ -955,6 +1072,9 @@ def process_chatwoot_event(data: dict, event_id: str = None):
             attachments = data.get("attachments")
             phone = get_phone_by_chatwoot_id(conv_id) if conv_id else None
             if phone:
+                invalidate_follow_up(phone)
+                operational_event("FOLLOW_UP_CANCELLED", phone=phone, stage="ACTIVE",
+                                  reason="advisor_intervened", result="invalidated")
                 catalog_command = advisor_catalog_command(content) if not attachments else None
                 if catalog_command:
                     from bot import refresh_managed_catalogs

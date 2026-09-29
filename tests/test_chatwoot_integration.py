@@ -116,6 +116,25 @@ def test_handoff_summary_and_text_alert_are_private(monkeypatch):
     assert messages[1][1]["is_private"] is True
 
 
+def test_b2b_without_advisor_after_five_minutes_creates_priority_alert(monkeypatch):
+    messages = []
+    monkeypatch.setattr(main, "get_message_logs", lambda *args, **kwargs: [
+        {"role": "system", "content": "HANDOFF: Transferido a humano. Razón: B2B_HIGH_VALUE: interés en maquila"}
+    ])
+    monkeypatch.setattr(main, "get_or_create_customer_state", lambda *_args: {
+        "is_paused": True, "chatwoot_conversation_id": 34,
+    })
+    monkeypatch.setattr(chatwoot_api, "send_message_to_chatwoot", lambda *args, **kwargs: messages.append((args, kwargs)))
+
+    main.escalate_unattended_b2b_handoff(
+        "57300", 34, "B2B_HIGH_VALUE: interés en maquila"
+    )
+
+    assert len(messages) == 1
+    assert "PRIORIDAD" in messages[0][0][1]
+    assert messages[0][1]["is_private"] is True
+
+
 def test_catalog_delivery_failure_pauses_and_creates_explicit_handoff(monkeypatch):
     state = {"is_paused": False, "chatwoot_conversation_id": None}
     turn = type("Turn", (), {
@@ -363,6 +382,57 @@ def test_followup_at_or_after_24_hours_is_cancelled(monkeypatch, capsys):
 
     assert calls == [("cancel", "57300")]
     assert "fuera de la ventana de 24 horas" in capsys.readouterr().out
+
+
+def test_scheduled_followup_rechecks_meta_window_before_send(monkeypatch):
+    sent = []
+    cancelled = []
+    monkeypatch.setattr(main, "claim_follow_up_attempt", lambda *args: True)
+    monkeypatch.setattr(main, "meta_window_is_open", lambda *_args: False)
+    monkeypatch.setattr(main, "invalidate_follow_up", lambda phone: cancelled.append(phone))
+    monkeypatch.setattr(main, "send_whatsapp_message", lambda *args: sent.append(args))
+
+    main.send_scheduled_follow_up(
+        "57300", "token", "mensaje", "CATALOG_SENT", 2,
+        "2026-09-30T08:00:00-05:00", "2026-09-29T20:00:00+00:00",
+    )
+
+    assert sent == []
+    assert cancelled == ["57300"]
+
+
+def test_scheduled_followup_rechecks_colombia_hours_before_send(monkeypatch):
+    sent = []
+    monkeypatch.setattr(main, "claim_follow_up_attempt", lambda *args: True)
+    monkeypatch.setattr(main, "meta_window_is_open", lambda *_args: True)
+    monkeypatch.setattr(main, "colombia_service_window_is_open", lambda: False)
+    monkeypatch.setattr(main, "invalidate_follow_up", lambda *_args: None)
+    monkeypatch.setattr(main, "send_whatsapp_message", lambda *args: sent.append(args))
+
+    main.send_scheduled_follow_up(
+        "57300", "token", "mensaje", "FIRST_RESPONSE", 1,
+        "2026-09-29T18:01:00-05:00", "2026-09-30T15:00:00+00:00",
+    )
+
+    assert sent == []
+
+
+def test_sequence_meta_expiry_is_anchored_to_inbound_message(monkeypatch):
+    queued = []
+    inbound = main.datetime(2026, 9, 29, 15, 0, tzinfo=main.timezone.utc)
+    plan = types.SimpleNamespace(
+        stage="FIRST_RESPONSE", delays_minutes=(10,), messages=("mensaje",),
+    )
+    monkeypatch.setattr(main, "queue_enabled", lambda: True)
+    monkeypatch.setattr(main, "follow_up_delay_seconds", lambda _minutes: 600)
+    monkeypatch.setattr(main, "register_follow_up", lambda *_args: "token")
+    monkeypatch.setattr(main, "enqueue_in", lambda *args, **kwargs: queued.append((args, kwargs)))
+
+    main.schedule_follow_up_sequence(
+        "57300", plan, customer_message_received_at=inbound,
+    )
+
+    assert queued[0][0][8] == "2026-09-30T15:00:00+00:00"
 
 
 def test_agent_text_forwarding_is_scoped(monkeypatch):
