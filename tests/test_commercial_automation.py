@@ -34,9 +34,9 @@ def test_catalog_stage_replaces_first_response_and_has_three_attempts():
     first = follow_up_plan("Hola, ¿qué buscas?", [], "")
     catalog = follow_up_plan("Te comparto opciones", ["catalogo_distibuidores"], "")
     assert first.stage == "FIRST_RESPONSE"
-    assert first.delays_minutes == (10, 90, 1440)
+    assert first.delays_minutes == (10, 90, -1)
     assert catalog.stage == "CATALOG_SENT"
-    assert catalog.delays_minutes == (15, 120, 1440)
+    assert catalog.delays_minutes == (15, 120, -1)
     assert all("catálogo" not in message.lower() or "viste" in message.lower() for message in catalog.messages)
 
 
@@ -53,7 +53,7 @@ def test_incomplete_and_payment_stages_use_aggressive_cadences_and_context():
 def test_deferred_delivery_is_resumed_at_next_service_opening():
     plan = follow_up_plan("Te atendemos mañana", [], "")
     assert plan.stage == "DEFERRED_DELIVERY"
-    assert plan.delays_minutes == (1440,)
+    assert plan.delays_minutes == (-1,)
 
 
 def test_rejection_payment_and_close_are_terminal():

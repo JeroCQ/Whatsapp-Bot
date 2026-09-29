@@ -7,9 +7,12 @@ from zoneinfo import ZoneInfo
 
 from queue_client import (
     claim_follow_up,
+    colombia_service_window_is_open,
     enqueue_in,
     follow_up_delay_seconds,
     invalidate_follow_up,
+    meta_window_is_open,
+    next_colombia_opening_delay_seconds,
     register_follow_up,
     web_queue_mode,
 )
@@ -83,6 +86,24 @@ class FollowUpDelayTests(unittest.TestCase):
     def test_test_override_never_allows_zero_delay(self):
         environment = {"FOLLOW_UP_TEST_DELAY_SECONDS": "0"}
         self.assertEqual(follow_up_delay_seconds(120, environment), 1)
+
+    def test_meta_window_uses_absolute_utc_instants(self):
+        now = datetime(2026, 9, 29, 15, 0, tzinfo=ZoneInfo("UTC"))
+        self.assertTrue(meta_window_is_open("2026-09-30T09:59:59-05:00", now))
+        self.assertFalse(meta_window_is_open("2026-09-29T10:00:00-05:00", now))
+        self.assertFalse(meta_window_is_open("", now))
+
+    def test_colombia_window_is_checked_at_execution_time(self):
+        self.assertTrue(colombia_service_window_is_open(
+            datetime(2026, 9, 29, 8, 0, tzinfo=ZoneInfo("America/Bogota"))
+        ))
+        self.assertFalse(colombia_service_window_is_open(
+            datetime(2026, 9, 29, 18, 0, tzinfo=ZoneInfo("America/Bogota"))
+        ))
+
+    def test_last_attempt_targets_next_colombia_opening(self):
+        now = datetime(2026, 9, 29, 10, 30, tzinfo=ZoneInfo("America/Bogota"))
+        self.assertEqual(next_colombia_opening_delay_seconds(now), 21 * 60 * 60 + 30 * 60)
 
     def test_enqueue_in_passes_exact_delay_to_rq(self):
         class FakeQueue:

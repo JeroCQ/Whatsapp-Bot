@@ -3,7 +3,7 @@ import hashlib
 import json
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
@@ -36,11 +36,14 @@ from http_client import MEDIA_TIMEOUT, get, post
 from processing_lock import phone_lock
 from queue_client import (
     claim_follow_up_attempt,
+    colombia_service_window_is_open,
     enqueue,
     enqueue_in,
     follow_up_delay_seconds,
     get_queue_stats,
     invalidate_follow_up,
+    meta_window_is_open,
+    next_colombia_opening_delay_seconds,
     queue_enabled,
     register_follow_up,
 )
@@ -208,11 +211,23 @@ def send_whatsapp_message(to_number: str, text: str):
 
 def send_scheduled_follow_up(phone_number: str, token: str, message: str,
                              stage: str = "LEGACY", attempt: int = 1,
-                             scheduled_at: str = ""):
+                             scheduled_at: str = "", meta_window_expires_at: str = ""):
     """Idempotently send one attempt only while its sequence remains current."""
     if not claim_follow_up_attempt(phone_number, token, stage, attempt):
         operational_event("FOLLOW_UP_SKIPPED", phone=phone_number, stage=stage,
                           reason="cancelled_replaced_or_duplicate", attempt=attempt,
+                          scheduled_at=scheduled_at, result="not_sent")
+        return
+    if not meta_window_is_open(meta_window_expires_at):
+        invalidate_follow_up(phone_number)
+        operational_event("FOLLOW_UP_SKIPPED", phone=phone_number, stage=stage,
+                          reason="meta_24h_window_closed_no_approved_template", attempt=attempt,
+                          scheduled_at=scheduled_at, result="not_sent")
+        return
+    if not colombia_service_window_is_open():
+        invalidate_follow_up(phone_number)
+        operational_event("FOLLOW_UP_SKIPPED", phone=phone_number, stage=stage,
+                          reason="outside_colombia_service_window", attempt=attempt,
                           scheduled_at=scheduled_at, result="not_sent")
         return
     state = get_or_create_customer_state(phone_number)
@@ -261,26 +276,36 @@ def schedule_follow_up(phone_number: str, message: str, delay_minutes: int):
         print(f"[FOLLOW UP WARN] No se pudo programar para {phone_number}: {exc}")
 
 
-def schedule_follow_up_sequence(phone_number: str, plan):
+def schedule_follow_up_sequence(phone_number: str, plan, *, customer_message_received_at=None):
     """Replace the prior sequence and enqueue at most three durable attempts."""
     if not queue_enabled():
         operational_event("FOLLOW_UP_SKIPPED", phone=phone_number, stage=plan.stage,
                           reason="redis_unavailable", result="not_scheduled")
         return
     try:
-        resolved = [follow_up_delay_seconds(delay) for delay in plan.delays_minutes]
+        resolved = [
+            next_colombia_opening_delay_seconds() if delay == -1 else follow_up_delay_seconds(delay)
+            for delay in plan.delays_minutes
+        ]
         eligible = [(i, seconds) for i, seconds in enumerate(resolved, 1) if seconds < 24 * 60 * 60]
         if not eligible:
             operational_event("FOLLOW_UP_SKIPPED", phone=phone_number, stage=plan.stage,
                               reason="outside_whatsapp_window_no_template", result="not_scheduled")
             return
         token = register_follow_up(phone_number, max(seconds for _, seconds in eligible))
+        # This sequence is created while processing the customer's inbound
+        # message, so all free-form attempts are anchored to that event's window.
+        window_start = customer_message_received_at or datetime.now(timezone.utc)
+        if window_start.tzinfo is None:
+            window_start = window_start.replace(tzinfo=timezone.utc)
+        meta_window_expires_at = (window_start.astimezone(timezone.utc) + timedelta(hours=24)).isoformat()
         now = datetime.now(ZoneInfo("America/Bogota"))
         for attempt, seconds in eligible:
             scheduled = now + timedelta(seconds=seconds)
             enqueue_in(
                 seconds, send_scheduled_follow_up, phone_number, token,
                 plan.messages[attempt - 1], plan.stage, attempt, scheduled.isoformat(),
+                meta_window_expires_at,
                 job_id=f"follow-up-{phone_number}-{plan.stage}-{attempt}-{token}",
             )
             operational_event("FOLLOW_UP_SCHEDULED", phone=phone_number, stage=plan.stage,
@@ -839,6 +864,7 @@ def process_whatsapp_message(sender_phone: str, sender_name: str, message_body: 
 
 
 def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, message_body: str, is_image: bool = False, media_id: str = None, is_audio: bool = False, audio_media_id: str = None, media_type: str = None, mime_type: str = None, filename: str = None):
+    customer_message_received_at = datetime.now(timezone.utc)
     effective_media_id = media_id or audio_media_id
     effective_media_type = normalize_media_type(media_type or ("image" if is_image else "audio" if is_audio else None), mime_type) if effective_media_id else None
     is_image = effective_media_type == "image"
@@ -977,7 +1003,10 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
         )
         if primary_delivered and not new_state.get("is_paused") and not terminal_customer_signal:
             plan = follow_up_plan(ai_turn.response, delivered_files, ai_turn.follow_up_message)
-            schedule_follow_up_sequence(sender_phone, plan)
+            schedule_follow_up_sequence(
+                sender_phone, plan,
+                customer_message_received_at=customer_message_received_at,
+            )
 
 
 def resolved_customer_message() -> str:

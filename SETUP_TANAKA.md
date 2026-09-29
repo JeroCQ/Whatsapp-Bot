@@ -422,6 +422,27 @@ con scheduler debe permanecer activo.
 * Busca `[OPERATIONAL_EVENT]` para auditar `HANDOFF_*` y `FOLLOW_UP_*`, incluyendo
   marca, conversación, etapa, intento, programación, razón y resultado.
 
+#### Zona horaria de Supabase y ventana de Meta
+
+Aplica tanto a proyectos nuevos como existentes. PostgreSQL guarda `timestamptz`
+como un instante UTC; cambiar el valor almacenado a una hora local perdería
+información y produciría errores en integraciones y cambios futuros de zona. Para
+consultar los registros en hora Colombia sin alterar los datos canónicos usa:
+
+```sql
+select created_at,
+       created_at at time zone 'America/Bogota' as created_at_colombia
+from public.message_logs
+order by created_at desc;
+```
+
+Los eventos operativos incluyen `observed_at` en UTC y
+`observed_at_colombia` con offset `-05:00`. Los follow-ups conservan además su
+hora programada con zona Colombia. El worker vuelve a validar al ejecutar —no
+solo al agendar— tanto el horario 08:00–18:00 de Colombia como la ventana de 24
+horas contada desde el mensaje entrante. Si la ventana de Meta ya cerró y no hay
+una plantilla aprobada configurada, registra el motivo y no envía texto libre.
+
 Estos dos síntomas dependen de recursos Chatwoot distintos:
 
 * Durante el handoff, tanto el resumen como la alerta inicial permanecen como notas

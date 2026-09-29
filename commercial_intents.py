@@ -49,10 +49,10 @@ def follow_up_plan(response: str, requested_files: list[str], model_message: str
     text = _normal(f"{response} {model_message}")
     if re.search(r"\b(manana|siguiente dia habil|proximo dia habil|el lunes)\b", text):
         message = model_message or "Hola 😊 Ya estamos atendiendo. ¿Retomamos lo que querías pedir?"
-        return FollowUpPlan("DEFERRED_DELIVERY", (1440,), (message,))
+        return FollowUpPlan("DEFERRED_DELIVERY", (-1,), (message,))
     if requested_files:
         message = "¿Viste alguna opción que te gustara? Dime si prefieres panadería o postres y te recomiendo dos opciones con precio 😊"
-        return FollowUpPlan("CATALOG_SENT", (15, 120, 1440), (message, message, message))
+        return FollowUpPlan("CATALOG_SENT", (15, 120, -1), (message, message, message))
     if re.search(r"\b(comprobante|transferencia|pago|metodo de pago|total (?:es|de))\b", text):
         message = model_message or "¿Te ayudo a dejarlo confirmado? Apenas completes el pago o me confirmes el método, seguimos con tu pedido 😊"
         return FollowUpPlan("PAYMENT_PENDING", (8, 30, 120), (message, message, message))
@@ -60,7 +60,7 @@ def follow_up_plan(response: str, requested_files: list[str], model_message: str
         message = model_message or "Te dejo adelantado lo que elegiste 😊 Solo me falta el siguiente dato para confirmar el total. ¿Me lo compartes?"
         return FollowUpPlan("INCOMPLETE_INTENT", (10, 45, 180), (message, message, message))
     message = "Hola 😊 ¿Quieres que te ayude a elegir la opción que mejor se ajuste a lo que buscas?"
-    return FollowUpPlan("FIRST_RESPONSE", (10, 90, 1440), (message, message, message))
+    return FollowUpPlan("FIRST_RESPONSE", (10, 90, -1), (message, message, message))
 
 
 def is_terminal_customer_message(text: str) -> bool:

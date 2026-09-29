@@ -2,7 +2,7 @@ import logging
 import os
 import re
 import uuid
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
@@ -46,6 +46,42 @@ def follow_up_delay_seconds(delay_minutes: int, environ=None, now=None) -> int:
     elif target.time() >= time(18, 0):
         target = (target + timedelta(days=1)).replace(hour=8, minute=0, second=0, microsecond=0)
     return max(1, int((target - current).total_seconds()))
+
+
+def next_colombia_opening_delay_seconds(now=None) -> int:
+    """Return seconds until the next 08:00 opening after the current turn."""
+    colombia_tz = ZoneInfo("America/Bogota")
+    current = now or datetime.now(colombia_tz)
+    current = current.replace(tzinfo=colombia_tz) if current.tzinfo is None else current.astimezone(colombia_tz)
+    if current.time() < time(8, 0):
+        target = current.replace(hour=8, minute=0, second=0, microsecond=0)
+    else:
+        target = (current + timedelta(days=1)).replace(hour=8, minute=0, second=0, microsecond=0)
+    return max(1, int((target - current).total_seconds()))
+
+
+def meta_window_is_open(expires_at: str, now=None) -> bool:
+    """Return whether a free-form message is still inside Meta's 24-hour window."""
+    if not expires_at:
+        return False
+    try:
+        expiry = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return False
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=timezone.utc)
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return current.astimezone(timezone.utc) < expiry.astimezone(timezone.utc)
+
+
+def colombia_service_window_is_open(now=None) -> bool:
+    """Protect sends at execution time, including jobs delayed by worker outages."""
+    colombia_tz = ZoneInfo("America/Bogota")
+    current = now or datetime.now(colombia_tz)
+    current = current.replace(tzinfo=colombia_tz) if current.tzinfo is None else current.astimezone(colombia_tz)
+    return time(8, 0) <= current.time() < time(18, 0)
 
 
 def _follow_up_key(phone_number: str) -> str:
