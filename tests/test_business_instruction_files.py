@@ -94,11 +94,12 @@ def test_tanaka_instruction_answers_before_using_catalog_and_limits_follow_up():
     instruction = (ROOT / "src/clients/tanaka/system_instruction.txt").read_text(encoding="utf-8")
     assert "El catálogo apoya la respuesta, pero no la reemplaza" in instruction
     assert 'escribe solamente "precio"' in instruction
-    assert "ya eligió al menos un producto" in instruction
-    assert "envío de catálogo sin selección de producto" in instruction
+    assert "Solo puede existir una secuencia activa por conversación" in instruction
+    assert "B2B_HIGH_VALUE" in instruction
+    assert "Después de un saludo, primera respuesta o catálogo" in instruction
     assert "Pregunta repetida o corrección" in instruction
     assert "súper pendiente" in instruction
-    assert "Si el cliente no responde a ese seguimiento, no generes otro" in instruction
+    assert "hasta tres intentos" in instruction
     assert "entre las 8:00 a.m. y las 6:00 p.m." in instruction
     assert "usa de 1 a 3 líneas breves" in instruction
     assert "no una renuncia a vender" in instruction
