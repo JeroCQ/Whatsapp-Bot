@@ -379,17 +379,7 @@ Manejamos productos saludables sin químicos, libres de azúcar, gluten, maíz y
 
 <!-- POSTRES KETO: distingue precio unitario y precio por tres. Si cambia una promoción, conserva claramente ambas presentaciones para que el bot no aplique el ahorro a una sola unidad. -->
 
-### Tortas Saludables (150g c/u)
-
-* **Torta Amapola Berry:**
-  * **Precio:** $22.000 x 1und / Promoción 2und: $40.000
-  * **Ingredientes:** Harina de arroz, arequipe sin azúcar, mantequilla ghee, huevo, alulosa, mermelada de frutos rojos sin azúcar, amapola, polvo para hornear.
-
-* **Red Velvet Saludable:**
-  * **Precio:** $23.000 x 1und
-  * **Ingredientes:** Harina de arroz, mantequilla ghee, alulosa, huevo, cocoa, queso crema, fruto del monje, polvo para hornear.
-
-* **Duo Encanto (300g):** $41.000 (Incluye 1x Torta Amapola Berry y 1x Red Velvet Saludable).
+*(Nota de productos descontinuados / de temporada: La Torta Amapola Berry, la Red Velvet Saludable, el Alfajor Keto y el Yogurt Coco Lulada fueron productos de temporada y ya no están disponibles. Si un cliente pregunta por alguno de ellos, explica amablemente que fueron ediciones/productos de temporada).*
 
 ---
 
@@ -404,9 +394,7 @@ Manejamos productos saludables sin químicos, libres de azúcar, gluten, maíz y
   * **Precio:** $22.000 x 1und
   * **Ingredientes:** Harina de almendras, chocolate sin azúcar, arequipe sin azúcar, huevo, mantequilla ghee, alulosa, polvo para hornear.
 
-* **Alfajores sin azúcar (85g c/u):**
-  * **Precio:** $18.000 x 1und
-  * **Ingredientes:** Harina de almendras, harina de coco, chocolate sin azúcar, arequipe sin azúcar, mantequilla ghee, alulosa, polvo para hornear.
+
 
 ---
 
@@ -427,7 +415,6 @@ Manejamos productos saludables sin químicos, libres de azúcar, gluten, maíz y
 * **Sabores e ingredientes:**
   * **Frutos Rojos:** uva, fresa, mora.
   * **Frutos Amarillos:** mango, maracuyá, piña, uchuva.
-  * **Coco Lulada:** lulo.
   * **Base común:** coco, agua, goma xantana, agar agar, monk fruit y cultivo probiótico.
 * **Presentación 1100ml (aprox. 6 porciones):** $37.000
 * **Presentación 250ml:** $13.000
@@ -523,7 +510,7 @@ Los combos se consideran disponibles bajo la misma regla del catálogo: solo se 
 * **Combo Dulce Sin Azúcar y Sin Culpas ($68.400):** 4x Mermeladas 250g.
 * **Combo Dulce Sin Remordimientos Keto Saludable ($108.500):** Crema de chocoalmendras, Crema de almendras, Arequipe Oishi.
 * **Combo Trio TanaKETO ($52.500):** 1x Galleta Keto con Proteína, 1x Brownie Keto, 1x Alfajor sin azúcar Keto.
-* **Duo Encanto ($41.000):** 1x Torta Amapola Berry, 1x Red Velvet Saludable.
+
 
 ---
 
