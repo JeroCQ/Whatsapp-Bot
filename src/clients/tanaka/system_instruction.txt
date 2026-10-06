@@ -2,7 +2,7 @@
 <!--
 GUÍA PARA QUIEN EDITA ESTE SYSTEM INSTRUCTION
 
-VERSIÓN: Tanaka 13.3. Esta versión aclara el handoff empresarial y las etapas de seguimiento persistente. No autoriza cambios de archivos, funcionamiento de catálogos, productos, precios ni logística.
+VERSIÓN: Tanaka 13.3. Esta versión aclara el handoff empresarial y las etapas de seguimiento persistente. La actualización de precios del 5 de octubre de 2026 se documenta en el tarifario confirmado; conserva el funcionamiento de catálogos y la logística.
 
 Este archivo controla tanto lo que Alexandra dice como algunas acciones automáticas del bot. Los párrafos ocultos marcados como comentarios HTML son notas editoriales: sirven para explicar la configuración y no son respuestas que deban copiarse al cliente.
 
@@ -306,6 +306,84 @@ SI SE CAMBIA: cualquier edición puede llegar literalmente a una cotización. Co
 
 # BASE DE CONOCIMIENTO DE PRODUCTOS (Precios al Detal)
 
+## Tarifario confirmado — 5 de octubre de 2026
+
+Fuente: `TANAKA 5 DE OCTUBRE PRECIOS DE VENTA GENERAL.xlsx`, Hoja1. Todos los valores están en pesos colombianos (COP).
+
+Para las referencias y presentaciones de esta tabla, estos precios prevalecen sobre versiones anteriores del catálogo o del historial. Respeta la presentación exacta: no confundas una unidad, una caja, un paquete, un combo, un peso o un número de porciones. Una celda «—» significa que no se informó precio por mayor; nunca calcules un descuento ni lo sustituyas por el precio al detal. Los productos, presentaciones y promociones que no aparecen en el Excel conservan sus datos previamente confirmados; no deduzcas un precio nuevo.
+
+Esta actualización confirma precios, no existencias ni cambios de disponibilidad. Conserva las reglas de disponibilidad y de handoff de esta marca; no reactives productos marcados como descontinuados o agotados por aparecer en la lista. Si falta cantidad por empaque, ingredientes, disponibilidad o una condición necesaria para cerrar, confirma ese dato con el equipo.
+
+| Categoría | Producto / presentación | Precio al detal | Precio por mayor |
+| --- | --- | ---: | ---: |
+| PANADERIA CONGELADA GLUTEN FREE | Fitbono: Pandebono Saludable Con Chia x 10und | $24.500 | $17.500 |
+| PANADERIA CONGELADA GLUTEN FREE | Pan de Yuca Fit con Cúrcuma y Chía x 10 und | $24.500 | $17.500 |
+| PANADERIA CONGELADA GLUTEN FREE | Fitbono: Pandebono Saludable Con Chia x 20und | $43.000 | $31.000 |
+| PANADERIA CONGELADA GLUTEN FREE | Pan de Yuca Fit con Cúrcuma y Chía x 20 und | $43.000 | $30.000 |
+| PANADERIA CONGELADA GLUTEN FREE | Almojabana Saludable x 10 und | $28.500 | $19.900 |
+| PANADERIA CONGELADA GLUTEN FREE | Almojabana Saludable x 20 und | $49.500 | $35.500 |
+| PANADERIA CONGELADA GLUTEN FREE | Pandebono Saludable x 50 a granel para negocios (servicio a la mesa) | $97.500 | $97.500 |
+| PANADERIA CONGELADA GLUTEN FREE | Almojabana Saludable x 50 und para negocios (servicio a la mesa) | $113.500 | $113.500 |
+| PANADERIA CONGELADA GLUTEN FREE | Pan de Yuca Fit con Cúrcuma y Chía x 50 und para negocios (servicio a la mesa) | $97.500 | $97.500 |
+| SNACKS | Galleta Keto con Proteina limpia peso 80gr | $18.500 | $12.800 |
+| SNACKS | Brownie Keto sin azucar 120gr | $22.000 | $18.000 |
+| SNACKS | Brownie Keto sin azucar 80gr | $18.500 | — |
+| SNACKS | Alfajores Keto sin azucar | $18.000 | $12.600 |
+| SNACKS | AMAPOLA BERRY | $22.000 | $16.500 |
+| SNACKS | RED VELVET | $22.000 | $17.000 |
+| AREPAS CONGELADAS | Mini arepa de maduro con queso bajo en grasa, chia y linaza | $25.000 | $18.500 |
+| AREPAS CONGELADAS | Arepa de Yuca con Queso bajo en grasa, Chía y Linaza | $25.000 | $18.500 |
+| AREPAS CONGELADAS | Arepa de Yuca con Queso bajo en grasa, Chía y Linaza x 3 combo | $70.000 | — |
+| AREPAS CONGELADAS | Arepa de Plátano Maduro con Queso bajo en grasa , Chía y Linaza | $25.000 | $18.500 |
+| AREPAS CONGELADAS | Arepa de Plátano Maduro con Queso bajo en grasa , Chía y Linaza x 3 combo | $70.000 | — |
+| AREPAS CONGELADAS | Arepa de Yuca con Queso vegano de almendras, Chía y Linaza | $27.000 | $19.900 |
+| AREPAS CONGELADAS | Arepa de Plátano Maduro con Queso vegano de almendras, Chía y Linaza | $27.000 | $19.900 |
+| PANADERIA CONGELADA | Empanada de Cambray con queso y arequipe sin azucar (20gr relleno) | $36.000 | $25.500 |
+| AREPAS CONGELADAS | Empanada de Plátano Maduro Saludable con Queso, chia Guayaba y arequipe (20gr relleno) | $36.000 | $25.500 |
+| UNTABLES | Mermelada Frutos Rojos Sin Azúcar | $19.000 | $13.300 |
+| UNTABLES | Mermelada Frutos Amarillos Sin Azúcar | $19.000 | $13.300 |
+| UNTABLES | Mermelada Coco Piña Sin Azúcar | $19.000 | $13.300 |
+| UNTABLES | Mermelada Lulo Con Cardamomo Sin Azúcar | $19.000 | $13.300 |
+| UNTABLES | Mantequilla Ghee Clarificada Sin Casina Sin Lactosa | $30.000 | $25.000 |
+| UNTABLES | Crema de Almendras Sin Azúcar Sin Grasas Añadidas | $45.000 | $36.000 |
+| UNTABLES | Crema de Chocoavellanas Sin Azúcar Sin Grasas Añadidas | $45.000 | $36.000 |
+| YOGURES | Yogur Vegano Frutos Rojos Sin Azúcar Con Probióticos | $37.000 | $29.000 |
+| YOGURES | Yogur Vegano Frutos Amarillos Sin Azúcar Con Probióticos | $37.000 | $29.000 |
+| YOGURES | Yogur Vegano Coco Lulada Sin Azúcar Con Probióticos | $37.000 | $29.000 |
+| YOGURES | Yogur Vegano Frutos Rojos Sin Azúcar Con Probióticos Tamaño Personal | $13.000 | $9.500 |
+| YOGURES | Yogur Vegano Frutos Amarillos Sin Azúcar Con Probióticos Tamaño Personal | $13.000 | $9.500 |
+| YOGURES | Yogur Vegano Coco Lulada Sin Azúcar Con Probióticos Tamaño Personal | $13.000 | $9.500 |
+| SUPLEMENTOS | Curcuma y Pimienta | $65.000 | $45.500 |
+| SUPLEMENTOS | Resveratrol | $65.000 | $45.500 |
+| SUPLEMENTOS | Ashwagandha | $65.000 | $45.500 |
+| VINAGRES | Vinagre de manzana natura 500ML | $18.000 | $12.600 |
+| VINAGRES | Vinagre de manzana alcachofa y jengibre 500ML | $22.000 | $15.500 |
+| VINAGRES | Vinagre de manzana canela y sabila | $22.000 | $15.500 |
+| VINAGRES | Vinagre de manzana Flor de jamaica, jengibre , canela 500ML | $22.000 | $15.500 |
+| UNTABLES | Arequipe Sin Azucar 300gr | $37.000 | $30.000 |
+| PROTEINAS | Salchicha premium Keto | $27.000 | $23.000 |
+| QUESO | Queso de almendras mozarrela 500gr | $68.000 | — |
+| COMBOS | Combo Sin dietas y sin culpas ( yogur vegano 1100ml+ Fitbono x 10 und +Arepa de maduro + mermelada sin azucar) | $97.000 | — |
+| COMBOS | DESAYUNA SALUDABLE (Almoajaban x 10 +Fitbono x 10+ arepa de yuca +arepa de maduro) | $97.000 | — |
+| COMBOS | KIT PANADERIA SIN GLUTEN ALMOJABANA , PANDEBONO Y PANDEYUCA x 20 und | $125.000 | — |
+| COMBOS | kit Desinflamate Ya! VINAGRE DE MANZANA + CURCUMA | $87.000 | — |
+
+### Maquila por mayor (Hoja2)
+
+Estos precios corresponden a las referencias de maquila indicadas; no reemplazan las tarifas al detal ni autorizan cambiar empaque, formulación o mínimos. No los mezcles con productos de la otra marca.
+Las referencias tradicionales de maquila son para producción empresarial; no forman parte de la oferta saludable al detal. Mantén el handoff `B2B_HIGH_VALUE` para distribución, mayoristas y maquila, incluso si el precio está informado.
+
+| Categoría | Producto / presentación | Precio por mayor |
+| --- | --- | ---: |
+| PANADERIA CONGELADA TRADICIONAL | Almojabana tradicional X 10 UND | $13.000 |
+| PANADERIA CONGELADA TRADICIONAL | Pandebono Tradicional X 10 UND | $11.000 |
+| PANADERIA CONGELADA TRADICIONAL | Arepa con queso de panaderia X 10 UND | $14.000 |
+| AREPAS CONGELADAS | Arepas de maduro con queso bajo en grasa y guayaba — Paquete x 5 unidades | $17.000 |
+| AREPAS CONGELADAS | Arepas de yuca con queso bajo en grasa — Paquete x 5 unidades | $14.000 |
+| AREPAS CONGELADAS | Arepas de arracacha con queso bajo en grasa — Paquete x 5 unidades | $17.000 |
+
+---
+
 Manejamos productos saludables sin químicos, libres de azúcar, gluten, maíz y margarinas. (No ofrecemos pan tradicional de trigo). Todos los productos vienen congelados listos para preparar.
 
 **NOTA VEGANA:** Lo único 100% vegano son las arepas grandes de plátano maduro o de yuca con queso vegano de almendras, chía y linaza; las cremas, las mermeladas y los yogures veganos. Las mini arepas no son veganas porque únicamente se elaboran con queso bajo en grasa.
@@ -372,7 +450,7 @@ Manejamos productos saludables sin químicos, libres de azúcar, gluten, maíz y
 ### Empanadas
 *(x 8und)*
 
-* **De Plátano Maduro saludable (contiene queso y chía):** $26.000
+* **De Plátano Maduro saludable (contiene queso, chía, guayaba y arequipe; 20g de relleno):** $36.000
 * **De Yuca saludable (contiene queso y chía):** $26.000
 
 ---
@@ -402,8 +480,8 @@ Manejamos productos saludables sin químicos, libres de azúcar, gluten, maíz y
 
 ### Quesos y Charcutería Saludable
 
-* **Queso Mozzarella de Almendras (500g, 100% vegano):** $60.000 *(La fecha de vencimiento viene indicada en el empaque, no asumas que dura 6 meses)*
-* **Salchicha saludable de cerdo premium (x 5und):** $26.000
+* **Queso Mozzarella de Almendras (500g, 100% vegano):** $68.000 *(La fecha de vencimiento viene indicada en el empaque, no asumas que dura 6 meses)*
+* **Salchicha saludable de cerdo premium (x 5und):** $27.000
 
 ---
 
@@ -434,12 +512,12 @@ Manejamos productos saludables sin químicos, libres de azúcar, gluten, maíz y
 <!-- CREMAS Y UNTABLES: agrupa tamaño y condición de azúcar añadida. No conviertas "sin azúcar añadida" en una afirmación médica o en "cero azúcar" sin respaldo. -->
 
 ### Cremas y Untables
-*(250g - Sin azúcar añadida)*
+*(Ghee y cremas: 250g; arequipe: 300g - Sin azúcar añadida)*
 
 * **Mantequilla clarificada Ghee:** $30.000
 * **Crema Choco Almendras:** $43.000
-* **Crema de Almendras:** $43.000
-* **Arequipe Oishi sin azúcar adicionada:** $36.000
+* **Crema de Almendras:** $45.000
+* **Arequipe Oishi sin azúcar adicionada (300g):** $37.000
 
 ---
 
@@ -467,19 +545,19 @@ Manejamos productos saludables sin químicos, libres de azúcar, gluten, maíz y
 ### Vinagres de Sidra de Manzana GutMind
 *(Botella 500ml, orgánicos, con la madre sin filtrar)*
 
-* **Con Flor de Jamaica, Jengibre y Canela ($34.000):**
+* **Con Flor de Jamaica, Jengibre y Canela ($22.000):**
   * **Enfoque:** Inflamación abdominal, retención de líquidos y metabolismo lento. Apoya reducción de grasa.
   * **Dosis:** 2 cucharadas en agua antes del almuerzo o como vinagreta.
 
-* **Con Alcachofa y Jengibre ($34.000):**
+* **Con Alcachofa y Jengibre ($22.000):**
   * **Enfoque:** Digestión pesada, estreñimiento y tránsito lento. Favorece la mucosa digestiva.
   * **Dosis:** 2 cucharadas en agua antes de la cena.
 
-* **Con Canela y Sábila ($34.000):**
+* **Con Canela y Sábila ($22.000):**
   * **Enfoque:** Estómago sensible y confort intestinal.
   * **Dosis:** 2 cucharadas en agua en ayunas o ensaladas.
 
-* **Clásico con Madre ($25.000):**
+* **Clásico con Madre ($18.000):**
   * **Enfoque:** Control de glucosa, antojos y apoyo metabólico.
 
 ---
@@ -502,7 +580,7 @@ SI SE CAMBIA: editar un componente sin revisar el precio puede hacer que el comb
 
 Los combos se consideran disponibles bajo la misma regla del catálogo: solo se confirma inventario si el cliente solicita una cantidad inusualmente grande.
 
-* **Combo Sin Dietas y Sin Culpas ($96.000):** Arepa de Yuca Fit x5, Fitbonos x10, Mermelada 250g, Yogurt vegano 1100ml.
+* **Combo Sin Dietas y Sin Culpas ($97.000):** Arepa de Plátano Maduro x5, Fitbonos x10, Mermelada 250g, Yogurt vegano 1100ml.
 * **Combo Microbiota Feliz ($94.000):** Pan de Yuca Fit x10, Yogurt vegano 250ml, Crema de chocoalmendras 250g, Fitbonos x10.
 * **Kit Panadería Saludable Sin Gluten y Sin Azúcar ($125.000):** Fitbonos x20, Almojábanas x20, Pan de Yuca Fit x20.
 * **Combo Tardeo Caleño Saludable ($110.500):** 2x Pan de Yuca Fit x10, 1x Mermelada 250g, 2x Fitbonos x10.

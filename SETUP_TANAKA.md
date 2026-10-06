@@ -541,3 +541,15 @@ Para aislar la regla de eventos, verifica además en la cuenta correcta (Tanaka 
 usuario `4`, no el usuario Memo's `3`) que `push_conversation_assignment` y
 `push_assigned_conversation_new_message` estén activos. Probar otra cuenta no valida
 las preferencias ni la suscripción FCM de Tanaka.
+
+## Precios del 5 de octubre de 2026 (proyectos nuevos y existentes)
+
+El tarifario confirmado de `src/clients/tanaka/system_instruction.txt` incorpora
+Hoja1 y las referencias de panadería y arepas de maquila de Hoja2 del Excel
+`TANAKA 5 DE OCTUBRE PRECIOS DE VENTA GENERAL.xlsx`. Conserva `BUSINESS_ID=tanaka`
+y el handoff `B2B_HIGH_VALUE` para mayoristas, distribución y maquila. La
+actualización no requiere migración SQL ni cambios de cuentas o infraestructura.
+Para una instalación nueva, usa esta instrucción; para una existente, despliega la
+rama actualizada o reemplaza la instrucción de Tanaka desde su dashboard y recarga
+el proceso que la lee al iniciar. Revisa que el PDF vigente coincida con el
+tarifario: editar la instrucción no reemplaza el archivo de Catalog Manager.

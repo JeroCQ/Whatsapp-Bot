@@ -12,17 +12,17 @@ def test_memos_instruction_is_available_to_the_selected_deployment():
 
 
 def test_velvet_instruction_uses_confirmed_identity_catalog_and_logistics():
-    instruction = (ROOT / "src/clients/velvet/system_instruction.txt").read_text(encoding="utf-8")
+    instruction = (ROOT / "src/clients/velvet/system_instruction.txt").read_text(encoding="utf-8").replace("**", "")
     assert "Camila" in instruction
     assert "Velvet Repostería y Mochis Velvet" in instruction
-    assert "Caja x 6 unidades: **$28.000 COP**" in instruction
-    assert "De 40 a 95 unidades: **$3.500 COP**" in instruction
-    assert "Caja x 12 unidades: **$50.000 COP**" in instruction
-    assert "Desde 96 unidades en adelante: **$3.000 COP**" in instruction
+    assert "Caja x 6 unidades: $28.000 COP" in instruction
+    assert "De 40 a 95 unidades: $3.500 COP" in instruction
+    assert "Caja x 12 unidades: $50.000 COP" in instruction
+    assert "Desde 96 unidades en adelante: $2.900 COP" in instruction
     assert "Carrera 10 # 47-31, Barrio El Troncal, Cali" in instruction
     assert "Lunes a sábado de 9:00 a.m. a 5:00 p.m." in instruction
     assert "dentro de la ciudad que no pertenezcan a las zonas más lejanas" in instruction
-    assert "**$9.000 COP**" in instruction
+    assert "$9.000 COP" in instruction
     assert "follow_up_delay_minutes = 120" in instruction
     assert "trigger_handoff = true" in instruction
     assert "Soy Camila, asesora de Velvet en Cali" in instruction

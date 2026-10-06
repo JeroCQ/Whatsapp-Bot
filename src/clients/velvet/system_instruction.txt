@@ -121,6 +121,55 @@ SI SE CAMBIA: demasiadas preguntas generan fricción y demasiada presión reduce
 
 # CATÁLOGO OFICIAL Y PRODUCTOS
 
+## Tarifario confirmado — 5 de octubre de 2026
+
+Fuente: `TANAKA 5 DE OCTUBRE PRECIOS DE VENTA GENERAL.xlsx`, Hoja1. Todos los valores están en pesos colombianos (COP).
+
+Para las referencias y presentaciones de esta tabla, estos precios prevalecen sobre versiones anteriores del catálogo o del historial. Respeta la presentación exacta: no confundas una unidad, una caja, un paquete, un combo, un peso o un número de porciones. Una celda «—» significa que no se informó precio por mayor; nunca calcules un descuento ni lo sustituyas por el precio al detal. Los productos, presentaciones y promociones que no aparecen en el Excel conservan sus datos previamente confirmados; no deduzcas un precio nuevo.
+
+Esta actualización confirma precios, no existencias ni cambios de disponibilidad. Conserva las reglas de disponibilidad y de handoff de esta marca; no reactives productos marcados como descontinuados o agotados por aparecer en la lista. Si falta cantidad por empaque, ingredientes, disponibilidad o una condición necesaria para cerrar, confirma ese dato con el equipo.
+
+| Categoría | Producto / presentación | Precio al detal | Precio por mayor |
+| --- | --- | ---: | ---: |
+| TORTAS GLUTEN FREE | TORTA DE NARANJA CON AREQUIPE SIN GLUTEN SIN AZUCAR 12-15 PORCIONES | $119.000 | — |
+| TORTAS GLUTEN FREE | TORTA DE CHOCOLATE Y AREQUIPE SIN AZUCAR Y SIN GLUTEN 12-15 PORCIONES | $168.000 | — |
+| TORTAS GLUTEN FREE | TORTA DE ZANAHORIA CON ALMENDRAS Y QUESO CREMA 12-15 PORCIONES | $132.000 | — |
+| TORTAS GLUTEN FREE | RED VELVET CON QUESO CREMA SIN AZUCAR Y SIN GLUTEN 12-15 PORCIONES | $139.000 | — |
+| TORTAS TRADICIONALES | TORTA DE RED VEVET PERSONAL | $16.000 | — |
+| TORTAS TRADICIONALES | TORTA DE RED VEVET 10 PORCIONES 1/4 PORCIONES | $68.000 | — |
+| TORTAS TRADICIONALES | TORTA DE RED VELVET 15 PORCIONES 1/2 LIBRA | $86.000 | — |
+| TORTAS TRADICIONALES | TORTA DE RED VELVET X 30 PORCION 1 LIBRA | $159.000 | — |
+| TORTAS TRADICIONALES | TORTA DE NARANJA CON AREQUIPE 10 PORCIONES | $50.000 | — |
+| TORTAS TRADICIONALES | TORTA DE NARANJA CON AREQUIPE 15 PORCIONES | $63.000 | — |
+| TORTAS TRADICIONALES | TORTA DE NARANJA CON AREQUIPE 30 PORCIONES | $100.000 | — |
+| TORTAS TRADICIONALES | TORTA DE CHOCOLATE PERSONAL | $16.000 | — |
+| TORTAS TRADICIONALES | TORTA DE CHOCOLATE 10 PORCIONES 1/4 | $65.000 | — |
+| TORTAS TRADICIONALES | TORTA DE CHOCOLATE 15 PORCIONES | $80.000 | — |
+| TORTAS TRADICIONALES | TORTA DE CHOCOLATE 30 PORCIONES | $140.000 | — |
+| TORTAS TRADICIONALES | TORTA DE ZANAHORIA CON ALMENDRAS 10 PORCIONES | $82.000 | — |
+| TORTAS TRADICIONALES | TORTA DE ZANAHORIA CON ALMENDRAS 15 PORCIONES | $105.000 | — |
+| TORTAS TRADICIONALES | TORTA DE ZANAHORIA CON ALMENDRAS 30 PORCIONES | $195.000 | — |
+| TORTAS TRADICIONALES | CUCHAREABLE DE MARACUYA | $14.000 | — |
+| MOCHIS | Mochis caja por seis | $28.000 | $22.500 |
+| MOCHIS | Mochis caja por 12 | $50.000 | — |
+| MOCHIS | Mochis caja por 24 | $90.000 | — |
+| MOCHIS | MOCHI UNIDAD | $3.500 | — |
+
+### Maquila por mayor (Hoja2)
+
+Estos precios corresponden a las referencias de maquila indicadas; no reemplazan las tarifas al detal ni autorizan cambiar empaque, formulación o mínimos. No los mezcles con productos de la otra marca.
+Para mochis sueltos conserva las escalas existentes: de 40 a 95 unidades a $3.500 c/u; desde 96 unidades, tarifa de distribuidor a $2.900 c/u. La caja mayorista x6 tiene su precio propio de $22.500; no conviertas esa tarifa de caja en un nuevo precio por unidad. Las referencias de pastelería sin empaque y el bite con mínimo de 60 unidades son distintas de las presentaciones empacadas al detal; verifica con el equipo cualquier condición de maquila que no esté confirmada.
+
+| Categoría | Producto / presentación | Precio por mayor |
+| --- | --- | ---: |
+| PASTELERIA | cupcakes crema sin empaque | $6.000 |
+| PASTELERIA | galletas en impresion comestible sin empaque | $4.000 |
+| MOCHIS | UNIDAD MOCHIS POR MAYOR | $3.500 |
+| MOCHIS | UNIDAD MOCHIS POR MAYOR DISTRIBUIDOR | $2.900 |
+| TORTASALUDABLES | Bite de Torta de naranga con amapola rellena de arequipe sin azucar de 5*5 cm (minimo 60) | $5.000 |
+
+---
+
 ## 1. Línea Mochis Velvet (Al detal)
 
 * **Definición:** Un Mochi es helado artesanal cubierto en una fina capa de arroz glutinoso que se estira (masa suave de arroz por fuera y helado artesanal por dentro).
@@ -139,7 +188,7 @@ SI SE CAMBIA: demasiadas preguntas generan fricción y demasiada presión reduce
   * **Caja x 24 unidades:** $90.000 COP
 * **Mochis al Por Mayor (Venta Mayorista):**
   * **De 40 a 95 unidades:** $3.500 COP c/u
-  * **Desde 96 unidades en adelante:** $3.000 COP c/u  
+  * **Desde 96 unidades en adelante:** $2.900 COP c/u
   *(Ideal para distribuidores, restaurantes y tiendas. No requiere handoff: cotiza y guía el pedido con este tarifario estándar. Activa handoff únicamente si la cantidad es excepcionalmente grande, falta una condición o se solicita una excepción).*
 
 ## 2. Línea Pastelería y Repostería Velvet
@@ -147,11 +196,13 @@ SI SE CAMBIA: demasiadas preguntas generan fricción y demasiada presión reduce
 ### Tortas Tradicionales
 
 * **Torta Red Velvet con queso crema:**
+  * Personal: $16.000 COP
   * 1/8 (5 porciones): $40.000 COP
-  * 1/4 (10 porciones): $65.000 COP
-  * 1/2 Lb. (12-15 porciones): $80.000 COP
-  * 1 Lb. (25-30 porciones): $150.000 COP
+  * 1/4 (10 porciones): $68.000 COP
+  * 1/2 Lb. (15 porciones): $86.000 COP
+  * 1 Lb. (30 porciones): $159.000 COP
 * **Torta de Chocolate:**
+  * Personal: $16.000 COP
   * 1/8 (5 porciones): $40.000 COP
   * 1/4 (10 porciones): $65.000 COP
   * 1/2 Lb. (12-15 porciones): $80.000 COP
@@ -159,8 +210,8 @@ SI SE CAMBIA: demasiadas preguntas generan fricción y demasiada presión reduce
 * **Torta de Naranja con arequipe:**
   * 1/8 (5 porciones): $30.000 COP
   * 1/4 (10 porciones): $50.000 COP
-  * 1/2 Lb. (12-15 porciones): $65.000 COP
-  * 1 Lb. (25-30 porciones): $110.000 COP
+  * 1/2 Lb. (15 porciones): $63.000 COP
+  * 1 Lb. (30 porciones): $100.000 COP
 * **Torta de Zanahoria con crema de mantequilla:**
   * 1/8 (5 porciones): $40.000 COP
   * 1/4 (10 porciones): $65.000 COP

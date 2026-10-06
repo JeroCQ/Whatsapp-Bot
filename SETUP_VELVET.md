@@ -139,7 +139,19 @@ ejecutar después el archivo de reparación.
 1. Ejecuta `supabase/upgrade_existing_brand.sql` si Velvet ya existe; para un proyecto nuevo ejecuta `supabase/bootstrap.sql`. Ambos crean `catalog_assets` y el bucket.
 2. Despliega este backend conservando `BUSINESS_ID=velvet`; no agregues URLs por catálogo a Railway. `CATALOG_STORAGE_BUCKET=catalogos` continúa siendo suficiente.
 3. Aplica en Lovable `docs/LOVABLE_MULTI_CATALOG_PROMPT.md` y crea los IDs exactos `catalogo_tortas`, `catalogo_mochis` y `catalogo_mochis_mayorista` con sus nombres públicos indicados.
-4. Sube/reemplaza por separado la pieza de tortas, la pieza detal (caja x6 $28.000; caja x12 $50.000) y la pieza mayorista (40–95 a $3.500 c/u; 96+ a $3.000 c/u).
+4. Sube/reemplaza por separado la pieza de tortas, la pieza detal (caja x6 $28.000; caja x12 $50.000) y la pieza mayorista (40–95 a $3.500 c/u; 96+ a $2.900 c/u).
 5. `PRESAVED_FILES_JSON` deja de definir los catálogos administrados. Puede permanecer durante el despliegue como fallback legado, pero elimínalo después de verificar las tres filas y archivos.
 6. En Catalog Manager pulsa **Ver archivo** en cada tarjeta: debe abrir inline el PDF o imagen activo mediante `GET /api/catalogs/{catalog_id}/file`, nunca mediante una URL pública de Supabase en el navegador.
-7. Prueba: saludo nuevo sin adjunto; “tortas” envía solo Catálogo Tortas; “mochis” solo Catálogo Mochis; “quiero 50” envía mayorista, cotiza $175.000 y no hace handoff; 96 unidades cotiza $288.000; una excepción o cantidad extraordinaria sí escala.
+7. Prueba: saludo nuevo sin adjunto; “tortas” envía solo Catálogo Tortas; “mochis” solo Catálogo Mochis; “quiero 50” envía mayorista, cotiza $175.000 y no hace handoff; 96 unidades cotiza $278.400; una excepción o cantidad extraordinaria sí escala.
+
+## Precios del 5 de octubre de 2026 (proyectos nuevos y existentes)
+
+El tarifario confirmado de `src/clients/velvet/system_instruction.txt` incorpora
+Hoja1 y las referencias de pastelería y mochis de Hoja2 del Excel
+`TANAKA 5 DE OCTUBRE PRECIOS DE VENTA GENERAL.xlsx`. Conserva `BUSINESS_ID=velvet`.
+La actualización no requiere migración SQL ni cambios de cuentas o infraestructura.
+Para una instalación nueva, usa esta instrucción; para una existente, despliega la
+rama actualizada o reemplaza la instrucción de Velvet desde su dashboard y recarga
+el proceso que la lee al iniciar. Revisa que las piezas visuales de tortas y mochis
+coincidan con el tarifario: editar la instrucción no reemplaza los archivos
+almacenados en Catalog Manager.
