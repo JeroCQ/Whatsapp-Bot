@@ -46,6 +46,16 @@ jitter de 0,5) o definir sus propios `GEMINI_RETRY_ATTEMPTS`,
 `GEMINI_RETRY_JITTER_SECONDS`. Configúralos en el proyecto de cada marca; no copies
 variables desde otro Railway como mecanismo de despliegue.
 
+La corrección de textos de seguimiento también aplica a Tanaka, Memo's, Velvet y
+negocios futuros. Se conserva el `follow_up_message` generado desde la instrucción
+de cada `BUSINESS_ID`, incluido el seguimiento posterior a un catálogo; cuando falta,
+se utiliza un mensaje general sin categorías de otra marca. No requiere migración
+SQL ni variables nuevas y conserva las cadencias existentes. Despliega el mismo
+commit en el web y los workers de cada Railway aislado: el worker actualizado
+sustituye únicamente el antiguo texto fijo de panadería/postres en jobs ya encolados,
+sin borrar colas ni cambiar otros mensajes personalizados. Los proyectos nuevos
+siguen la misma política mediante `docs/NEW_BUSINESS_SETUP.md`.
+
 En cada API inbox, configura su webhook URL hacia `/chatwoot-webhook` del Railway
 de esa misma marca y guarda el `secret` del canal como
 `CHATWOOT_API_INBOX_WEBHOOK_SECRET`. Es distinto del HMAC token de identidad y del

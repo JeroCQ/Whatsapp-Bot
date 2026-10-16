@@ -44,14 +44,32 @@ class FollowUpPlan:
     messages: tuple[str, ...]
 
 
+DEFAULT_CATALOG_FOLLOW_UP_MESSAGE = (
+    "¿Pudiste revisar las opciones que te compartí? "
+    "Cuéntame cuál te interesa y te ayudo a continuar 😊"
+)
+_LEGACY_CATALOG_FOLLOW_UP_MESSAGE = (
+    "¿Viste alguna opción que te gustara? Dime si prefieres panadería o postres "
+    "y te recomiendo dos opciones con precio 😊"
+)
+
+
+def normalize_follow_up_message(message: str) -> str:
+    """Replace the obsolete shared template, including text in existing RQ jobs."""
+    if message.strip() == _LEGACY_CATALOG_FOLLOW_UP_MESSAGE:
+        return DEFAULT_CATALOG_FOLLOW_UP_MESSAGE
+    return message
+
+
 def follow_up_plan(response: str, requested_files: list[str], model_message: str = "") -> FollowUpPlan:
-    """Choose the most advanced applicable retail stage; catalog wins the same turn."""
+    """Choose a stage while keeping business-authored text or neutral defaults."""
+    model_message = normalize_follow_up_message(model_message.strip())
     text = _normal(f"{response} {model_message}")
     if re.search(r"\b(manana|siguiente dia habil|proximo dia habil|el lunes)\b", text):
         message = model_message or "Hola 😊 Ya estamos atendiendo. ¿Retomamos lo que querías pedir?"
         return FollowUpPlan("DEFERRED_DELIVERY", (-1,), (message,))
     if requested_files:
-        message = "¿Viste alguna opción que te gustara? Dime si prefieres panadería o postres y te recomiendo dos opciones con precio 😊"
+        message = model_message or DEFAULT_CATALOG_FOLLOW_UP_MESSAGE
         return FollowUpPlan("CATALOG_SENT", (15, 120, -1), (message, message, message))
     if re.search(r"\b(comprobante|transferencia|pago|metodo de pago|total (?:es|de))\b", text):
         message = model_message or "¿Te ayudo a dejarlo confirmado? Apenas completes el pago o me confirmes el método, seguimos con tu pedido 😊"

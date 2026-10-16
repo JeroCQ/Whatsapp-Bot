@@ -417,6 +417,56 @@ def test_scheduled_followup_rechecks_colombia_hours_before_send(monkeypatch):
     assert sent == []
 
 
+@pytest.mark.parametrize("stage", [None, "CATALOG_SENT"], ids=["legacy_callback", "catalog_sequence"])
+@pytest.mark.parametrize("surrounding_whitespace", ["", " \n"])
+def test_queued_followup_replaces_obsolete_catalog_text_and_logs_sent_text(
+    monkeypatch, stage, surrounding_whitespace,
+):
+    from commercial_intents import DEFAULT_CATALOG_FOLLOW_UP_MESSAGE
+
+    obsolete_message = (
+        "¿Viste alguna opción que te gustara? Dime si prefieres panadería o postres "
+        "y te recomiendo dos opciones con precio 😊"
+    )
+    sent = []
+    logged = []
+    monkeypatch.setattr(main, "claim_follow_up_attempt", lambda *args: True)
+    monkeypatch.setattr(main, "meta_window_is_open", lambda *_args: True)
+    monkeypatch.setattr(main, "colombia_service_window_is_open", lambda: True)
+    monkeypatch.setattr(main, "get_or_create_customer_state", lambda _phone: {"is_paused": False})
+    monkeypatch.setattr(main, "send_whatsapp_message", lambda *args: sent.append(args))
+    monkeypatch.setattr(main, "save_message_log", lambda *args: logged.append(args))
+    monkeypatch.setattr(main, "operational_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(main, "invalidate_follow_up", lambda *_args: pytest.fail("eligible reminder must stay active"))
+
+    kwargs = {"stage": stage} if stage else {}
+    main.send_scheduled_follow_up(
+        "57300", "token", f"{surrounding_whitespace}{obsolete_message}{surrounding_whitespace}", **kwargs,
+    )
+
+    assert sent == [("57300", DEFAULT_CATALOG_FOLLOW_UP_MESSAGE)]
+    assert logged == [("57300", "model", DEFAULT_CATALOG_FOLLOW_UP_MESSAGE)]
+
+
+def test_queued_followup_preserves_custom_business_message(monkeypatch):
+    custom_message = "¿Cuántos kilos de queso necesitas para tu panadería?"
+    sent = []
+    logged = []
+    monkeypatch.setattr(main, "claim_follow_up_attempt", lambda *args: True)
+    monkeypatch.setattr(main, "meta_window_is_open", lambda *_args: True)
+    monkeypatch.setattr(main, "colombia_service_window_is_open", lambda: True)
+    monkeypatch.setattr(main, "get_or_create_customer_state", lambda _phone: {"is_paused": False})
+    monkeypatch.setattr(main, "send_whatsapp_message", lambda *args: sent.append(args))
+    monkeypatch.setattr(main, "save_message_log", lambda *args: logged.append(args))
+    monkeypatch.setattr(main, "operational_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(main, "invalidate_follow_up", lambda *_args: pytest.fail("eligible reminder must stay active"))
+
+    main.send_scheduled_follow_up("57300", "token", custom_message, "CATALOG_SENT")
+
+    assert sent == [("57300", custom_message)]
+    assert logged == [("57300", "model", custom_message)]
+
+
 def test_sequence_meta_expiry_is_anchored_to_inbound_message(monkeypatch):
     queued = []
     inbound = main.datetime(2026, 9, 29, 15, 0, tzinfo=main.timezone.utc)
