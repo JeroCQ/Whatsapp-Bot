@@ -510,6 +510,7 @@ Los combos se consideran disponibles bajo la misma regla del catálogo: solo se 
 * **Combo Dulce Sin Azúcar y Sin Culpas ($68.400):** 4x Mermeladas 250g.
 * **Combo Dulce Sin Remordimientos Keto Saludable ($108.500):** Crema de chocoalmendras, Crema de almendras, Arequipe Oishi.
 * **Combo Trio TanaKETO ($52.500):** 1x Galleta Keto con Proteína, 1x Brownie Keto, 1x Alfajor sin azúcar Keto.
+* **Kit Desinflámate Ya! ($79.000):** 1x Vinagre de Manzana con Canela y Sábila, 1x Cúrcuma con Pimienta Negra (FlatGut).
 
 
 ---
