@@ -2,11 +2,15 @@ from datetime import datetime
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from commercial_intents import (
+    DEFAULT_CATALOG_FOLLOW_UP_MESSAGE,
     b2b_actions,
     b2b_reason,
     follow_up_plan,
     is_terminal_customer_message,
+    normalize_follow_up_message,
 )
 from queue_client import follow_up_delay_seconds
 
@@ -38,6 +42,52 @@ def test_catalog_stage_replaces_first_response_and_has_three_attempts():
     assert catalog.stage == "CATALOG_SENT"
     assert catalog.delays_minutes == (15, 120, -1)
     assert all("catálogo" not in message.lower() or "viste" in message.lower() for message in catalog.messages)
+
+
+@pytest.mark.parametrize(
+    ("catalog_id", "custom_message"),
+    [
+        ("catalogo_memos", "¿Qué queso te interesa y cuántas libras necesitas?"),
+        ("catalogo_mochis", "¿Prefieres tus mochis para probar o para compartir?"),
+        ("catalogo_tanaka", "¿Cuántos paquetes de arepas quisieras llevar?"),
+        ("catalogo_acme", "¿Qué modelo de lámpara te gustó para tu espacio?"),
+    ],
+    ids=["memos", "velvet", "tanaka", "future_business"],
+)
+def test_catalog_follow_up_keeps_each_business_custom_message(catalog_id, custom_message):
+    plan = follow_up_plan("Te comparto las opciones", [catalog_id], f"  {custom_message}\n")
+
+    assert plan.stage == "CATALOG_SENT"
+    assert plan.delays_minutes == (15, 120, -1)
+    assert plan.messages == (custom_message,) * 3
+
+
+@pytest.mark.parametrize("model_message", ["", " \n\t "])
+def test_catalog_follow_up_without_custom_text_uses_business_neutral_fallback(model_message):
+    plan = follow_up_plan("Te comparto las opciones", ["catalogo_acme"], model_message)
+
+    assert plan.messages == (DEFAULT_CATALOG_FOLLOW_UP_MESSAGE,) * 3
+    assert "panadería" not in DEFAULT_CATALOG_FOLLOW_UP_MESSAGE.lower()
+    assert "postres" not in DEFAULT_CATALOG_FOLLOW_UP_MESSAGE.lower()
+    assert "precio" not in DEFAULT_CATALOG_FOLLOW_UP_MESSAGE.lower()
+
+
+def test_follow_up_normalization_preserves_legitimate_custom_bakery_context():
+    custom_message = "¿Cuántos kilos de queso necesitas para tu panadería?"
+
+    assert normalize_follow_up_message(custom_message) == custom_message
+    plan = follow_up_plan("Te comparto nuestros quesos", ["catalogo_memos"], custom_message)
+    assert plan.messages == (custom_message,) * 3
+
+
+def test_catalog_follow_up_replaces_exact_obsolete_model_text():
+    obsolete_message = (
+        "¿Viste alguna opción que te gustara? Dime si prefieres panadería o postres "
+        "y te recomiendo dos opciones con precio 😊"
+    )
+    plan = follow_up_plan("Te comparto las opciones", ["catalogo_memos"], obsolete_message)
+
+    assert plan.messages == (DEFAULT_CATALOG_FOLLOW_UP_MESSAGE,) * 3
 
 
 def test_incomplete_and_payment_stages_use_aggressive_cadences_and_context():

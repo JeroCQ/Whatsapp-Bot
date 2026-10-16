@@ -47,7 +47,7 @@ from queue_client import (
     queue_enabled,
     register_follow_up,
 )
-from commercial_intents import follow_up_plan, is_terminal_customer_message
+from commercial_intents import follow_up_plan, is_terminal_customer_message, normalize_follow_up_message
 from observability import operational_event
 from webhook_utils import (
     chatwoot_event_identity,
@@ -238,6 +238,7 @@ def send_scheduled_follow_up(phone_number: str, token: str, message: str,
                           scheduled_at=scheduled_at, result="not_sent")
         return
     try:
+        message = normalize_follow_up_message(message)
         send_whatsapp_message(phone_number, message)
         save_message_log(phone_number, "model", message)
         operational_event("FOLLOW_UP_SENT", phone=phone_number, stage=stage,

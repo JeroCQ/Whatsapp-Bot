@@ -39,6 +39,13 @@ una conversación de prueba solo aparece en Supabase, Redis y Chatwoot de la mar
    la instrucción. Anota owner, repositorio, rama y ruta; no pongas el token en el
    frontend.
 
+Define el tono y el contexto de `follow_up_message` en la instrucción propia de
+`BUSINESS_ID`. El backend conserva ese mensaje incluso después de enviar un catálogo;
+si está vacío, utiliza un texto general sin categorías ni datos de otra marca.
+Esta política también aplica a futuros negocios y a despliegues existentes, sin
+variables nuevas ni cambios al esquema de Supabase. Las cadencias siguen siendo
+las de cada etapa comercial.
+
 ### 2. Supabase
 
 1. Crea un proyecto vacío exclusivo y ejecuta **una vez** el contenido completo de

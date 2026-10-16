@@ -213,11 +213,18 @@ solo carga `PRESAVED_FILES_JSON` y el despliegue se selecciona con `BUSINESS_ID`
 
 ### Follow up automático
 
-Gemini prepara un mensaje de seguimiento cuando la respuesta deja una venta pendiente.
-La regla `FOLLOW UP POR FALTA DE RESPUESTA` del system prompt define el texto y
-`follow_up_delay_minutes` (120 minutos por defecto), así que ambos se ajustan allí. Si
-el cliente escribe antes, el mensaje pendiente se cancela; los handoffs tampoco generan
-seguimiento.
+Gemini prepara `follow_up_message` con la instrucción del negocio seleccionado por
+`BUSINESS_ID` y el contexto de la conversación. Ese texto personalizado se conserva
+también después de enviar un catálogo. Cuando queda vacío, el backend usa mensajes
+generales, sin categorías de productos ni nombres de otra marca. Por ejemplo:
+“¿Pudiste revisar las opciones que te compartí? Cuéntame cuál te interesa y te ayudo
+a continuar 😊”. No hacen falta variables nuevas ni condiciones por negocio en el código.
+
+El backend conserva las cadencias de cada etapa comercial; `follow_up_delay_minutes`
+se mantiene por compatibilidad. Si el cliente escribe antes, el mensaje pendiente se
+cancela; los handoffs tampoco generan seguimiento. Los jobs ya programados con el
+antiguo texto fijo de panadería/postres se convierten al mensaje general al ejecutarse
+con el worker actualizado. Los demás textos personalizados se conservan.
 
 El follow up usa trabajos programados de RQ: requiere `REDIS_URL` y un worker con
 scheduler (el worker incluido ya usa `with_scheduler=True`). El token de cancelación
@@ -242,7 +249,7 @@ mensaje continúa siendo generado con las reglas reales del system prompt.
 3. Repite la consulta, pero responde antes de diez segundos. El job debe registrar
    `FOLLOW UP] Cancelado o reemplazado` y no debe enviar el recordatorio.
 4. Elimina `FOLLOW_UP_TEST_DELAY_SECONDS` al terminar. Nunca debe quedar configurada en
-   producción; sin ella se respetan los 120 minutos definidos por el system prompt.
+   producción; sin ella se respetan las cadencias normales de cada etapa comercial.
 
 La suite también verifica, sin dormir ni conectarse a Redis, que 120 minutos se
 convierten en 7200 segundos y que el override reduce la espera a segundos.
