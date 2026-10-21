@@ -50,10 +50,14 @@ from queue_client import (
 from commercial_intents import follow_up_plan, is_terminal_customer_message, normalize_follow_up_message
 from observability import operational_event
 from webhook_utils import (
+    WHATSAPP_SENDER_PATTERN,
     chatwoot_event_identity,
     is_restart_command,
+    resolve_whatsapp_sender,
+    valid_whatsapp_phone,
     valid_whatsapp_sender,
     whatsapp_destination_matches,
+    whatsapp_recipient_fields,
 )
 from chatwoot_security import chatwoot_scope, verify_chatwoot_signature
 from provider_errors import ProviderError, provider_error, sanitize_text
@@ -75,14 +79,14 @@ app.include_router(dashboard_router)
 
 class ManualHandoffRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
-    phone_number: str = Field(pattern=r"^\d{7,15}$")
+    phone_number: str = Field(pattern=WHATSAPP_SENDER_PATTERN)
     customer_name: str = Field(default="Cliente", min_length=1, max_length=120)
     reason: str = Field(default="Revisión manual solicitada desde el dashboard", min_length=3, max_length=500)
 
 
 class CatalogRecoverySelection(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
-    phone_number: str = Field(pattern=r"^\d{7,15}$")
+    phone_number: str = Field(pattern=WHATSAPP_SENDER_PATTERN)
     catalog_id: str = Field(pattern=r"^catalogo_[a-z0-9_]{1,52}$")
 
 
@@ -196,7 +200,7 @@ def send_whatsapp_message(to_number: str, text: str):
     payload = {
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
-        "to": to_number,
+        **whatsapp_recipient_fields(to_number),
         "type": "text",
         "text": {"preview_url": False, "body": text},
     }
@@ -335,7 +339,7 @@ def send_whatsapp_media(to_number: str, media_id: str, media_type: str, caption:
     payload = {
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
-        "to": to_number,
+        **whatsapp_recipient_fields(to_number),
         "type": media_type,
         media_type: media_payload,
     }
@@ -471,7 +475,7 @@ def send_presaved_file(to_number: str, file_id: str, *, raise_on_failure: bool =
     payload = {
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
-        "to": to_number,
+        **whatsapp_recipient_fields(to_number),
         "type": media_type,
         media_type: media_reference,
     }
@@ -593,7 +597,7 @@ def _create_handoff_ticket_if_needed(sender_phone: str, sender_name: str, new_st
     if state_check.get("chatwoot_conversation_id"):
         return
 
-    display_name = f"{sender_name} (+{sender_phone})"
+    display_name = f"{sender_name} (+{sender_phone})" if valid_whatsapp_phone(sender_phone) else sender_name
     contact_id = chatwoot_api.get_or_create_contact(sender_phone, name=display_name)
     if not contact_id:
         operational_event("HANDOFF_FAILED", phone=sender_phone, stage="HANDOFF", reason=new_state.get("handoff_reason", "contact_creation"), result="contact_failed")
@@ -1241,10 +1245,11 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                             flush=True,
                         )
                         continue
-                    contacts = value.get("contacts", [])
-                    sender_name = contacts[0].get("profile", {}).get("name", "Cliente") if contacts else "Cliente"
+                    contacts = value.get("contacts") or []
                     for message in value["messages"]:
-                        sender_phone = message.get("from")
+                        sender_phone, sender_name = resolve_whatsapp_sender(
+                            message, contacts, allow_single_contact=len(value["messages"]) == 1,
+                        )
                         message_type = message.get("type")
                         event_id = message.get("id")
                         if not valid_whatsapp_sender(sender_phone):

@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import os
 import re
@@ -155,8 +156,13 @@ def sanitize_job_id(raw_job_id: str) -> str:
     """Convert provider message IDs into an RQ-safe job ID."""
     if not raw_job_id:
         return None
-    safe = _SAFE_JOB_ID_RE.sub("_", str(raw_job_id)).strip("_")
-    return safe[:250] or None
+    raw = str(raw_job_id)
+    safe = _SAFE_JOB_ID_RE.sub("_", raw).strip("_")
+    if len(safe) > 250:
+        # Long sender/message identities must not erase the unique job suffix.
+        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+        return f"{safe[:217]}_{digest}"
+    return safe or None
 
 
 def get_queue():

@@ -57,6 +57,15 @@ las de cada etapa comercial.
    **sin `/rest/v1`**. `SUPABASE_SERVICE_ROLE_KEY` es solo servidor: nunca una
    publishable/anon key y nunca una variable del navegador.
 
+El bootstrap también prepara perfiles WhatsApp con usuario y teléfono oculto:
+`customers.phone_number`, `conversation_states.phone_number` y
+`message_logs.phone_number` son `text`, y `has_unbounded_whatsapp_identities`
+debe devolver `true`. El nombre histórico de la columna se conserva; puede contener
+un teléfono o el BSUID exacto que entrega Meta. El runtime usa `recipient` para
+BSUID y crea contactos Chatwoot con `identifier`, sin teléfono ficticio. Esta misma
+capacidad se añade a proyectos existentes mediante el upgrade canónico; no asocies
+manualmente una identidad opaca a un teléfono ni copies datos de otra marca.
+
 ### 3. Meta
 
 1. Prepara la app/business y un número de WhatsApp exclusivo. Registra su Phone

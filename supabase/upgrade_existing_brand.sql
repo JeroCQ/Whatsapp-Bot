@@ -23,6 +23,17 @@ BEGIN
   END IF;
 END $$;
 
+-- Keep the legacy column name for runtime/dashboard compatibility. Its value is
+-- the WhatsApp recipient identity, which can be a phone number or a longer
+-- business-scoped user ID. PostgreSQL preserves the existing values and all
+-- primary/unique/foreign keys when widening these compatible string types.
+-- One DO statement makes the three-column change atomic and safe to rerun.
+DO $$ BEGIN
+  ALTER TABLE public.customers ALTER COLUMN phone_number TYPE text;
+  ALTER TABLE public.conversation_states ALTER COLUMN phone_number TYPE text;
+  ALTER TABLE public.message_logs ALTER COLUMN phone_number TYPE text;
+END $$;
+
 -- Current conversation, Chatwoot, follow-up, and durable-memory fields.
 ALTER TABLE public.conversation_states
   ADD COLUMN IF NOT EXISTS chatwoot_conversation_id integer,
@@ -120,6 +131,12 @@ SELECT
   to_regclass('public.processed_webhook_events') IS NOT NULL AS has_webhook_events,
   to_regclass('public.dashboard_admins') IS NOT NULL AS has_dashboard_admins,
   to_regclass('public.catalog_assets') IS NOT NULL AS has_catalog_assets,
+  (
+    SELECT count(*) = 3 FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name IN ('customers', 'conversation_states', 'message_logs')
+      AND column_name = 'phone_number' AND data_type = 'text'
+  ) AS has_unbounded_whatsapp_identities,
   EXISTS (
     SELECT 1 FROM information_schema.columns
     WHERE table_schema = 'public' AND table_name = 'conversation_states'

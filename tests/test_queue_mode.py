@@ -14,6 +14,7 @@ from queue_client import (
     meta_window_is_open,
     next_colombia_opening_delay_seconds,
     register_follow_up,
+    sanitize_job_id,
     web_queue_mode,
 )
 
@@ -21,6 +22,19 @@ from queue_client import (
 def test_follow_up_delay_helper_has_one_definition():
     source = Path("queue_client.py").read_text(encoding="utf-8")
     assert source.count("def follow_up_delay_seconds(") == 1
+
+
+def test_long_whatsapp_job_identifiers_keep_the_unique_event_suffix():
+    prefix = "process-whatsapp-CO.ENT." + "A" * 250
+    first = sanitize_job_id(prefix + "-first-message")
+    second = sanitize_job_id(prefix + "-second-message")
+    assert first != second
+    assert len(first) <= 250 and len(second) <= 250
+    assert first == sanitize_job_id(prefix + "-first-message")
+
+
+def test_short_existing_job_identifiers_remain_compatible():
+    assert sanitize_job_id("follow-up:test") == "follow-up_test"
 
 
 def test_provider_webhook_request_paths_keep_supabase_claims_in_workers():

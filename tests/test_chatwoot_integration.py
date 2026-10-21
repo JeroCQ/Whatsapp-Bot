@@ -342,7 +342,7 @@ def test_meta_failures_raise_and_redact(monkeypatch, capsys, status):
     response = Response(status, {"error": {"code": 190, "error_subcode": 7, "message": "bad wa-secret-token Authorization: Bearer leak"}})
     monkeypatch.setattr(main, "post", lambda *args, **kwargs: response)
     with pytest.raises(ProviderError) as caught:
-        main.send_whatsapp_message("57300", "hello")
+        main.send_whatsapp_message("15550000001", "hello")
     print(caught.value)
     output = capsys.readouterr().out
     assert "wa-secret-token" not in output and "Bearer leak" not in output
@@ -350,7 +350,7 @@ def test_meta_failures_raise_and_redact(monkeypatch, capsys, status):
 
 def test_meta_200_returns_success(monkeypatch):
     monkeypatch.setattr(main, "post", lambda *args, **kwargs: Response(200))
-    assert main.send_whatsapp_message("57300", "hello") is True
+    assert main.send_whatsapp_message("15550000001", "hello") is True
 
 
 def test_failed_primary_response_suppresses_followup(monkeypatch):
@@ -769,7 +769,7 @@ def test_image_catalog_is_uploaded_and_sent_as_whatsapp_image(monkeypatch):
     monkeypatch.setattr(main, "upload_public_url_to_meta_media", lambda url, filename, content_type: "media-png")
     monkeypatch.setattr(main, "post", lambda url, **kwargs: sent_payloads.append(kwargs["json"]) or Response(200))
 
-    assert main.send_presaved_file("57300", "catalogo_pdf") is True
+    assert main.send_presaved_file("15550000001", "catalogo_pdf") is True
     assert sent_payloads[0]["type"] == "image"
     assert sent_payloads[0]["image"]["id"] == "media-png"
     assert sent_payloads[0]["image"]["caption"] == "Catálogo Memo's"
@@ -801,7 +801,7 @@ def test_pdf_catalog_uses_commercial_name_but_upload_keeps_cache_buster(monkeypa
     monkeypatch.setattr(main, "upload_public_url_to_meta_media", fake_upload)
     monkeypatch.setattr(main, "post", lambda url, **kwargs: sent_payloads.append(kwargs["json"]) or Response(200))
 
-    assert main.send_presaved_file("57300", "catalogo_pdf") is True
+    assert main.send_presaved_file("15550000001", "catalogo_pdf") is True
     assert uploaded_filenames[0].startswith("catalogo-tanaka-")
     assert uploaded_filenames[0].endswith(".pdf")
     assert sent_payloads[0]["document"]["filename"] == "Catálogo Tanaka.pdf"
@@ -821,5 +821,274 @@ def test_missing_catalog_does_not_send_broken_link(monkeypatch):
     monkeypatch.setattr(main, "FILE_CATALOG", {"catalogo_pdf": item})
     monkeypatch.setattr(main, "post", lambda *args, **kwargs: calls.append((args, kwargs)))
 
-    assert main.send_presaved_file("57300", "catalogo_pdf") is False
+    assert main.send_presaved_file("15550000001", "catalogo_pdf") is False
     assert calls == []
+
+
+def _whatsapp_payload(messages, contacts=None, phone_number_id="phone-id"):
+    return {
+        "object": "whatsapp_business_account",
+        "entry": [{"changes": [{"value": {
+            "metadata": {"phone_number_id": phone_number_id},
+            "contacts": contacts or [],
+            "messages": messages,
+        }}]}],
+    }
+
+
+def _capture_whatsapp_dispatch(monkeypatch):
+    dispatched = []
+    monkeypatch.setattr(main, "queue_enabled", lambda: False)
+    monkeypatch.setattr(
+        main, "_dispatch_before_ack",
+        lambda _background, _function, *args, **kwargs: dispatched.append((args, kwargs)) or "queued",
+    )
+    return dispatched
+
+
+@pytest.mark.parametrize("business_id", ["memos", "tanaka", "velvet", "future_shop"])
+@pytest.mark.parametrize("identity_field", ["from_user_id", "from_parent_user_id", "from"])
+def test_whatsapp_webhook_accepts_username_profile_identity_for_every_business(
+    monkeypatch, business_id, identity_field,
+):
+    sender_id = "CO.ENT.TestSender01" if identity_field == "from_parent_user_id" else "CO.TestSender01"
+    contact_field = "parent_user_id" if identity_field == "from_parent_user_id" else "user_id"
+    monkeypatch.setattr(main.config, "BUSINESS_ID", business_id)
+    dispatched = _capture_whatsapp_dispatch(monkeypatch)
+    message = {"id": "wamid.test-inbound", "type": "text", "text": {"body": "Hola"}, identity_field: sender_id}
+    contacts = [{contact_field: sender_id, "profile": {"name": "Cliente de prueba", "username": "test_customer"}}]
+
+    response = TestClient(main.app).post("/webhook", json=_whatsapp_payload([message], contacts))
+
+    assert response.status_code == 200
+    assert response.json()["accepted"] == 1
+    assert response.json()["rejected"] == 0
+    assert dispatched[0][0][:3] == (sender_id, "Cliente de prueba", "Hola")
+    assert dispatched[0][1] == {
+        "event_id": "wamid.test-inbound", "business_id": business_id, "phone_number_id": "phone-id",
+    }
+
+
+def test_whatsapp_media_webhook_accepts_bsuid_without_phone_number(monkeypatch):
+    dispatched = _capture_whatsapp_dispatch(monkeypatch)
+    message = {
+        "id": "wamid.test-audio", "from_user_id": "CO.TestSender01", "type": "audio",
+        "audio": {"id": "media-test-audio", "mime_type": "audio/ogg; codecs=opus"},
+    }
+
+    response = TestClient(main.app).post("/webhook", json=_whatsapp_payload([message]))
+
+    assert response.json()["accepted"] == 1
+    assert dispatched[0][0] == (
+        "CO.TestSender01", "Cliente", "[Audio Nota]", False, "media-test-audio", True,
+        "media-test-audio", "audio", "audio/ogg; codecs=opus", None,
+    )
+
+
+def test_whatsapp_batch_matches_each_sender_with_its_own_contact(monkeypatch):
+    dispatched = _capture_whatsapp_dispatch(monkeypatch)
+    messages = [
+        {"id": "wamid.first", "from_user_id": "CO.TestSender01", "type": "text", "text": {"body": "Primero"}},
+        {"id": "wamid.second", "from_user_id": "CO.TestSender02", "type": "text", "text": {"body": "Segundo"}},
+    ]
+    contacts = [
+        {"user_id": "CO.TestSender02", "profile": {"name": "Segundo cliente"}},
+        {"user_id": "CO.TestSender01", "profile": {"name": "Primer cliente"}},
+    ]
+
+    response = TestClient(main.app).post("/webhook", json=_whatsapp_payload(messages, contacts))
+
+    assert response.json()["accepted"] == 2
+    assert [args[:3] for args, _kwargs in dispatched] == [
+        ("CO.TestSender01", "Primer cliente", "Primero"),
+        ("CO.TestSender02", "Segundo cliente", "Segundo"),
+    ]
+
+
+@pytest.mark.parametrize("include_message_phone", [False, True])
+def test_whatsapp_username_transition_keeps_an_available_phone_history(monkeypatch, include_message_phone):
+    dispatched = _capture_whatsapp_dispatch(monkeypatch)
+    message = {
+        "id": "wamid.phone-history", "from_user_id": "CO.TestSender01", "type": "text", "text": {"body": "Hola"},
+    }
+    if include_message_phone:
+        message["from"] = "15550000001"
+    contact = {"wa_id": "15550000001", "user_id": "CO.TestSender01", "profile": {"name": "Cliente existente"}}
+
+    response = TestClient(main.app).post("/webhook", json=_whatsapp_payload([message], [contact]))
+
+    assert response.json()["accepted"] == 1
+    assert dispatched[0][0][:3] == ("15550000001", "Cliente existente", "Hola")
+
+
+def test_whatsapp_username_identity_does_not_take_an_unrelated_contacts_phone_or_name(monkeypatch):
+    dispatched = _capture_whatsapp_dispatch(monkeypatch)
+    message = {"id": "wamid.unmatched-contact", "from_user_id": "CO.TestSender01", "type": "text", "text": {"body": "Hola"}}
+    unrelated_contact = {
+        "wa_id": "15550000002", "user_id": "CO.TestSender02", "profile": {"name": "Otro cliente"},
+    }
+
+    response = TestClient(main.app).post("/webhook", json=_whatsapp_payload([message], [unrelated_contact]))
+
+    assert response.json()["accepted"] == 1
+    assert dispatched[0][0][:3] == ("CO.TestSender01", "Cliente", "Hola")
+
+
+@pytest.mark.parametrize("contact", [
+    {"user_id": "CO.TestSender01", "profile": {"name": "Cliente de prueba"}},
+    {"parent_user_id": "CO.ENT.TestSender01", "profile": {"name": "Cliente de prueba"}},
+    {"wa_id": "15550000001", "profile": {"name": "Cliente de prueba"}},
+])
+def test_whatsapp_single_message_can_use_one_unambiguous_contact(monkeypatch, contact):
+    dispatched = _capture_whatsapp_dispatch(monkeypatch)
+    message = {"id": "wamid.contact-fallback", "type": "text", "text": {"body": "Hola"}}
+    sender_id = next(value for key, value in contact.items() if key != "profile")
+
+    response = TestClient(main.app).post("/webhook", json=_whatsapp_payload([message], [contact]))
+
+    assert response.json()["accepted"] == 1
+    assert dispatched[0][0][:3] == (sender_id, "Cliente de prueba", "Hola")
+
+
+def test_whatsapp_batch_never_assigns_the_same_contact_to_messages_without_sender(monkeypatch):
+    dispatched = _capture_whatsapp_dispatch(monkeypatch)
+    messages = [
+        {"id": "wamid.unknown-one", "type": "text", "text": {"body": "Uno"}},
+        {"id": "wamid.unknown-two", "type": "text", "text": {"body": "Dos"}},
+    ]
+    contacts = [{"user_id": "CO.TestSender01", "profile": {"name": "Cliente de prueba"}}]
+
+    response = TestClient(main.app).post("/webhook", json=_whatsapp_payload(messages, contacts))
+
+    assert response.json()["accepted"] == 0
+    assert response.json()["rejected"] == 2
+    assert dispatched == []
+
+
+@pytest.mark.parametrize("sender_fields,contacts", [
+    ({}, [{"profile": {"username": "test_customer", "name": "Cliente"}}]),
+    ({"from": "@test_customer"}, []),
+    ({"from": "wamid.15550000001"}, []),
+    ({"from_user_id": "test_customer"}, []),
+    ({"from": "１５５５００００００１"}, []),
+])
+def test_whatsapp_webhook_does_not_invent_phone_from_message_id_or_username(
+    monkeypatch, sender_fields, contacts,
+):
+    dispatched = _capture_whatsapp_dispatch(monkeypatch)
+    message = {"id": "wamid.15550000001", "type": "text", "text": {"body": "Hola"}, **sender_fields}
+
+    response = TestClient(main.app).post("/webhook", json=_whatsapp_payload([message], contacts))
+
+    assert response.json()["accepted"] == 0
+    assert response.json()["rejected"] == 1
+    assert dispatched == []
+
+
+@pytest.mark.parametrize("destination", ["other-business-number", None])
+def test_whatsapp_bsuid_does_not_bypass_destination_isolation(monkeypatch, destination):
+    dispatched = _capture_whatsapp_dispatch(monkeypatch)
+    message = {"id": "wamid.wrong-destination", "from_user_id": "CO.TestSender01", "type": "text", "text": {"body": "Hola"}}
+
+    response = TestClient(main.app).post("/webhook", json=_whatsapp_payload([message], phone_number_id=destination))
+
+    assert response.json()["accepted"] == 0
+    assert response.json()["rejected"] == 1
+    assert dispatched == []
+
+
+def test_queued_whatsapp_worker_accepts_bsuid_for_its_own_business_only(monkeypatch):
+    claimed = []
+    processed = []
+    monkeypatch.setattr(main.config, "BUSINESS_ID", "future_shop")
+    monkeypatch.setattr(main, "claim_webhook_event", lambda *args: claimed.append(args) or True)
+    monkeypatch.setattr(main, "process_whatsapp_message", lambda *args, **kwargs: processed.append((args, kwargs)))
+
+    main.process_claimed_whatsapp_event(
+        "CO.TestSender01", "Cliente de prueba", "Hola", event_id="wamid.queued",
+        business_id="future_shop", phone_number_id="phone-id",
+    )
+
+    assert claimed == [("whatsapp", "wamid.queued", "CO.TestSender01")]
+    assert processed == [(("CO.TestSender01", "Cliente de prueba", "Hola"), {"event_id": "wamid.queued"})]
+
+
+@pytest.mark.parametrize("business_id,phone_number_id", [
+    ("another_shop", "phone-id"), ("future_shop", "other-business-number"),
+])
+def test_queued_whatsapp_bsuid_cannot_cross_deployment_boundaries(monkeypatch, business_id, phone_number_id):
+    monkeypatch.setattr(main.config, "BUSINESS_ID", "future_shop")
+    monkeypatch.setattr(main, "claim_webhook_event", lambda *args: pytest.fail("must reject before claiming"))
+    monkeypatch.setattr(main, "process_whatsapp_message", lambda *args, **kwargs: pytest.fail("must not process"))
+
+    main.process_claimed_whatsapp_event(
+        "CO.TestSender01", "Cliente de prueba", "Hola", event_id="wamid.wrong-worker",
+        business_id=business_id, phone_number_id=phone_number_id,
+    )
+
+
+@pytest.mark.parametrize("sender_id", ["15550000001", "CO.TestSender01", "CO.ENT.TestSender01"])
+@pytest.mark.parametrize("message_kind", ["text", "media", "catalog"])
+def test_all_whatsapp_delivery_paths_use_the_correct_recipient_field(monkeypatch, sender_id, message_kind):
+    sent = []
+    monkeypatch.setattr(main, "post", lambda url, **kwargs: sent.append(kwargs["json"]) or Response(200))
+    if message_kind == "text":
+        assert main.send_whatsapp_message(sender_id, "Hola") is True
+    elif message_kind == "media":
+        assert main.send_whatsapp_media(sender_id, "media-test", "image", "Imagen de prueba") is True
+    else:
+        item = types.SimpleNamespace(
+            media_id="media-catalog", link=None, filename="Catálogo de prueba.pdf",
+            media_type="document", default_caption="Opciones disponibles",
+        )
+        monkeypatch.setattr(main, "FILE_CATALOG", {"catalogo_test": item})
+        assert main.send_presaved_file(sender_id, "catalogo_test") is True
+
+    assert len(sent) == 1
+    assert sent[0]["messaging_product"] == "whatsapp"
+    if sender_id.isascii() and sender_id.isdigit():
+        assert sent[0]["to"] == sender_id
+        assert "recipient" not in sent[0]
+    else:
+        assert sent[0]["recipient"] == sender_id
+        assert sent[0]["recipient_type"] == "individual"
+        assert "to" not in sent[0]
+
+
+@pytest.mark.parametrize("sender_id", ["CO.TestSender01", "CO.ENT.TestSender01"])
+def test_manual_handoff_and_catalog_recovery_accept_bsuid(sender_id):
+    assert main.ManualHandoffRequest(phone_number=sender_id).phone_number == sender_id
+    assert main.CatalogRecoverySelection(phone_number=sender_id, catalog_id="catalogo_test").phone_number == sender_id
+
+
+def test_bsuid_reset_restarts_the_existing_identity_without_creating_phone_state(monkeypatch):
+    reset = []
+    cancelled = []
+    sent = []
+    monkeypatch.setattr(main, "invalidate_follow_up", lambda sender_id: cancelled.append(sender_id))
+    monkeypatch.setattr(main, "reset_client_history", lambda sender_id: reset.append(sender_id))
+    monkeypatch.setattr(main, "send_whatsapp_message", lambda *args: sent.append(args) or True)
+    monkeypatch.setattr(main, "get_or_create_customer_state", lambda *args: pytest.fail("reset must not create another identity"))
+
+    main._process_whatsapp_message_unlocked("CO.TestSender01", "Cliente de prueba", "/reset")
+
+    assert reset == ["CO.TestSender01"]
+    assert cancelled == ["CO.TestSender01"]
+    assert sent == [("CO.TestSender01", "🔄 Conversación reiniciada. El bot está activo y empezamos de cero.")]
+
+
+def test_bsuid_handoff_display_name_does_not_present_the_identity_as_a_phone(monkeypatch):
+    _mock_handoff_dependencies(monkeypatch)
+    contacts = []
+    monkeypatch.setattr(main, "invalidate_follow_up", lambda *_args: None)
+    monkeypatch.setattr(chatwoot_api, "get_or_create_contact", lambda *args, **kwargs: contacts.append((args, kwargs)) or 12)
+    monkeypatch.setattr(chatwoot_api, "send_message_to_chatwoot", lambda *args, **kwargs: None)
+
+    main._create_handoff_ticket_if_needed(
+        "CO.TestSender01", "Cliente de prueba", {"is_paused": True, "handoff_reason": "Necesita asesor"},
+        None, "", None, None,
+    )
+
+    assert contacts[0][0] == ("CO.TestSender01",)
+    assert "+CO.TestSender01" not in contacts[0][1]["name"]
+    assert "Cliente de prueba" in contacts[0][1]["name"]
