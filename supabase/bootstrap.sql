@@ -89,6 +89,34 @@ CREATE TABLE IF NOT EXISTS public.dashboard_admins (
 ALTER TABLE public.dashboard_admins ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.dashboard_admins FROM anon, authenticated;
 
+-- Correlated message metrics and durable, bounded human-handoff delivery.
+ALTER TABLE public.conversation_states
+  ADD COLUMN IF NOT EXISTS follow_up_not_before timestamptz,
+  ADD COLUMN IF NOT EXISTS follow_up_suppressed boolean NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS follow_up_suppression_reason text;
+ALTER TABLE public.message_logs
+  ADD COLUMN IF NOT EXISTS metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  ADD COLUMN IF NOT EXISTS event_key text;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_message_logs_event_key ON public.message_logs(event_key);
+CREATE TABLE IF NOT EXISTS public.handoff_deliveries (
+  business_id text NOT NULL,
+  phone_number text NOT NULL REFERENCES public.customers(phone_number),
+  request_id text NOT NULL,
+  status text NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'reserved', 'sending', 'created', 'unknown', 'exhausted', 'cancelled')),
+  attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  retry_at timestamptz NOT NULL DEFAULT now(),
+  conversation_id bigint,
+  last_error text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (business_id, phone_number)
+);
+CREATE INDEX IF NOT EXISTS idx_handoff_deliveries_pending
+  ON public.handoff_deliveries(business_id, status, retry_at);
+ALTER TABLE public.handoff_deliveries ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.handoff_deliveries FROM anon, authenticated;
+
 CREATE INDEX IF NOT EXISTS idx_message_logs_phone_created_at
   ON public.message_logs(phone_number, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_conversation_states_chatwoot_conversation_id

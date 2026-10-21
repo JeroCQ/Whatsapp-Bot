@@ -104,7 +104,7 @@ def get_or_create_contact(phone: str, name: str = "Cliente WhatsApp"):
     
     return None
 
-def create_conversation(contact_id: int):
+def create_conversation(contact_id: int, *, raise_on_error: bool = False):
     """Abre un ticket nuevo para el asesor (Sin enviar mensaje aún)."""
     url = f"{get_base_url()}/conversations"
     data = {
@@ -133,6 +133,8 @@ def create_conversation(contact_id: int):
         return conversation_id
     except (ProviderError, requests.exceptions.RequestException, ValueError, TypeError, AttributeError, KeyError) as e:
         print(f"[PROVIDER ERROR] {e}")
+        if raise_on_error:
+            raise
     return None
 
 

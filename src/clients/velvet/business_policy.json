@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "timezone": "America/Bogota",
+  "contact_hours": {"days": [0, 1, 2, 3, 4, 5], "start": "08:00", "end": "18:00"},
+  "operating_hours": {"days": [0, 1, 2, 3, 4, 5], "start": "09:00", "end": "18:00"},
+  "follow_up_min_spacing_seconds": 900,
+  "standard_wholesale_self_service": true
+}

@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import uuid
+from follow_up_store import execute as follow_up_operation
 from datetime import datetime, time, timedelta, timezone
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
@@ -89,7 +90,7 @@ def _follow_up_key(phone_number: str) -> str:
     return f"{_FOLLOW_UP_TOKEN_PREFIX}{phone_number}"
 
 
-def register_follow_up(phone_number: str, ttl_seconds: int) -> str:
+def register_follow_up(phone_number: str, ttl_seconds: int, *, reference_at=None, event_id="") -> str:
     """Store the current reminder token in Redis, replacing an older reminder."""
     queue = get_queue()
     if queue is None:
@@ -97,7 +98,11 @@ def register_follow_up(phone_number: str, ttl_seconds: int) -> str:
     token = uuid.uuid4().hex
     # Keep enough time for delayed jobs and temporary worker outages, without
     # accumulating permanent per-customer state.
-    queue.connection.set(_follow_up_key(phone_number), token, ex=max(3600, int(ttl_seconds) + 86400))
+    result = follow_up_operation(queue.connection, "register", phone_number, token,
+                                now=reference_at, ttl_seconds=max(8 * 86400, int(ttl_seconds) + 86400),
+                                provider_message_id=event_id)
+    if result["status"] != "registered":
+        raise ValueError("stale_customer_activity")
     return token
 
 
@@ -106,7 +111,7 @@ def invalidate_follow_up(phone_number: str):
     try:
         queue = get_queue()
         if queue is not None:
-            queue.connection.delete(_follow_up_key(phone_number))
+            follow_up_operation(queue.connection, "invalidate", phone_number)
     except Exception as exc:
         logger.warning("Could not invalidate follow-up for %s: %s", phone_number, exc)
 
@@ -117,7 +122,7 @@ def claim_follow_up(phone_number: str, token: str) -> bool:
         queue = get_queue()
         if queue is None:
             return False
-        return bool(queue.connection.eval(_CLAIM_TOKEN_SCRIPT, 1, _follow_up_key(phone_number), token))
+        return follow_up_operation(queue.connection, "consume", phone_number, token)["status"] == "claimed"
     except Exception as exc:
         logger.warning("Could not claim follow-up for %s: %s", phone_number, exc)
         return False
@@ -129,18 +134,58 @@ def claim_follow_up_attempt(phone_number: str, token: str, stage: str, attempt: 
         queue = get_queue()
         if queue is None:
             return False
-        attempt_key = f"{_follow_up_key(phone_number)}:{stage}:{attempt}"
-        return bool(queue.connection.eval(
-            _CLAIM_ATTEMPT_SCRIPT, 2, _follow_up_key(phone_number), attempt_key,
-            token, str(8 * 24 * 60 * 60),
-        ))
+        return follow_up_operation(queue.connection, "claim", phone_number, token, stage, attempt)["status"] == "claimed"
     except Exception as exc:
         logger.warning("Could not claim follow-up attempt for %s: %s", phone_number, exc)
         return False
 
 
+def record_customer_activity(phone_number, received_at, event_id=""):
+    """Invalidate immediately at ingress, before a worker waits in the queue."""
+    return _follow_up_operation("activity", phone_number, event_id, now=received_at)
+
+
+def _follow_up_operation(operation, phone_number, token="", stage="", attempt=0, **kwargs):
+    try:
+        queue = get_queue()
+        if queue is None:
+            return {"status": "unavailable"}
+        return follow_up_operation(queue.connection, operation, phone_number, token, stage, attempt, **kwargs)
+    except Exception as exc:
+        logger.warning("Follow-up state unavailable: %s", type(exc).__name__)
+        return {"status": "unavailable"}
+
+
+def reserve_follow_up_attempt(phone_number, token, stage, attempt, **kwargs):
+    return _follow_up_operation("reserve", phone_number, token, stage, attempt, **kwargs)
+
+
+def begin_follow_up_send(phone_number, token, stage, attempt, reservation_id, **kwargs):
+    return _follow_up_operation("begin", phone_number, token, stage, attempt, reservation_id=reservation_id, **kwargs)
+
+
+def finish_follow_up_attempt(phone_number, token, stage, attempt, reservation_id, **kwargs):
+    return _follow_up_operation("finish", phone_number, token, stage, attempt, reservation_id=reservation_id, **kwargs)
+
+
+def claim_internal_alert(identity, ttl_seconds=86400):
+    try:
+        from follow_up_store import keys
+        queue = get_queue()
+        if queue is None:
+            return False
+        return bool(queue.connection.set(keys(identity)[0] + ":internal-alert", "1", nx=True, ex=ttl_seconds))
+    except Exception:
+        return False
+
+
 def queue_enabled() -> bool:
     return bool(REDIS_URL)
+
+
+def follow_ups_enabled(environ=None) -> bool:
+    environ = os.environ if environ is None else environ
+    return str(environ.get("FOLLOW_UPS_ENABLED", "true")).strip().lower() not in {"0", "false", "no", "off"}
 
 
 def web_queue_mode(environ=None) -> str:
@@ -226,6 +271,10 @@ def get_queue_stats() -> dict:
         queue = get_queue()
         connection = queue.connection
         workers = [worker for worker in Worker.all(connection=connection) if QUEUE_NAME in worker.queue_names()]
+        worker_commits = {}
+        for worker in workers:
+            value = connection.hget(worker.key, "deployment_sha")
+            worker_commits[worker.name] = value.decode() if isinstance(value, bytes) else (value or "unknown")
         return {
             "enabled": True,
             "queue": QUEUE_NAME,
@@ -235,6 +284,7 @@ def get_queue_stats() -> dict:
             "failed_jobs": queue.failed_job_registry.count,
             "deferred_jobs": queue.deferred_job_registry.count,
             "workers_seen": len(workers),
+            "worker_commits": worker_commits,
         }
     except Exception as exc:
         return {"enabled": True, "queue": QUEUE_NAME, "web_queue_mode": web_queue_mode(), "error": str(exc)}

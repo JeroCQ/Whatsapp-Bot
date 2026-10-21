@@ -3,13 +3,14 @@ import re
 
 
 class ProviderError(RuntimeError):
-    def __init__(self, provider: str, operation: str, status: int | None, code: str = "", subcode: str = "", message: str = ""):
+    def __init__(self, provider: str, operation: str, status: int | None, code: str = "", subcode: str = "", message: str = "", *, confirmed_not_sent: bool = False):
         self.provider = provider
         self.operation = operation
         self.status = status
         self.code = code
         self.subcode = subcode
         self.safe_message = sanitize_text(message)
+        self.confirmed_not_sent = confirmed_not_sent
         super().__init__(f"{provider} {operation} failed (status={status}, code={code}, subcode={subcode}, message={self.safe_message})")
 
 

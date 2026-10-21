@@ -138,23 +138,10 @@ class FollowUpDelayTests(unittest.TestCase):
         self.assertEqual(queue.call[1]["job_id"], "follow-up_test")
 
     def test_redis_token_can_be_registered_cancelled_and_claimed(self):
-        class FakeRedis:
-            def __init__(self):
-                self.values = {}
-
-            def set(self, key, value, ex=None):
-                self.values[key] = value
-
-            def delete(self, key):
-                return int(self.values.pop(key, None) is not None)
-
-            def eval(self, script, key_count, key, token):
-                if self.values.get(key) != token:
-                    return 0
-                return self.delete(key)
+        import fakeredis
 
         class FakeQueue:
-            connection = FakeRedis()
+            connection = fakeredis.FakeRedis()
 
         queue = FakeQueue()
         with patch("queue_client.get_queue", return_value=queue):

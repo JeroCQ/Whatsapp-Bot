@@ -4,6 +4,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -242,6 +243,20 @@ def test_whatsapp_identity_migration_preserves_data_and_constraints(isolated_pos
         AND column_name = 'phone_number' AND data_type = 'text';
     """, database) == "3"
 
+    assert execute("""
+      SELECT count(*) FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'message_logs'
+        AND column_name IN ('metadata', 'event_key');
+    """, database) == "2"
+    assert execute("""
+      SELECT relrowsecurity FROM pg_class WHERE oid = 'public.handoff_deliveries'::regclass;
+    """, database) == "t"
+    assert execute("""
+      SELECT count(*) FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'conversation_states'
+        AND column_name IN ('follow_up_not_before', 'follow_up_suppressed', 'follow_up_suppression_reason');
+    """, database) == "3"
+
     identities = ["573001234567", "CO.ENT." + "A" * 128, "US.AbCdEf123", "US.aBcDeF123"]
     for identity in identities:
         execute(f"""
@@ -250,6 +265,27 @@ def test_whatsapp_identity_migration_preserves_data_and_constraints(isolated_pos
           INSERT INTO public.message_logs (phone_number, role, content)
           VALUES ('{identity}', 'system', 'Identity survived end to end');
         """, database)
+
+    execute("""
+      INSERT INTO public.message_logs (phone_number, role, content, metadata, event_key)
+      VALUES ('573001234567', 'model', 'correlated reply', '{"source":"bot_response","inbound_message_ids":["a","b"]}', 'reply-key');
+      INSERT INTO public.message_logs (phone_number, role, content, event_key)
+      VALUES ('573001234567', 'model', 'duplicate', 'reply-key') ON CONFLICT (event_key) DO NOTHING;
+      INSERT INTO public.handoff_deliveries (business_id, phone_number, request_id)
+      VALUES ('memos', '573001234567', 'request-memos'), ('velvet', '573001234567', 'request-velvet');
+    """, database)
+    assert execute("SELECT count(*) FROM public.message_logs WHERE event_key = 'reply-key';", database) == "1"
+    assert execute("SELECT count(*) FROM public.handoff_deliveries;", database) == "2"
+    claim_sql = """
+      UPDATE public.handoff_deliveries SET status = 'reserved', attempts = attempts + 1
+      WHERE business_id = 'memos' AND phone_number = '573001234567'
+        AND request_id = 'request-memos' AND status = 'pending' AND attempts = 0
+      RETURNING request_id;
+    """
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        claims = list(pool.map(lambda _: execute(claim_sql, database), range(2)))
+    assert sum(bool(claim) for claim in claims) == 1
+    assert execute("SELECT attempts FROM public.handoff_deliveries WHERE business_id = 'velvet';", database) == "0"
     assert json.loads(execute("""
       SELECT json_agg(c.phone_number ORDER BY c.phone_number)
       FROM public.customers c

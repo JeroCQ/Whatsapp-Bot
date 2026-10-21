@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import types
+import requests
 
 import pytest
 from fastapi.testclient import TestClient
@@ -32,6 +33,34 @@ sys.modules.setdefault("bot", fake_bot)
 import main
 import chatwoot_api
 from provider_errors import ProviderError
+
+
+@pytest.fixture(autouse=True)
+def synthetic_inbound_history(monkeypatch):
+    """All provider tests use synthetic customer windows, never a live database."""
+    monkeypatch.setattr(main, "get_message_logs", lambda *args, **kwargs: [
+        {"role": "user", "content": "consulta", "metadata": {"received_at": main.datetime.now(main.timezone.utc).isoformat()}}
+    ])
+    monkeypatch.setattr(main, "update_follow_up_preferences", lambda *args: None)
+    monkeypatch.setattr(main, "pause_bot_for_human_activity", lambda *args: None)
+
+
+def _mock_followup_execution(monkeypatch):
+    monkeypatch.setattr(main, "reserve_follow_up_attempt", lambda *a, **k: {"status": "reserved", "reservation_id": "lease"})
+    monkeypatch.setattr(main, "begin_follow_up_send", lambda *a, **k: {"status": "sending"})
+    monkeypatch.setattr(main, "finish_follow_up_attempt", lambda *a, **k: {"status": "sent"})
+    original = (main.datetime.now(main.timezone.utc) - main.timedelta(hours=23)).isoformat()
+    monkeypatch.setattr(main, "get_message_logs", lambda *a, **k: [{"role": "user", "content": "consulta",
+        "metadata": {"received_at": original}}])
+    monkeypatch.setattr(main, "next_eligible_contact_at", lambda now, **k: now)
+
+
+def _mock_durable_handoff(monkeypatch):
+    request = {"request_id": "request", "status": "pending", "attempts": 1}
+    monkeypatch.setattr(main.handoff_delivery, "ensure_request", lambda *a: request)
+    monkeypatch.setattr(main.handoff_delivery, "reserve_request", lambda *a: request)
+    monkeypatch.setattr(main.handoff_delivery, "mark_creating", lambda *a: True)
+    monkeypatch.setattr(main.handoff_delivery, "complete_request", lambda *a: True)
 
 
 def payload(account=10, inbox=20, event="message_created"):
@@ -92,12 +121,13 @@ def test_temporary_webhook_alias_uses_same_signature_validation(monkeypatch):
 
 
 def _mock_handoff_dependencies(monkeypatch):
+    _mock_durable_handoff(monkeypatch)
     monkeypatch.setattr(main, "get_or_create_customer_state", lambda phone: {"chatwoot_conversation_id": None})
     monkeypatch.setattr(main, "update_chatwoot_conversation_id", lambda *args: None)
     monkeypatch.setattr(main, "get_message_logs", lambda *args, **kwargs: [{"role": "user", "content": "Necesito ayuda"}])
     monkeypatch.setattr(main, "save_message_log", lambda *args: None)
     monkeypatch.setattr(chatwoot_api, "get_or_create_contact", lambda *args, **kwargs: 12)
-    monkeypatch.setattr(chatwoot_api, "create_conversation", lambda contact_id: 34)
+    monkeypatch.setattr(chatwoot_api, "create_conversation", lambda contact_id, **kwargs: 34)
 
 
 def test_handoff_summary_and_text_alert_are_private(monkeypatch):
@@ -117,6 +147,7 @@ def test_handoff_summary_and_text_alert_are_private(monkeypatch):
 
 
 def test_b2b_without_advisor_after_five_minutes_creates_priority_alert(monkeypatch):
+    monkeypatch.setattr(main, "claim_internal_alert", lambda *_args: True)
     messages = []
     monkeypatch.setattr(main, "get_message_logs", lambda *args, **kwargs: [
         {"role": "system", "content": "HANDOFF: Transferido a humano. Razón: B2B_HIGH_VALUE: interés en maquila"}
@@ -161,13 +192,13 @@ def test_catalog_delivery_failure_pauses_and_creates_explicit_handoff(monkeypatc
     monkeypatch.setattr(main, "_create_handoff_ticket_if_needed", lambda *args: handoffs.append(args))
     monkeypatch.setattr(main, "schedule_follow_up", lambda *_args: pytest.fail("must not schedule after handoff"))
 
-    main._process_whatsapp_message_unlocked("57300", "Cliente", "Mándame el catálogo")
+    main._process_whatsapp_message_unlocked("57300", "Cliente", "Mándame el catálogo", customer_message_received_at=main.datetime.now(main.timezone.utc))
 
     assert state["is_paused"] is True
     assert "No se pudo entregar el catálogo" in state["handoff_reason"]
     assert any("Detalle técnico" in entry[2] and "meta_media_upload_failed" in entry[2] for entry in logs)
     assert customer_messages[-1] == (
-        "Perdón, no pude adjuntar el catálogo. Ya avisé al equipo para que te lo envíe manualmente."
+        "Perdón, no pude adjuntar el catálogo. Se necesita revisión del equipo para enviártelo manualmente."
     )
     assert handoffs and handoffs[0][2]["is_paused"] is True
 
@@ -317,6 +348,7 @@ def test_paused_conversation_routes_audio_through_audio_uploader(monkeypatch):
     main._process_whatsapp_message_unlocked(
         "57300", "Cliente", "", media_id="audio-1", is_audio=True,
         audio_media_id="audio-1", media_type="audio", mime_type="audio/ogg; codecs=opus",
+        customer_message_received_at=main.datetime.now(main.timezone.utc),
     )
 
     assert sent[0][0][0:3] == (44, b"ogg", "audio/ogg; codecs=opus")
@@ -365,7 +397,7 @@ def test_failed_primary_response_suppresses_followup(monkeypatch):
     monkeypatch.setattr(main, "schedule_follow_up", lambda *a: scheduled.append(a))
     monkeypatch.setattr(main, "save_message_log", lambda *a: logged.append(a))
     with pytest.raises(ProviderError):
-        main._process_whatsapp_message_unlocked("57300", "Name", "hello")
+        main._process_whatsapp_message_unlocked("57300", "Name", "hello", customer_message_received_at=main.datetime.now(main.timezone.utc))
     assert scheduled == []
     assert not any(entry[1] == "model" for entry in logged)
 
@@ -378,10 +410,11 @@ def test_followup_at_or_after_24_hours_is_cancelled(monkeypatch, capsys):
     monkeypatch.setattr(main, "register_follow_up", lambda *a: pytest.fail("must not register"))
     monkeypatch.setattr(main, "enqueue_in", lambda *a, **k: pytest.fail("must not enqueue"))
 
-    main.schedule_follow_up("57300", "¿Sigues interesado?", 2880)
+    with main.message_trace(received_at=main.datetime.now(main.timezone.utc).isoformat()):
+        main.schedule_follow_up("57300", "¿Sigues interesado?", 2880)
 
-    assert calls == [("cancel", "57300")]
-    assert "fuera de la ventana de 24 horas" in capsys.readouterr().out
+    assert calls == []  # An old job must never invalidate a newer sequence.
+    assert "outside_whatsapp_window_no_template" in capsys.readouterr().out
 
 
 def test_scheduled_followup_rechecks_meta_window_before_send(monkeypatch):
@@ -398,11 +431,14 @@ def test_scheduled_followup_rechecks_meta_window_before_send(monkeypatch):
     )
 
     assert sent == []
-    assert cancelled == ["57300"]
+    assert cancelled == []
 
 
 def test_scheduled_followup_rechecks_colombia_hours_before_send(monkeypatch):
     sent = []
+    queued = []
+    monkeypatch.setattr(main, "next_eligible_contact_at", lambda now, **kwargs: now + main.timedelta(hours=1))
+    monkeypatch.setattr(main, "enqueue_in", lambda *args, **kwargs: queued.append(args))
     monkeypatch.setattr(main, "claim_follow_up_attempt", lambda *args: True)
     monkeypatch.setattr(main, "meta_window_is_open", lambda *_args: True)
     monkeypatch.setattr(main, "colombia_service_window_is_open", lambda: False)
@@ -411,10 +447,11 @@ def test_scheduled_followup_rechecks_colombia_hours_before_send(monkeypatch):
 
     main.send_scheduled_follow_up(
         "57300", "token", "mensaje", "FIRST_RESPONSE", 1,
-        "2026-09-29T18:01:00-05:00", "2026-09-30T15:00:00+00:00",
+        "", (main.datetime.now(main.timezone.utc) + main.timedelta(hours=3)).isoformat(),
     )
 
     assert sent == []
+    assert len(queued) == 1
 
 
 @pytest.mark.parametrize("stage", [None, "CATALOG_SENT"], ids=["legacy_callback", "catalog_sequence"])
@@ -423,6 +460,7 @@ def test_queued_followup_replaces_obsolete_catalog_text_and_logs_sent_text(
     monkeypatch, stage, surrounding_whitespace,
 ):
     from commercial_intents import DEFAULT_CATALOG_FOLLOW_UP_MESSAGE
+    _mock_followup_execution(monkeypatch)
 
     obsolete_message = (
         "¿Viste alguna opción que te gustara? Dime si prefieres panadería o postres "
@@ -442,6 +480,7 @@ def test_queued_followup_replaces_obsolete_catalog_text_and_logs_sent_text(
     kwargs = {"stage": stage} if stage else {}
     main.send_scheduled_follow_up(
         "57300", "token", f"{surrounding_whitespace}{obsolete_message}{surrounding_whitespace}", **kwargs,
+        meta_window_expires_at=(main.datetime.now(main.timezone.utc) + main.timedelta(hours=1)).isoformat(),
     )
 
     assert sent == [("57300", DEFAULT_CATALOG_FOLLOW_UP_MESSAGE)]
@@ -449,6 +488,7 @@ def test_queued_followup_replaces_obsolete_catalog_text_and_logs_sent_text(
 
 
 def test_queued_followup_preserves_custom_business_message(monkeypatch):
+    _mock_followup_execution(monkeypatch)
     custom_message = "¿Cuántos kilos de queso necesitas para tu panadería?"
     sent = []
     logged = []
@@ -461,7 +501,8 @@ def test_queued_followup_preserves_custom_business_message(monkeypatch):
     monkeypatch.setattr(main, "operational_event", lambda *args, **kwargs: None)
     monkeypatch.setattr(main, "invalidate_follow_up", lambda *_args: pytest.fail("eligible reminder must stay active"))
 
-    main.send_scheduled_follow_up("57300", "token", custom_message, "CATALOG_SENT")
+    main.send_scheduled_follow_up("57300", "token", custom_message, "CATALOG_SENT",
+        meta_window_expires_at=(main.datetime.now(main.timezone.utc) + main.timedelta(hours=1)).isoformat())
 
     assert sent == [("57300", custom_message)]
     assert logged == [("57300", "model", custom_message)]
@@ -469,20 +510,20 @@ def test_queued_followup_preserves_custom_business_message(monkeypatch):
 
 def test_sequence_meta_expiry_is_anchored_to_inbound_message(monkeypatch):
     queued = []
-    inbound = main.datetime(2026, 9, 29, 15, 0, tzinfo=main.timezone.utc)
+    inbound = main.datetime.now(main.timezone.utc) - main.timedelta(hours=1)
     plan = types.SimpleNamespace(
         stage="FIRST_RESPONSE", delays_minutes=(10,), messages=("mensaje",),
     )
     monkeypatch.setattr(main, "queue_enabled", lambda: True)
     monkeypatch.setattr(main, "follow_up_delay_seconds", lambda _minutes: 600)
-    monkeypatch.setattr(main, "register_follow_up", lambda *_args: "token")
+    monkeypatch.setattr(main, "register_follow_up", lambda *_args, **_kwargs: "token")
     monkeypatch.setattr(main, "enqueue_in", lambda *args, **kwargs: queued.append((args, kwargs)))
 
     main.schedule_follow_up_sequence(
         "57300", plan, customer_message_received_at=inbound,
     )
 
-    assert queued[0][0][8] == "2026-09-30T15:00:00+00:00"
+    assert queued[0][0][8] == (inbound + main.timedelta(hours=24)).isoformat()
 
 
 def test_agent_text_forwarding_is_scoped(monkeypatch):
@@ -745,7 +786,7 @@ def test_resolved_event_uses_warm_tanaka_closing(monkeypatch):
 
     assert resumed == [44]
     assert sent == [
-        ("57300", "Gracias por elegirnos, quedo por aquí super pendiente de lo que necesites ☺️")
+        ("57300", "Gracias por elegirnos. Cuando necesites algo más, escríbenos ☺️")
     ]
 
 
@@ -777,6 +818,7 @@ def test_image_catalog_is_uploaded_and_sent_as_whatsapp_image(monkeypatch):
 
 
 def test_pdf_catalog_uses_commercial_name_but_upload_keeps_cache_buster(monkeypatch):
+    monkeypatch.setattr(main.config, "BUSINESS_ID", "tanaka")
     sent_payloads = []
     uploaded_filenames = []
     item = types.SimpleNamespace(
@@ -1092,3 +1134,182 @@ def test_bsuid_handoff_display_name_does_not_present_the_identity_as_a_phone(mon
     assert contacts[0][0] == ("CO.TestSender01",)
     assert "+CO.TestSender01" not in contacts[0][1]["name"]
     assert "Cliente de prueba" in contacts[0][1]["name"]
+
+
+@pytest.fixture
+def guarded_followups(monkeypatch):
+    import fakeredis
+    import queue_client
+    import follow_up_store
+    from datetime import datetime, timezone
+
+    now = datetime(2026, 10, 21, 15, tzinfo=timezone.utc)
+    class Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now.astimezone(tz) if tz else now.replace(tzinfo=None)
+    now = Frozen(2026, 10, 21, 15, tzinfo=timezone.utc)
+    monkeypatch.setattr(main, "datetime", Frozen)
+    monkeypatch.setattr(follow_up_store, "datetime", Frozen)
+    monkeypatch.setattr(main.config, "BUSINESS_ID", "memos")
+    monkeypatch.setattr(main.config, "REDIS_URL", None)
+    monkeypatch.setenv("BUSINESS_ID", "memos")
+    monkeypatch.setenv("WA_PHONE_NUMBER_ID", "phone-id")
+    connection = fakeredis.FakeRedis()
+    monkeypatch.setattr(queue_client, "get_queue", lambda: types.SimpleNamespace(connection=connection))
+    monkeypatch.setattr(main, "get_or_create_customer_state", lambda *a: {"is_paused": False})
+    original = now - main.timedelta(hours=21)
+    monkeypatch.setattr(main, "get_message_logs", lambda *a, **k: [{"role": "user", "content": "consulta",
+        "metadata": {"received_at": original.isoformat()}}])
+    monkeypatch.setattr(main, "save_message_log", lambda *a, **k: None)
+    queued, sent = [], []
+    monkeypatch.setattr(main, "enqueue_in", lambda *a, **k: queued.append((a, k)))
+    monkeypatch.setattr(main, "send_whatsapp_message", lambda *a: sent.append(a) or True)
+    token = queue_client.register_follow_up("57300", 86400, reference_at=now)
+    expiry = (now + main.timedelta(hours=3)).isoformat()
+    return types.SimpleNamespace(now=now, token=token, expiry=expiry, queued=queued, sent=sent, redis=connection)
+
+
+def test_accumulated_jobs_respect_execution_spacing(guarded_followups):
+    f = guarded_followups
+    main.send_scheduled_follow_up("57300", f.token, "mensaje", "CATALOG_SENT", 1, "", f.expiry)
+    main.send_scheduled_follow_up("57300", f.token, "mensaje", "CATALOG_SENT", 2, "", f.expiry)
+    assert len(f.sent) == 1
+    assert len(f.queued) == 1
+    assert f.queued[0][0][0] >= 900
+    assert f.queued[0][0][8] == f.expiry
+
+
+def test_old_expired_job_does_not_cancel_new_sequence(guarded_followups):
+    import queue_client
+    from follow_up_store import keys
+    f = guarded_followups
+    newer = queue_client.register_follow_up("57300", 86400, reference_at=f.now)
+    main.send_scheduled_follow_up("57300", f.token, "mensaje", "CATALOG_SENT", 1, "",
+        (f.now - main.timedelta(hours=1)).isoformat())
+    assert f.redis.get(keys("57300")[0]).decode() == newer
+    assert f.sent == []
+
+
+def test_legacy_expiry_without_original_timestamp_cannot_extend_window(guarded_followups, monkeypatch):
+    f = guarded_followups
+    monkeypatch.setattr(main, "get_message_logs", lambda *a, **k: [])
+    result = main.send_scheduled_follow_up("57300", f.token, "mensaje", "CATALOG_SENT", 1, "", f.expiry)
+    assert result["status"] == "legacy_missing_verified_original_timestamp"
+    assert f.sent == []
+
+
+def test_reprogramming_cannot_promote_an_unverified_legacy_reference(guarded_followups):
+    f = guarded_followups
+    future = (f.now + main.timedelta(minutes=15)).isoformat()
+    main.send_scheduled_follow_up("57300", f.token, "mensaje", "CATALOG_SENT", 1, future, f.expiry)
+    assert len(f.queued) == 1
+    assert f.queued[0][1]["reference_at"] is None
+    assert f.sent == []
+
+
+@pytest.mark.parametrize("error,expected,queued", [
+    (ProviderError("meta", "send", 429), "confirmed_provider_rejection_retry", 1),
+    (ProviderError("meta", "send", None, confirmed_not_sent=True), "confirmed_pre_send_failure_retry", 1),
+    (ProviderError("meta", "send", None), "provider_result_ambiguous_manual_review", 0),
+    (ProviderError("meta", "send", 503), "provider_result_ambiguous_manual_review", 0),
+])
+def test_provider_rejection_and_ambiguity_have_different_recovery(guarded_followups, monkeypatch, error, expected, queued):
+    f = guarded_followups
+    attempts = []
+    def send(*args):
+        attempts.append(args)
+        raise error
+    monkeypatch.setattr(main, "send_whatsapp_message", send)
+    result = main.send_scheduled_follow_up("57300", f.token, "mensaje", "CATALOG_SENT", 1, "", f.expiry)
+    assert result["status"] == expected
+    assert len(f.queued) == queued
+    if not queued:
+        main.send_scheduled_follow_up("57300", f.token, "mensaje", "CATALOG_SENT", 1, "", f.expiry)
+        assert len(attempts) == 1
+
+
+def test_human_control_and_empty_legacy_jobs_cannot_send(guarded_followups, monkeypatch):
+    f = guarded_followups
+    monkeypatch.setattr(main, "get_or_create_customer_state", lambda *args: {"is_paused": True})
+    result = main.send_scheduled_follow_up("57300", f.token, "mensaje", "CATALOG_SENT", 1, "", f.expiry)
+    assert result["status"] == "human_control"
+    result = main.send_scheduled_follow_up("57300", f.token, "mensaje")
+    assert result["status"] == "legacy_missing_original_window"
+    assert f.sent == []
+
+
+def test_inbound_timestamp_reaches_queue_unchanged(monkeypatch):
+    client = TestClient(main.app)
+    dispatched = []
+    observed = []
+    monkeypatch.setattr(main, "_dispatch_before_ack", lambda _bg, _fn, *a, **k: dispatched.append(k))
+    monkeypatch.setattr(main, "record_customer_activity", lambda *a: observed.append(a))
+    value = {"metadata": {"phone_number_id": "phone-id"}, "contacts": [], "messages": [
+        {"from": "573174479494", "id": "wamid.original", "timestamp": "1792591200", "type": "text", "text": {"body": "hola"}}
+    ]}
+    response = client.post("/webhook", json={"object": "whatsapp_business_account", "entry": [{"changes": [{"value": value}]}]})
+    assert response.status_code == 200
+    original = main.datetime.fromtimestamp(1792591200, main.timezone.utc)
+    assert dispatched[0]["customer_message_received_at"] == original.isoformat()
+    assert observed[0][1] == original
+
+
+def test_expired_inbound_is_logged_and_escalated_without_freeform_send(guarded_followups, monkeypatch):
+    f = guarded_followups
+    handoffs, logs = [], []
+    monkeypatch.setattr(main, "process_message_logic", lambda *a: pytest.fail("must not infer a freeform reply outside the original window"))
+    monkeypatch.setattr(main, "pause_bot_for_handoff", lambda *a: None)
+    monkeypatch.setattr(main, "_create_handoff_ticket_if_needed", lambda *a: handoffs.append(a))
+    monkeypatch.setattr(main, "save_message_log", lambda *a: logs.append(a))
+    main._process_whatsapp_message_unlocked("57300", "Cliente", "consulta pendiente",
+        customer_message_received_at=f.now - main.timedelta(hours=25))
+    assert f.sent == []
+    assert handoffs
+    assert any(row[1] == "user" for row in logs)
+
+
+def test_handoff_failure_keeps_paused_and_cannot_promise_created(monkeypatch):
+    state = {"is_paused": True, "handoff_reason": "B2B_HIGH_VALUE: precios al por mayor"}
+    turn = types.SimpleNamespace(response="Ya te transferí con un asesor", requested_files=[],
+        send_files_before_response=False, handoff_requested=True, follow_up_message="seguir", follow_up_delay_minutes=10)
+    sequence, sent = [], []
+    monkeypatch.setattr(main, "get_or_create_customer_state", lambda *a: dict(state))
+    # Start active, then model transitions to paused.
+    calls = []
+    def get_state(*args):
+        calls.append(args)
+        return {"is_paused": len(calls) > 1, "handoff_reason": state["handoff_reason"]}
+    monkeypatch.setattr(main, "get_or_create_customer_state", get_state)
+    monkeypatch.setattr(main, "process_message_logic", lambda *a: turn)
+    monkeypatch.setattr(main, "_create_handoff_ticket_if_needed", lambda *a: sequence.append("create_pending") or {"status": "pending"})
+    monkeypatch.setattr(main, "send_whatsapp_message", lambda _p, text: sequence.append("send") or sent.append(text))
+    monkeypatch.setattr(main, "save_message_log", lambda *a: None)
+    monkeypatch.setattr(main, "schedule_follow_up_sequence", lambda *a, **k: pytest.fail("human control must cancel followups"))
+    main._process_whatsapp_message_unlocked("57300", "Cliente", "Eso es precios al por mayor",
+        customer_message_received_at=main.datetime.now(main.timezone.utc))
+    assert sequence[:2] == ["create_pending", "send"]
+    assert "pendiente" in sent[0]
+    assert "Ya te transferí" not in sent[0]
+
+
+@pytest.mark.parametrize("error,ambiguous", [(ProviderError("chatwoot", "create_conversation", 429), False),
+    (requests.exceptions.Timeout("ambiguous timeout"), True)])
+def test_handoff_provider_failure_never_reenables_bot(monkeypatch, error, ambiguous):
+    _mock_handoff_dependencies(monkeypatch)
+    failed = []
+    monkeypatch.setattr(chatwoot_api, "create_conversation", lambda *a, **k: (_ for _ in ()).throw(error))
+    monkeypatch.setattr(main.handoff_delivery, "fail_request", lambda *a, **k: failed.append(k) or {"status": "unknown" if ambiguous else "pending"})
+    monkeypatch.setattr(main, "_schedule_handoff_retry", lambda *a: None)
+    monkeypatch.setattr(main, "recover_failed_handoff", lambda *a: pytest.fail("must keep human control"))
+    result = main._create_handoff_ticket_if_needed("57300", "Cliente", {"is_paused": True}, None, "pedido", None, None)
+    assert result["status"] == ("unknown" if ambiguous else "pending")
+    assert failed[0]["ambiguous"] is ambiguous
+
+
+def test_connect_timeout_is_confirmed_pre_send_but_read_timeout_is_ambiguous(monkeypatch):
+    for error, confirmed in [(requests.exceptions.ConnectTimeout(), True), (requests.exceptions.ReadTimeout(), False)]:
+        monkeypatch.setattr(main, "post", lambda *a, **k: (_ for _ in ()).throw(error))
+        with pytest.raises(ProviderError) as caught:
+            main.send_whatsapp_message("573001234567", "mensaje sintético")
+        assert caught.value.confirmed_not_sent is confirmed

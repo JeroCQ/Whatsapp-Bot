@@ -41,10 +41,16 @@ una conversación de prueba solo aparece en Supabase, Redis y Chatwoot de la mar
 
 Define el tono y el contexto de `follow_up_message` en la instrucción propia de
 `BUSINESS_ID`. El backend conserva ese mensaje incluso después de enviar un catálogo;
-si está vacío, utiliza un texto general sin categorías ni datos de otra marca.
-Esta política también aplica a futuros negocios y a despliegues existentes, sin
-variables nuevas ni cambios al esquema de Supabase. Las cadencias siguen siendo
-las de cada etapa comercial.
+si el campo está ausente por compatibilidad, utiliza un texto general sin categorías
+ni datos de otra marca. Un valor explícitamente vacío o null cancela el seguimiento.
+Configura `src/clients/<business_id>/business_policy.json` con zona `America/Bogota`,
+`contact_hours` y `operating_hours` separados (`days`: lunes=0, domingo=6;
+`start`/`end`: HH:MM). El default genérico sin archivo es contacto y operación
+08:00–18:00 todos los días: confirma el calendario propio antes de habilitar ventas.
+`FOLLOW_UP_MIN_SPACING_SECONDS` permite ampliar/cambiar el mínimo (900 segundos por
+defecto), y `FOLLOW_UPS_ENABLED=false` sirve para una puesta en marcha sin recordatorios.
+El bootstrap actual ya incluye preferencias, correlación y handoffs durables.
+Ver [pruebas y verificación de web/worker](MEMOS_AUDIT_BACKEND.md).
 
 ### 2. Supabase
 

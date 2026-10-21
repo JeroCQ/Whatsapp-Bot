@@ -118,7 +118,7 @@ def test_tanaka_instruction_answers_before_using_catalog_and_limits_follow_up():
     assert "súper pendiente" in instruction
     assert "hasta tres intentos" in instruction
     assert "entre las 8:00 a.m. y las 6:00 p.m." in instruction
-    assert "usa de 1 a 3 líneas breves" in instruction
+    assert "usa 1 o 2 frases breves" in instruction
     assert "no una renuncia a vender" in instruction
     assert "recomendación pertinente" in instruction
     assert "no transcribas listas extensas" in instruction
@@ -145,7 +145,7 @@ def test_tanaka_instruction_defines_current_customer_and_shipping_rules():
     assert "$13.850 por un litro volumétrico a Medellín y Bogotá" in instruction
     assert "$15.350 por litro volumétrico a Barranquilla" in instruction
     assert "@tanakasaludable" in instruction
-    assert "etiquetarnos cuando recibas o pruebes tus productos" in instruction
+    assert "solo invita a etiquetar a Tanaka después de que el cliente haya comprado o recibido productos" in instruction
 
 
 def test_tanaka_instruction_preserves_purchase_momentum_and_recognizes_returning_customers():
@@ -157,7 +157,7 @@ def test_tanaka_instruction_preserves_purchase_momentum_and_recognizes_returning
     assert "NO pidas todavía dirección exacta" in instruction
     assert "facturación electrónica son completamente opcionales" in instruction
     assert "https://www.instagram.com/tanakasaludable/?hl=es" in instruction
-    assert "al pie de ese mismo mensaje" in instruction
+    assert "añade en una línea separada el enlace completo" in instruction
 
 
 def test_tanaka_instruction_includes_official_business_contact_and_dispatch_details():

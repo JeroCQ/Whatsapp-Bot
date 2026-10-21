@@ -3,6 +3,7 @@ import uuid
 
 from supabase import create_client, Client
 from config import config
+from observability import message_metadata, message_event_key
 
 supabase: Client = create_client(config.SUPABASE_URL, config.SUPABASE_KEY)
 
@@ -65,15 +66,21 @@ def pause_bot_for_handoff(phone_number: str, reason: str):
     }).eq("phone_number", phone_number).execute()
 
 
+def pause_bot_for_human_activity(phone_number: str, conversation_id: int):
+    """Preserve the original reason while restoring human control for this case."""
+    return supabase.table("conversation_states").update({"current_state": "HUMAN_HANDOFF", "is_paused": True}).eq(
+        "phone_number", phone_number).eq("chatwoot_conversation_id", conversation_id).execute()
+
+
 def update_chatwoot_conversation_id(phone_number: str, conv_id: int):
     """Guarda el ID del ticket de Chatwoot en el usuario."""
     supabase.table("conversation_states").update({"chatwoot_conversation_id": conv_id}).eq("phone_number", phone_number).execute()
 
 
 def recover_failed_handoff(phone_number: str):
-    """Re-enable the bot only when no Chatwoot ticket was established."""
+    """Legacy callers must keep human control; recovery lives in handoff_delivery."""
     return supabase.table("conversation_states").update({
-        "current_state": "GREETING", "is_paused": False, "handoff_reason": None,
+        "current_state": "HUMAN_HANDOFF", "is_paused": True,
     }).eq("phone_number", phone_number).eq("is_paused", True).is_("chatwoot_conversation_id", "null").execute()
 
 
@@ -118,18 +125,65 @@ def mark_webhook_event_processed(source: str, event_id: str, status: str = "proc
         print(f"[DB WARN] No se pudo actualizar idempotencia {source}:{event_id}: {e}")
 
 
-def save_message_log(phone_number: str, role: str, content: str):
+def save_message_log(phone_number: str, role: str, content: str, *, metadata=None, event_key=None):
     """Guarda un mensaje en el historial."""
     if content is None:
         content = ""
     try:
-        supabase.table("message_logs").insert({
+        details = message_metadata(role)
+        details.update(metadata or {})
+        if details.get("source") in {"bot_response", "human"}:
+            details["inbound_message_ids"] = unanswered_inbound_message_ids(phone_number, details.get("inbound_message_ids", []))
+        row = {
             "phone_number": phone_number,
             "role": role,
             "content": content,
-        }).execute()
+            "metadata": details,
+            "event_key": event_key or message_event_key(phone_number, role, content, details),
+        }
+        if row["event_key"]:
+            supabase.table("message_logs").upsert(row, on_conflict="event_key", ignore_duplicates=True).execute()
+        else:
+            supabase.table("message_logs").insert(row).execute()
     except Exception as e:
         print(f"Error guardando log de mensaje: {e}")
+
+
+def unanswered_inbound_message_ids(phone_number, current_ids=()):
+    """Link a direct reply to unanswered incoming IDs; notes/follow-ups don't count."""
+    try:
+        rows = supabase.table("message_logs").select("role,content,metadata").eq("phone_number", phone_number).order("created_at", desc=True).order("id", desc=True).limit(50).execute().data or []
+        answered, pending = set(), []
+        for row in rows:
+            data = row.get("metadata") or {}
+            if data.get("business_id") not in (None, config.BUSINESS_ID):
+                continue
+            if data.get("source") in {"bot_response", "human"}:
+                answered.update(data.get("inbound_message_ids") or [])
+                break
+            if row.get("role") == "system" and str(row.get("content", "")).startswith("RESOLVED:"):
+                break
+            elif row.get("role") == "user" and data.get("source_event_id"):
+                identifier = data["source_event_id"]
+                if identifier not in answered:
+                    pending.append(identifier)
+        return list(dict.fromkeys([*reversed(pending), *current_ids]))
+    except Exception:
+        return list(current_ids)
+
+
+def update_inbound_transcript(phone_number, event_id, transcript):
+    if not event_id:
+        return
+    supabase.table("message_logs").update({"content": transcript}).eq("phone_number", phone_number).eq(
+        "role", "user").eq("metadata->>source_event_id", event_id).execute()
+
+
+def update_follow_up_preferences(phone_number, values):
+    allowed = {key: value for key, value in values.items() if key in {
+        "follow_up_not_before", "follow_up_suppressed", "follow_up_suppression_reason"}}
+    if allowed:
+        supabase.table("conversation_states").update(allowed).eq("phone_number", phone_number).execute()
 
 
 def update_conversation_memory(phone_number: str, customer_data: dict, order_summary: str):
@@ -187,7 +241,7 @@ def get_message_logs(phone_number: str, limit: int = 6):
     try:
         bounded_limit = max(1, min(int(limit), 50))
         res = supabase.table("message_logs") \
-            .select("role", "content") \
+            .select("role,content,created_at,id,metadata") \
             .eq("phone_number", phone_number) \
             .order("created_at", desc=True) \
             .order("id", desc=True) \
@@ -211,6 +265,8 @@ def resume_bot_state(conv_id: int):
             "is_paused": False,
             "chatwoot_conversation_id": None,
             "handoff_reason": None,
+            "follow_up_suppressed": True,
+            "follow_up_suppression_reason": "conversation_closed",
         }).eq("phone_number", phone).eq("chatwoot_conversation_id", conv_id).execute()
         return phone if result.data else None
     except Exception as e:
@@ -227,6 +283,7 @@ def reset_client_history(phone: str):
             "is_paused": False,
             "handoff_reason": None,
             "chatwoot_conversation_id": None,
+            "follow_up_not_before": None,
         }).eq("phone_number", phone).execute()
     except Exception as e:
         print(f"[DB ERROR] Falló el reset de historial para {phone}: {e}")

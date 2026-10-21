@@ -252,7 +252,8 @@ solo carga `PRESAVED_FILES_JSON` y el despliegue se selecciona con `BUSINESS_ID`
 
 Gemini prepara `follow_up_message` con la instrucción del negocio seleccionado por
 `BUSINESS_ID` y el contexto de la conversación. Ese texto personalizado se conserva
-también después de enviar un catálogo. Cuando queda vacío, el backend usa mensajes
+también después de enviar un catálogo. Un campo vacío (o null explícito) cancela
+el seguimiento. Solo un campo ausente por compatibilidad permite mensajes
 generales, sin categorías de productos ni nombres de otra marca. Por ejemplo:
 “¿Pudiste revisar las opciones que te compartí? Cuéntame cuál te interesa y te ayudo
 a continuar 😊”. No hacen falta variables nuevas ni condiciones por negocio en el código.
@@ -265,8 +266,18 @@ con el worker actualizado. Los demás textos personalizados se conservan.
 
 El follow up usa trabajos programados de RQ: requiere `REDIS_URL` y un worker con
 scheduler (el worker incluido ya usa `with_scheduler=True`). El token de cancelación
-también vive en Redis, así que **no requiere modificar el esquema de Supabase**. Sin
-Redis el bot responde normalmente, pero no programa seguimientos no durables.
+también vive en Redis. La versión actual requiere el bootstrap o upgrade canónico
+de Supabase para preferencias persistentes, trazabilidad y recuperación de handoffs.
+Sin Redis el bot responde normalmente, pero no programa seguimientos no durables.
+
+La programación usa un instante de referencia, consolida colisiones en la apertura
+y mantiene `FOLLOW_UP_MIN_SPACING_SECONDS` (900 por defecto) durante la ejecución,
+incluso después de caídas. Los calendarios de contacto y operación se configuran en
+`src/clients/{BUSINESS_ID}/business_policy.json`, con override opcional
+`BUSINESS_POLICY_JSON`. Una fecha acordada no se adelanta ni extiende las 24 horas
+contadas desde el timestamp original de Meta. `FOLLOW_UPS_ENABLED=false` desactiva
+los seguimientos sin vaciar Redis. Ver despliegue, compatibilidad y reversión en
+[`docs/MEMOS_AUDIT_BACKEND.md`](docs/MEMOS_AUDIT_BACKEND.md).
 
 Una respuesta de simple confirmación (`ok`, `listo`, `bueno`) no cierra el pendiente
 si anteriormente se solicitaron datos. Gemini debe mencionar en el follow up los datos
