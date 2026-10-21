@@ -70,7 +70,7 @@ from webhook_utils import (
     whatsapp_destination_matches,
     whatsapp_recipient_fields,
 )
-from chatwoot_security import chatwoot_scope, verify_chatwoot_signature
+from chatwoot_security import chatwoot_scope, verify_chatwoot_signature, chatwoot_event_diagnostics
 from provider_errors import ProviderError, provider_error, provider_transport_error, sanitize_text
 from outage_recovery import find_recoveries
 from catalog_delivery_recovery import find_catalog_recoveries
@@ -1377,6 +1377,9 @@ def _process_chatwoot_event_untraced(data: dict, event_id: str = None):
             f"[CHATWOOT EVENT] event={event} conversation_id={event_conv_id} "
             f"status={event_status} account_id={account_id} inbox_id={inbox_id}"
         )
+        if event in {"conversation_status_changed", "conversation_updated"}:
+            operational_event("CHATWOOT_CONVERSATION_OBSERVED", phone="", stage="CHATWOOT_STATE",
+                              reason="provider_event", result="observed", **chatwoot_event_diagnostics(data))
         message_type = str(data.get("message_type") or "").strip().lower()
         is_private = _chatwoot_flag(data.get("private"), default=False)
         message_id = data.get("id") if event == "message_created" else None
@@ -1450,7 +1453,7 @@ def _process_chatwoot_event_untraced(data: dict, event_id: str = None):
             phone = resume_bot_state(conv_id) if conv_id else None
             if phone:
                 invalidate_follow_up(phone)
-                save_message_log(phone, "system", "RESOLVED: Conversación cerrada por el asesor.")
+                save_message_log(phone, "system", "RESOLVED: Chatwoot marcó la conversación como resuelta.")
                 inbound = next((row for row in reversed(get_message_logs(phone, limit=50)) if row.get("role") == "user"), {})
                 original = parse_timestamp((inbound.get("metadata") or {}).get("received_at"))
                 expiry = (original + timedelta(hours=24)).isoformat() if original else ""
@@ -1659,8 +1662,14 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
         data = json.loads(raw_body)
     except (ValueError, TypeError):
         raise HTTPException(status_code=400, detail="Invalid JSON")
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Invalid Chatwoot event")
     account_id, inbox_id = chatwoot_scope(data)
     if account_id != str(config.CHATWOOT_ACCOUNT_ID) or inbox_id != str(config.CHATWOOT_INBOX_ID):
+        operational_event("CHATWOOT_WEBHOOK_REJECTED", phone="", stage="CHATWOOT_INGRESS",
+                          reason="scope_missing" if not account_id or not inbox_id else "scope_mismatch",
+                          result="http_403", expected_account_id=str(config.CHATWOOT_ACCOUNT_ID),
+                          expected_inbox_id=str(config.CHATWOOT_INBOX_ID), **chatwoot_event_diagnostics(data))
         raise HTTPException(status_code=403, detail="Chatwoot account or inbox mismatch")
     event_id = chatwoot_event_identity(data)
     conv_id = data.get("conversation", {}).get("id") or data.get("id")

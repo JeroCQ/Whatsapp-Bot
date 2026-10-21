@@ -44,3 +44,31 @@ def chatwoot_scope(data: dict) -> tuple[str, str]:
     inbox_id = inbox.get("id") if isinstance(inbox, dict) else inbox
     inbox_id = inbox_id or conversation.get("inbox_id")
     return str(account_id or ""), str(inbox_id or "")
+
+
+def chatwoot_event_diagnostics(data: dict) -> dict:
+    """Allowlisted routing metadata only; never log webhook bodies or headers."""
+    def numeric_id(value):
+        value = str(value or "")
+        return value if value.isascii() and value.isdecimal() and len(value) <= 20 else None
+
+    event = data.get("event")
+    allowed_events = {"message_created", "message_updated", "conversation_created", "conversation_updated",
+                      "conversation_status_changed", "conversation_typing_on", "conversation_typing_off",
+                      "contact_created", "contact_updated", "inbox_created", "inbox_updated"}
+    event = event if isinstance(event, str) and event in allowed_events else "unknown"
+    conversation = data.get("conversation") if isinstance(data.get("conversation"), dict) else data
+    account_id, inbox_id = chatwoot_scope(data)
+    status = data.get("status") or conversation.get("status")
+    meta = conversation.get("meta") if isinstance(conversation.get("meta"), dict) else {}
+    assignee = meta.get("assignee") if isinstance(meta.get("assignee"), dict) else {}
+    return {
+        "chatwoot_event": event,
+        "conversation_id": numeric_id(conversation.get("id")) if conversation is not data or event.startswith("conversation_") else None,
+        "incoming_account_id": numeric_id(account_id),
+        "incoming_inbox_id": numeric_id(inbox_id),
+        "conversation_status": status if isinstance(status, str) and status in {"open", "resolved", "pending", "snoozed"} else "unknown",
+        "assignee_id": numeric_id(assignee.get("id")),
+        "has_root_account_id": "account_id" in data,
+        "has_nested_account_id": conversation is not data and "account_id" in conversation,
+    }

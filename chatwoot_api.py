@@ -143,7 +143,9 @@ def send_message_to_chatwoot(conversation_id: int, content: str, is_private: boo
     url = f"{get_base_url()}/conversations/{conversation_id}/messages"
     data = {
         "content": content,
-        "message_type": "incoming", 
+        # Chatwoot reopens resolved/snoozed conversations on incoming messages,
+        # including private ones. Internal notes must not impersonate a customer.
+        "message_type": "outgoing" if is_private else "incoming",
         "private": is_private       
     }
     try:
@@ -201,14 +203,14 @@ def download_meta_image(media_id: str):
 
 
 def send_media_to_chatwoot(conversation_id: int, content: str, media_bytes: bytes, mime_type: str = "application/octet-stream", filename: str = "archivo", is_private: bool = False):
-    """Sube cualquier archivo de WhatsApp como mensaje entrante visible al asesor humano."""
+    """Forward customer media as incoming, and internal attachments as private notes."""
     url = f"{get_base_url()}/conversations/{conversation_id}/messages"
     files = {
         "attachments[]": (filename, media_bytes, mime_type or "application/octet-stream")
     }
     data = {
         "content": content or "📎 Archivo del cliente",
-        "message_type": "incoming",
+        "message_type": "outgoing" if is_private else "incoming",
         "private": "true" if is_private else "false"
     }
     try:

@@ -88,6 +88,41 @@ def test_webhook_auth_scope_precedes_idempotency(monkeypatch):
     assert claimed == []
 
 
+@pytest.mark.parametrize("body_data,reason", [
+    ({"event": "conversation_status_changed", "id": 44, "inbox_id": 20, "status": "resolved"}, "scope_missing"),
+    ({"event": "conversation_updated", "account": {"id": 10}, "id": 44, "inbox_id": 21, "status": "open"}, "scope_mismatch"),
+])
+def test_scope_rejection_is_diagnosable_without_logging_customer_data_or_accepting_event(
+        monkeypatch, capsys, body_data, reason):
+    client = TestClient(main.app)
+    monkeypatch.setattr(main.time, "time", lambda: 2000000000)
+    monkeypatch.setattr(main, "claim_webhook_event", lambda *args: pytest.fail("rejected event cannot be claimed"))
+    monkeypatch.setattr(main, "_dispatch_before_ack", lambda *args, **kwargs: pytest.fail("rejected event cannot be queued"))
+    body_data.update(content="PRIVATE_CUSTOMER_CONTENT", api_access_token="PRIVATE_TOKEN",
+                     contact={"phone_number": "PRIVATE_PHONE"})
+    body = json.dumps(body_data).encode()
+    assert client.post("/chatwoot-webhook", content=body, headers=signed(body)).status_code == 403
+    events = [json.loads(line.split(" ", 1)[1]) for line in capsys.readouterr().out.splitlines()
+              if line.startswith("[OPERATIONAL_EVENT]")]
+    rejection = next(event for event in events if event["event"] == "CHATWOOT_WEBHOOK_REJECTED")
+    assert rejection["reason"] == reason
+    assert rejection["conversation_id"] == "44"
+    assert rejection["chatwoot_event"] == body_data["event"]
+    assert rejection["conversation_status"] == body_data["status"]
+    assert rejection["expected_account_id"] == "10"
+    assert rejection["expected_inbox_id"] == "20"
+    assert "PRIVATE_" not in json.dumps(events)
+
+
+@pytest.mark.parametrize("value", [[], "invalid_event", None, 123])
+def test_signed_nonobject_chatwoot_webhook_returns_400_without_processing(monkeypatch, value):
+    client = TestClient(main.app)
+    monkeypatch.setattr(main.time, "time", lambda: 2000000000)
+    monkeypatch.setattr(main, "_dispatch_before_ack", lambda *args, **kwargs: pytest.fail("invalid event cannot be queued"))
+    body = json.dumps(value).encode()
+    assert client.post("/chatwoot-webhook", content=body, headers=signed(body)).status_code == 400
+
+
 def test_valid_webhook_and_root_dispatcher_constraint(monkeypatch):
     client = TestClient(main.app)
     monkeypatch.setattr(main.time, "time", lambda: 2000000000)
@@ -1150,6 +1185,9 @@ def guarded_followups(monkeypatch):
             return now.astimezone(tz) if tz else now.replace(tzinfo=None)
     now = Frozen(2026, 10, 21, 15, tzinfo=timezone.utc)
     monkeypatch.setattr(main, "datetime", Frozen)
+    # Execution revalidates the window through queue_client after reservation;
+    # that clock must agree with the worker clock, independent of test run time.
+    monkeypatch.setattr(queue_client, "datetime", Frozen)
     monkeypatch.setattr(follow_up_store, "datetime", Frozen)
     monkeypatch.setattr(main.config, "BUSINESS_ID", "memos")
     monkeypatch.setattr(main.config, "REDIS_URL", None)

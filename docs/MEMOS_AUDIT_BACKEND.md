@@ -37,6 +37,12 @@ Los cambios de pagos/recogida de `687547b` se incorporan a esta misma revisión.
 - El entorno de desarrollo incorpora `requirements-dev.txt`, pruebas sintéticas y
   las instrucciones de instalación/inicio actualizadas en el borrador del entorno.
   Su publicación en ajustes es independiente del merge y de producción.
+- Se revisó el reporte de conversaciones que salen de la vista de Chatwoot. Las
+  notas internas y sus adjuntos dejan de publicarse como mensajes entrantes para
+  evitar reaperturas accidentales. Los rechazos 403 y eventos de estado/asignación
+  reciben diagnóstico seguro, sin cambiar el aislamiento ni los filtros. La
+  [evidencia y comprobación de vistas](CHATWOOT_VISIBILITY.md) distingue hechos,
+  hipótesis y configuración de producción pendiente de verificar.
 
 Las causas del backend eran:
 
@@ -223,11 +229,15 @@ como usuario sin privilegios; el fixture levanta una base temporal por Unix sock
 y la elimina al terminar. Sin esos binarios, las pruebas SQL se marcan skipped.
 No introducir secretos reales en la ejecución de pruebas.
 
-Resultado de esta revisión: **460 pruebas aprobadas**, incluidas migraciones reales
+Resultado de esta revisión: **478 pruebas aprobadas**, incluidas migraciones reales
 de PostgreSQL, concurrencia Redis/Lua, aislamiento entre marcas y fallos de Meta
 simulados. Un servidor HTTP local comprueba que un POST recibido no se repite ante
 429/503 o desconexión después de recibir el cuerpo. Quedan tres avisos de deprecación
 de FastAPI/Starlette; no hay pruebas omitidas en esa ejecución.
+La ampliación sobre visibilidad de Chatwoot cubre notas internas que no deben
+reabrir casos, reapertura por actividad real del cliente y diagnóstico de scope
+sin datos privados. La fixture temporal congela también el reloj de validación
+de ventana para que esos checks no dependan de la hora real de ejecución.
 
 Los cinco fallos que ya estaban en la referencia auditada eran expectativas antiguas
 de texto/fixture, no fallos de instalación. Se actualizaron a las reglas aprobadas y
