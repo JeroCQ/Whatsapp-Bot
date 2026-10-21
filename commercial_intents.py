@@ -67,6 +67,22 @@ def human_control_active(state):
     return bool(state and (state.get("is_paused") or state.get("chatwoot_conversation_id") or state.get("current_state") == "HUMAN_HANDOFF"))
 
 
+def customer_closes_without_pending_request(customer_message, state=None):
+    """Only a standalone closing acknowledgement can end an idle conversation."""
+    state = state or {}
+    if human_control_active(state):
+        return False
+    pending = state.get("current_state") in {"PRODUCT_SELECTION", "FORMAT_SELECTION", "QUANTITY_SELECTION", "PAYMENT_PENDING", "PICKUP_INSTRUCTIONS"} or bool(state.get("pending_order"))
+    summary = _normal(str(state.get("order_summary") or ""))
+    pending = pending or bool(summary and "sin productos confirmados" not in summary)
+    text = _normal(customer_message).strip(" ¡!¿?.,")
+    acknowledgement = re.fullmatch(
+        r"(?:(?:ok|listo|perfecto)[,\s]+)?(?:muchas\s+)?gracias"
+        r"(?:\s+por\s+(?:(?:la|tu|su)\s+)?(?:informacion|ayuda|atencion|todo))?"
+        r"|hasta luego|chao|adios", text)
+    return bool(acknowledgement and not pending)
+
+
 def follow_up_suppression_reason(customer_message="", *, state=None, handoff_requested=False, model_message=None):
     state = state or {}
     if handoff_requested or human_control_active(state):
@@ -80,10 +96,7 @@ def follow_up_suppression_reason(customer_message="", *, state=None, handoff_req
         return "customer_will_initiate"
     if model_message is not None and not str(model_message).strip():
         return "explicit_empty_follow_up"
-    pending = state.get("current_state") in {"PRODUCT_SELECTION", "FORMAT_SELECTION", "QUANTITY_SELECTION", "PAYMENT_PENDING", "PICKUP_INSTRUCTIONS"} or bool(state.get("pending_order"))
-    summary = _normal(str(state.get("order_summary") or ""))
-    pending = pending or bool(summary and "sin productos confirmados" not in summary)
-    if text in {"gracias", "muchas gracias", "ok gracias", "listo gracias", "perfecto gracias", "hasta luego", "chao", "adios"} and not pending:
+    if customer_closes_without_pending_request(customer_message, state):
         return "conversation_closed"
     return None
 

@@ -57,7 +57,7 @@ from queue_client import (
     claim_internal_alert,
     follow_ups_enabled,
 )
-from commercial_intents import FollowUpPlan, follow_up_plan, follow_up_suppression_reason, follow_up_preference_patch, human_control_active, is_terminal_customer_message, normalize_follow_up_message
+from commercial_intents import FollowUpPlan, follow_up_plan, follow_up_suppression_reason, follow_up_preference_patch, human_control_active, customer_closes_without_pending_request, is_terminal_customer_message, normalize_follow_up_message
 from follow_up_policy import parse_timestamp, load_business_policy, resolve_follow_up_schedule, customer_agreed_not_before, next_eligible_contact_at, message_announces_opening
 from observability import operational_event, message_trace, current_trace, record_provider_message_id, update_trace
 from webhook_utils import (
@@ -71,7 +71,7 @@ from webhook_utils import (
     whatsapp_recipient_fields,
 )
 from chatwoot_security import chatwoot_scope, verify_chatwoot_signature
-from provider_errors import ProviderError, provider_error, sanitize_text
+from provider_errors import ProviderError, provider_error, provider_transport_error, sanitize_text
 from outage_recovery import find_recoveries
 from catalog_delivery_recovery import find_catalog_recoveries
 from file_catalog import advisor_catalog_command
@@ -206,6 +206,8 @@ def normalize_media_type(file_type: str = None, mime_type: str = None, url: str 
 
 def send_whatsapp_message(to_number: str, text: str):
     """Envía un mensaje de texto usando la API de Meta."""
+    # A preceding catalog send must not lend its wamid to a failed text send.
+    update_trace(provider_message_id="")
     _check_customer_window()
     url = f"https://graph.facebook.com/v20.0/{config.WA_PHONE_NUMBER_ID}/messages"
     headers = {
@@ -225,10 +227,8 @@ def send_whatsapp_message(to_number: str, text: str):
             raise provider_error("meta", "send_text", response, (config.WA_TOKEN,))
         record_provider_message_id(response)
         return True
-    except requests.exceptions.ConnectTimeout as e:
-        raise ProviderError("meta", "send_text", None, message="connection_timeout_before_send", confirmed_not_sent=True) from e
     except requests.exceptions.RequestException as e:
-        raise ProviderError("meta", "send_text", getattr(getattr(e, "response", None), "status_code", None), message="transport error") from e
+        raise provider_transport_error("meta", "send_text", e) from e
 
 
 def _check_customer_window():
@@ -1043,44 +1043,80 @@ def recover_gemini_outage_handoffs(since: str):
     return result
 
 
+def _recover_whatsapp_processing_error(sender_phone, sender_name, message_body, error, expiry,
+                                      mime_type=None, filename=None, has_media=False):
+    """Run recovery while the original conversation lock and trace are held."""
+    technical = f"{type(error).__name__}: {sanitize_text(error, (config.WA_TOKEN, config.SUPABASE_KEY, config.CHATWOOT_API_TOKEN))}"
+    text_delivery_failed = isinstance(error, ProviderError) and error.provider == "meta" and error.operation == "send_text"
+    try:
+        if text_delivery_failed:
+            update_trace(provider_message_id="")
+            confirmed = error.confirmed_not_sent or (error.status is not None and 400 <= error.status < 500)
+            outcome = "not_sent" if confirmed else "unknown"
+            reason = ("confirmed_pre_send_failure" if error.confirmed_not_sent else
+                      "provider_rejected" if confirmed else "provider_result_ambiguous_manual_review")
+            save_message_log(sender_phone, "system", f"ERROR DE ENTREGA META: {technical}. Resultado: {outcome}.",
+                             metadata={"delivery_outcome": outcome, "delivery_failure_reason": reason})
+            operational_event("RESPONSE_DELIVERY_FAILED", phone=sender_phone, stage="DIRECT_RESPONSE",
+                              reason=reason, result=outcome, provider_status=error.status,
+                              provider_code=error.code, provider_subcode=error.subcode,
+                              transport_reason=error.safe_message)
+            state = get_or_create_customer_state(sender_phone, sender_name or "Cliente")
+            if state and not has_media and customer_closes_without_pending_request(message_body, state):
+                operational_event("RESPONSE_RECOVERY_SKIPPED", phone=sender_phone, stage="DIRECT_RESPONSE",
+                                  reason="conversation_closed_without_pending_request", result="no_handoff_no_resend")
+                return technical
+            reason = ("No se pudo confirmar la entrega de la respuesta por WhatsApp. "
+                      "Revisar el mensaje en Meta antes de reenviarlo; puede haber sido aceptado."
+                      if not confirmed else
+                      "Meta no aceptó la respuesta por WhatsApp. La solicitud necesita revisión del equipo.")
+        else:
+            print(f"[PROCESSING ERROR] {technical}")
+            save_message_log(sender_phone, "system", f"ERROR NO MANEJADO: {technical}")
+            reason = "El bot encontró un error técnico y no pudo completar la solicitud. Requiere revisión humana."
+        pause_bot_for_handoff(sender_phone, reason)
+        state = get_or_create_customer_state(sender_phone, sender_name or "Cliente")
+        _create_handoff_ticket_if_needed(sender_phone, sender_name or "Cliente", state, None,
+                                        message_body, mime_type, filename)
+        # A failed POST can already have reached Meta. Do not send the original
+        # reply or a second fallback through the failing channel automatically.
+        if not text_delivery_failed and meta_window_is_open(expiry):
+            send_whatsapp_message(sender_phone,
+                "Tuve un problema técnico y tu solicitud necesita revisión del equipo. La atención humana puede seguir pendiente.")
+    except Exception as recovery_error:
+        print(f"[ERROR RECOVERY] {sanitize_text(recovery_error, (config.WA_TOKEN, config.SUPABASE_KEY, config.CHATWOOT_API_TOKEN))}")
+        operational_event("RESPONSE_RECOVERY_FAILED", phone=sender_phone, stage="DIRECT_RESPONSE",
+                          reason="recovery_failed", result=type(recovery_error).__name__)
+    return technical
+
+
 def process_whatsapp_message(sender_phone: str, sender_name: str, message_body: str, is_image: bool = False, media_id: str = None, is_audio: bool = False, audio_media_id: str = None, media_type: str = None, mime_type: str = None, filename: str = None, event_id: str = None, customer_message_received_at=None):
     """Procesador que enruta entre el Bot y Chatwoot basado en el estado."""
     started_at = time.perf_counter()
-    try:
-        received = parse_timestamp(customer_message_received_at)
-        expiry = (received + timedelta(hours=24)).isoformat() if received else ""
-        with phone_lock(sender_phone), message_trace(source="bot_response", source_event_id=event_id or "",
-              inbound_message_ids=[event_id] if event_id else [], received_at=received.isoformat() if received else "",
-              meta_window_expires_at=expiry, job_id=_current_job_id()):
-            _process_whatsapp_message_unlocked(sender_phone, sender_name, message_body, is_image, media_id, is_audio, audio_media_id, media_type, mime_type, filename, customer_message_received_at=received)
+    received = parse_timestamp(customer_message_received_at)
+    expiry = (received + timedelta(hours=24)).isoformat() if received else ""
+    with message_trace(source="bot_response", source_event_id=event_id or "",
+          inbound_message_ids=[event_id] if event_id else [], received_at=received.isoformat() if received else "",
+          meta_window_expires_at=expiry, job_id=_current_job_id(), provider_message_id=""):
+        try:
+            with phone_lock(sender_phone):
+                try:
+                    _process_whatsapp_message_unlocked(sender_phone, sender_name, message_body, is_image, media_id, is_audio, audio_media_id, media_type, mime_type, filename, customer_message_received_at=received)
+                except Exception as error:
+                    technical = _recover_whatsapp_processing_error(sender_phone, sender_name, message_body, error, expiry,
+                        mime_type, filename, has_media=bool(media_id or audio_media_id or is_image or is_audio))
+                    mark_webhook_event_processed("whatsapp", event_id, status="failed", error=technical)
+                    return
+        except Exception as lock_error:
+            # Never mutate conversation state without owning its lock: another
+            # worker may already be handling the next customer message.
+            operational_event("RESPONSE_PROCESSING_FAILED", phone=sender_phone, stage="INBOUND",
+                              reason="conversation_lock_unavailable", result=type(lock_error).__name__)
+            mark_webhook_event_processed("whatsapp", event_id, status="failed", error=type(lock_error).__name__)
+            return
         duration_ms = int((time.perf_counter() - started_at) * 1000)
         print(f"[METRIC] whatsapp_message_processed event_id={event_id} phone={sender_phone} duration_ms={duration_ms}")
         mark_webhook_event_processed("whatsapp", event_id)
-    except Exception as e:
-        import traceback
-        print("\n[ERROR CRÍTICO] Falló process_whatsapp_message:")
-        traceback.print_exc()
-        technical = f"{type(e).__name__}: {sanitize_text(e, (config.WA_TOKEN, config.SUPABASE_KEY, config.CHATWOOT_API_TOKEN))}"
-        try:
-            save_message_log(sender_phone, "system", f"ERROR NO MANEJADO: {technical}")
-            reason = "El bot encontró un error técnico y no pudo completar la solicitud. Requiere revisión humana."
-            pause_bot_for_handoff(sender_phone, reason)
-            state = get_or_create_customer_state(sender_phone, sender_name or "Cliente")
-            _create_handoff_ticket_if_needed(
-                sender_phone, sender_name or "Cliente", state, None,
-                message_body, mime_type, filename,
-            )
-            try:
-                if meta_window_is_open(expiry):
-                    with message_trace(source_event_id=event_id or "", meta_window_expires_at=expiry):
-                        send_whatsapp_message(sender_phone,
-                            "Tuve un problema técnico y tu solicitud necesita revisión del equipo. La atención humana puede seguir pendiente.")
-            except Exception:
-                print("[ERROR RECOVERY] No fue posible enviar el aviso de transferencia al cliente")
-        except Exception:
-            print("[ERROR RECOVERY] También falló la creación del handoff de emergencia")
-            traceback.print_exc()
-        mark_webhook_event_processed("whatsapp", event_id, status="failed", error=str(e))
 
 
 def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, message_body: str, is_image: bool = False, media_id: str = None, is_audio: bool = False, audio_media_id: str = None, media_type: str = None, mime_type: str = None, filename: str = None, *, customer_message_received_at=None):

@@ -107,6 +107,45 @@ relaciones explícitas y distinguen bot, seguimiento, humano, alerta interna y s
 Los registros históricos sin IDs quedan sin atribución; no se inventan respuestas
 por proximidad. Una respuesta puede atender varias entradas consecutivas.
 
+## Incidente de entrega de Velvet del 21 de octubre
+
+La captura de las 11:31 muestra `meta send_text failed`, `status=None` y
+`transport error`. No hubo respuesta HTTP disponible para el bot: no permite
+confirmar entrega, bloqueo del contacto, causa de red concreta ni fallo general
+de la cuenta. El texto antiguo de panadería/postres en el historial tampoco
+identifica el SHA que está ejecutándose; el cambio normaliza trabajos pendientes,
+pero no modifica mensajes ya enviados.
+
+El manejador genérico trataba ese fallo como error de procesamiento: pausaba la
+conversación, creaba una derivación y mandaba otro WhatsApp por el mismo canal.
+Ahora un fallo de entrega de texto tiene un evento `RESPONSE_DELIVERY_FAILED`,
+resultado `not_sent` o `unknown` y diagnóstico de conexión, lectura o TLS sin
+exponer la URL, credenciales ni la cadena de excepciones del transporte.
+Un fallo no hereda el ID Meta de un catálogo enviado previamente.
+
+No se reenvía automáticamente la respuesta ni se manda un segundo aviso después
+del fallo. Se conserva la política acotada de reintentos de conexión HTTP; los
+POST recibidos por el proveedor no se repiten por timeout de lectura, pérdida de
+conexión o respuesta HTTP de error. La recuperación conserva el lock, mensaje
+entrante, ventana original, job y SHA del turno. Un lock no adquirido no permite
+pausar la conversación que otro worker está procesando.
+
+“Gracias por la información” sin pedido ni atención pendiente se considera cierre:
+se registra el error técnico sin abrir una derivación innecesaria. Un agradecimiento
+con pedido, pregunta adicional, pago o comprobante mantiene la revisión humana.
+Los resúmenes de pedido persistidos se tratan de forma conservadora: si aún indican
+un pedido, se conserva la revisión aunque el texto nuevo solo agradezca.
+Si hace falta revisión, el caso usa la entrega durable existente y la alerta
+interna aclara que un resultado ambiguo debe comprobarse antes de reenviarlo.
+Esto sirve a marcas nuevas y existentes y no requiere SQL adicional.
+
+En producción revisar los eventos `RESPONSE_DELIVERY_FAILED`,
+`RESPONSE_RECOVERY_FAILED` y `RESPONSE_PROCESSING_FAILED`. Un incidente aislado
+requiere comprobar ese chat antes de reenviar; fallos repetidos en varios chats
+requieren revisar conectividad del servicio y estado de Meta. Los eventos de lock
+fallido requieren revisión del turno pendiente, sin repetición automática de un
+envío cuyo resultado no se conoce.
+
 ## Fuente comercial y discrepancias pendientes
 
 La fuente comercial aprobada de Memo's sigue siendo su `system_instruction.txt`:
@@ -183,6 +222,12 @@ Para migraciones reales definir `POSTGRES_BIN_DIR` con initdb/pg_ctl/psql y ejec
 como usuario sin privilegios; el fixture levanta una base temporal por Unix socket
 y la elimina al terminar. Sin esos binarios, las pruebas SQL se marcan skipped.
 No introducir secretos reales en la ejecución de pruebas.
+
+Resultado de esta revisión: **460 pruebas aprobadas**, incluidas migraciones reales
+de PostgreSQL, concurrencia Redis/Lua, aislamiento entre marcas y fallos de Meta
+simulados. Un servidor HTTP local comprueba que un POST recibido no se repite ante
+429/503 o desconexión después de recibir el cuerpo. Quedan tres avisos de deprecación
+de FastAPI/Starlette; no hay pruebas omitidas en esa ejecución.
 
 Los cinco fallos que ya estaban en la referencia auditada eran expectativas antiguas
 de texto/fixture, no fallos de instalación. Se actualizaron a las reglas aprobadas y

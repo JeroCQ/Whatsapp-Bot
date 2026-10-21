@@ -1333,3 +1333,184 @@ def test_connect_timeout_is_confirmed_pre_send_but_read_timeout_is_ambiguous(mon
         with pytest.raises(ProviderError) as caught:
             main.send_whatsapp_message("573001234567", "mensaje sintético")
         assert caught.value.confirmed_not_sent is confirmed
+
+
+@pytest.fixture
+def direct_response_recovery(monkeypatch):
+    from contextlib import contextmanager
+
+    observed = {"posts": [], "logs": [], "paused": [], "handoffs": [], "marked": [], "locked": False}
+    state = {"is_paused": False, "chatwoot_conversation_id": None, "current_state": "GREETING"}
+
+    @contextmanager
+    def locked(phone):
+        observed["locked"] = True
+        try:
+            yield
+        finally:
+            observed["locked"] = False
+
+    def log(phone, role, content, **kwargs):
+        assert observed["locked"]
+        observed["logs"].append((role, content, {**main.current_trace(), **kwargs.get("metadata", {})}))
+
+    def pause(phone, reason):
+        assert observed["locked"]
+        observed["paused"].append(reason)
+        state.update(is_paused=True, current_state="HUMAN_HANDOFF")
+
+    def handoff(*args, **kwargs):
+        assert observed["locked"]
+        observed["handoffs"].append(main.current_trace())
+        return {"status": "created", "conversation_id": 123}
+
+    turn = types.SimpleNamespace(response="Con mucho gusto", requested_files=[],
+        send_files_before_response=False, follow_up_message=None)
+    monkeypatch.setattr(main, "phone_lock", locked)
+    monkeypatch.setattr(main, "_current_job_id", lambda: "synthetic-response-job")
+    monkeypatch.setattr(main, "get_or_create_customer_state", lambda *args: state)
+    monkeypatch.setattr(main, "process_message_logic", lambda *args: turn)
+    monkeypatch.setattr(main, "save_message_log", log)
+    monkeypatch.setattr(main, "pause_bot_for_handoff", pause)
+    monkeypatch.setattr(main, "_create_handoff_ticket_if_needed", handoff)
+    monkeypatch.setattr(main, "mark_webhook_event_processed", lambda *args, **kwargs: observed["marked"].append((args, kwargs)))
+    monkeypatch.setattr(main, "schedule_follow_up_sequence", lambda *args, **kwargs: pytest.fail("failed response cannot schedule followups"))
+    return state, observed
+
+
+@pytest.mark.parametrize("failure,outcome,transport_reason", [
+    (requests.exceptions.ReadTimeout("token=never-log-this https://example.invalid/private"), "unknown", "read_timeout_delivery_unknown"),
+    (requests.exceptions.ConnectionError("private transport cause"), "unknown", "connection_error_delivery_unknown"),
+    (requests.exceptions.SSLError("private TLS cause"), "unknown", "tls_error_delivery_unknown"),
+    (requests.exceptions.Timeout("private timeout cause"), "unknown", "transport_error_delivery_unknown"),
+    (requests.exceptions.ConnectTimeout("private connect cause"), "not_sent", "connection_timeout_before_send"),
+    (Response(503), "unknown", ""),
+    (Response(400, {"error": {"code": 131047, "message": "rejected"}}), "not_sent", "rejected"),
+])
+def test_closed_thanks_delivery_error_has_no_second_send_or_emergency_handoff(
+        monkeypatch, capsys, direct_response_recovery, failure, outcome, transport_reason):
+    state, observed = direct_response_recovery
+
+    def post(*args, **kwargs):
+        observed["posts"].append(kwargs["json"])
+        if isinstance(failure, Exception):
+            raise failure
+        return failure
+
+    monkeypatch.setattr(main, "post", post)
+    received = main.datetime.now(main.timezone.utc)
+    with main.message_trace(provider_message_id="wamid.preceding-catalog"):
+        main.process_whatsapp_message("573001234567", "Cliente sintético", "Gracias por la información",
+            event_id="synthetic-thanks", customer_message_received_at=received)
+    assert len(observed["posts"]) == 1
+    assert observed["paused"] == observed["handoffs"] == []
+    assert not state["is_paused"]
+    assert not any(role == "model" for role, _, _ in observed["logs"])
+    failure_log = next(row for row in observed["logs"] if row[1].startswith("ERROR DE ENTREGA META:"))
+    assert failure_log[2]["delivery_outcome"] == outcome
+    assert failure_log[2]["source_event_id"] == "synthetic-thanks"
+    assert failure_log[2]["received_at"] == received.isoformat()
+    assert failure_log[2]["job_id"] == "synthetic-response-job"
+    assert failure_log[2]["provider_message_id"] == ""
+    assert observed["marked"][-1][1]["status"] == "failed"
+    events = [json.loads(line.split(" ", 1)[1]) for line in capsys.readouterr().out.splitlines()
+              if line.startswith("[OPERATIONAL_EVENT]")]
+    delivery = next(event for event in events if event["event"] == "RESPONSE_DELIVERY_FAILED")
+    assert delivery["transport_reason"] == transport_reason
+    assert delivery["provider_message_id"] == ""
+    assert delivery["business_id"] == main.config.BUSINESS_ID
+    assert delivery["source_event_id"] == "synthetic-thanks"
+    assert "deployment_sha" in delivery
+    rendered = json.dumps(events) + str(observed["logs"]) + str(observed["marked"])
+    assert "never-log-this" not in rendered and "private" not in rendered
+    assert "wamid.preceding-catalog" not in rendered
+
+
+@pytest.mark.parametrize("business_id", ["memos", "tanaka", "velvet", "future_brand"])
+@pytest.mark.parametrize("customer_text,pending", [
+    ("Gracias por la información", {"current_state": "PAYMENT_PENDING"}),
+    ("Gracias por la información", {"pending_order": {"products": ["producto sintético"]}}),
+    ("Gracias, ya pagué", {}),
+    ("Gracias, ¿cuánto vale?", {}),
+])
+def test_pending_request_delivery_failure_keeps_human_review_without_resending(
+        monkeypatch, direct_response_recovery, business_id, customer_text, pending):
+    state, observed = direct_response_recovery
+    state.update(pending)
+    monkeypatch.setattr(main.config, "BUSINESS_ID", business_id)
+
+    def post(*args, **kwargs):
+        observed["posts"].append(kwargs["json"])
+        raise requests.exceptions.ReadTimeout()
+
+    monkeypatch.setattr(main, "post", post)
+    main.process_whatsapp_message("CO.SyntheticSender", "Cliente sintético", customer_text,
+        event_id="synthetic-pending", customer_message_received_at=main.datetime.now(main.timezone.utc))
+    assert len(observed["posts"]) == len(observed["paused"]) == len(observed["handoffs"]) == 1
+    assert state["is_paused"]
+    assert "puede haber sido aceptado" in observed["paused"][0]
+    assert observed["posts"][0]["recipient"] == "CO.SyntheticSender"
+    assert observed["handoffs"][0]["source_event_id"] == "synthetic-pending"
+    assert observed["marked"][-1][1]["status"] == "failed"
+
+
+def test_failure_to_acquire_phone_lock_cannot_pause_another_workers_conversation(monkeypatch):
+    from contextlib import contextmanager
+
+    @contextmanager
+    def unavailable(phone):
+        raise TimeoutError("synthetic lock unavailable")
+        yield
+
+    marked = []
+    monkeypatch.setattr(main, "phone_lock", unavailable)
+    monkeypatch.setattr(main, "_process_whatsapp_message_unlocked", lambda *a, **k: pytest.fail("lock required"))
+    monkeypatch.setattr(main, "pause_bot_for_handoff", lambda *a: pytest.fail("cannot mutate unlocked state"))
+    monkeypatch.setattr(main, "mark_webhook_event_processed", lambda *a, **k: marked.append(k))
+    main.process_whatsapp_message("573001234567", "Cliente sintético", "consulta", event_id="locked-event")
+    assert marked == [{"status": "failed", "error": "TimeoutError"}]
+
+
+def test_text_failure_after_accepted_catalog_does_not_inherit_catalog_message_id(monkeypatch, direct_response_recovery):
+    state, observed = direct_response_recovery
+    turn = types.SimpleNamespace(response="Te comparto las opciones", requested_files=["catalogo_synthetic"],
+        send_files_before_response=True, follow_up_message=None)
+
+    def catalog(*args):
+        main.update_trace(provider_message_id="wamid.synthetic-catalog")
+        return True, None
+
+    def post(*args, **kwargs):
+        observed["posts"].append(kwargs["json"])
+        raise requests.exceptions.ReadTimeout()
+
+    monkeypatch.setattr(main, "process_message_logic", lambda *args: turn)
+    monkeypatch.setattr(main, "deliver_presaved_file", catalog)
+    monkeypatch.setattr(main, "post", post)
+    main.process_whatsapp_message("573001234567", "Cliente sintético", "Quiero el catálogo",
+        event_id="synthetic-catalog-turn", customer_message_received_at=main.datetime.now(main.timezone.utc))
+    assert len(observed["posts"]) == 1
+    accepted = [row for row in observed["logs"] if row[0] == "model"]
+    assert [(row[1], row[2]["provider_message_id"]) for row in accepted] == [
+        ("[Archivo enviado: catalogo_synthetic]", "wamid.synthetic-catalog")]
+    failed = next(row for row in observed["logs"] if row[1].startswith("ERROR DE ENTREGA META:"))
+    assert failed[2]["delivery_outcome"] == "unknown"
+    assert failed[2]["provider_message_id"] == ""
+    assert state["is_paused"]
+
+
+def test_non_delivery_error_still_creates_emergency_case_under_original_lock_and_trace(monkeypatch, direct_response_recovery):
+    state, observed = direct_response_recovery
+
+    def failed_logic(*args):
+        raise RuntimeError("synthetic processing failure")
+
+    monkeypatch.setattr(main, "process_message_logic", failed_logic)
+    monkeypatch.setattr(main, "post", lambda *args, **kwargs: observed["posts"].append(kwargs["json"]) or Response(200))
+    main.process_whatsapp_message("573001234567", "Cliente sintético", "Consulta pendiente",
+        event_id="synthetic-emergency", customer_message_received_at=main.datetime.now(main.timezone.utc))
+    assert len(observed["paused"]) == len(observed["handoffs"]) == 1
+    assert observed["handoffs"][0]["source_event_id"] == "synthetic-emergency"
+    assert len(observed["posts"]) == 1
+    assert "necesita revisión" in observed["posts"][0]["text"]["body"]
+    assert state["is_paused"]
