@@ -1180,6 +1180,26 @@ def test_accumulated_jobs_respect_execution_spacing(guarded_followups):
     assert f.queued[0][0][8] == f.expiry
 
 
+def test_state_read_failure_after_reservation_recovers_before_send(guarded_followups, monkeypatch):
+    f = guarded_followups
+    states = iter([{"is_paused": False}, None])
+    monkeypatch.setattr(main, "get_or_create_customer_state", lambda *a: next(states))
+    result = main.send_scheduled_follow_up("57300", f.token, "mensaje", "CATALOG_SENT", 1, "", f.expiry)
+    assert result["status"] == "state_unavailable_before_send"
+    assert len(f.queued) == 1
+    assert f.queued[0][1]["preflight_retry"] == 1
+    assert f.sent == []
+
+
+def test_ambiguous_provider_result_cannot_retry_even_if_store_already_says_retry(guarded_followups, monkeypatch):
+    f = guarded_followups
+    monkeypatch.setattr(main, "send_whatsapp_message", lambda *a: (_ for _ in ()).throw(ProviderError("meta", "send", None)))
+    monkeypatch.setattr(main, "finish_follow_up_attempt", lambda *a, **k: {"status": "retry", "retry_at": f.now.timestamp() + 60})
+    result = main.send_scheduled_follow_up("57300", f.token, "mensaje", "CATALOG_SENT", 1, "", f.expiry)
+    assert result["status"] == "provider_result_ambiguous_manual_review"
+    assert f.queued == []
+
+
 def test_old_expired_job_does_not_cancel_new_sequence(guarded_followups):
     import queue_client
     from follow_up_store import keys

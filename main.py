@@ -349,7 +349,7 @@ def send_scheduled_follow_up(phone_number: str, token: str, message: str,
             state = get_or_create_customer_state(phone_number)
             if not state:
                 result = finish_follow_up_attempt(phone_number, token, stage, attempt, lease, outcome="confirmed_failure")
-                if confirmed and result["status"] == "retry":
+                if result["status"] == "retry":
                     return requeue(now + timedelta(seconds=60), "state_unavailable_before_send", preflight_failure=True)
                 return event("preflight_recovery_exhausted")
             if human_control_active(state) or state.get("follow_up_suppressed") or not meta_window_is_open(meta_window_expires_at):
@@ -371,8 +371,8 @@ def send_scheduled_follow_up(phone_number: str, token: str, message: str,
                 confirmed = isinstance(exc, ProviderError) and (exc.confirmed_not_sent or (exc.status is not None and 400 <= exc.status < 500))
                 outcome = "confirmed_failure" if confirmed else "unknown"
                 result = finish_follow_up_attempt(phone_number, token, stage, attempt, lease, outcome=outcome)
-                if result["status"] == "retry":
-                    reason = "confirmed_pre_send_failure_retry" if exc.confirmed_not_sent else "confirmed_provider_rejection_retry"
+                if confirmed and result["status"] == "retry":
+                    reason = "confirmed_pre_send_failure_retry" if isinstance(exc, ProviderError) and exc.confirmed_not_sent else "confirmed_provider_rejection_retry"
                     return requeue(datetime.fromtimestamp(result["retry_at"], timezone.utc), reason)
                 reason = "pre_send_failure_exhausted" if isinstance(exc, ProviderError) and exc.confirmed_not_sent else ("provider_rejected_exhausted" if confirmed else "provider_result_ambiguous_manual_review")
                 return event(reason)
