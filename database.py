@@ -175,8 +175,23 @@ def unanswered_inbound_message_ids(phone_number, current_ids=()):
 def update_inbound_transcript(phone_number, event_id, transcript):
     if not event_id:
         return
-    supabase.table("message_logs").update({"content": transcript}).eq("phone_number", phone_number).eq(
-        "role", "user").eq("metadata->>source_event_id", event_id).execute()
+    rows = supabase.table("message_logs").select("id,metadata").eq("phone_number", phone_number).eq(
+        "role", "user").eq("metadata->>source_event_id", event_id).execute().data or []
+    for row in rows:
+        stored_metadata = row.get("metadata")
+        stored_metadata = stored_metadata if isinstance(stored_metadata, dict) else {}
+        metadata = {
+            **message_metadata("user"),
+            **stored_metadata,
+            "source_event_id": event_id,
+            "input_type": "audio",
+            "is_transcription": True,
+        }
+        # Preserve the original incoming timestamp and correlation metadata, and
+        # update only its existing row rather than logging a second user message.
+        supabase.table("message_logs").update({"content": transcript, "metadata": metadata}).eq(
+            "id", row["id"]).eq("phone_number", phone_number).eq("role", "user").eq(
+            "metadata->>source_event_id", event_id).execute()
 
 
 def update_follow_up_preferences(phone_number, values):

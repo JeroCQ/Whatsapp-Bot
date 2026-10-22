@@ -81,7 +81,24 @@ def build_handoff_summary(
     messages: list[dict],
     preserved_data: dict[str, str] | None = None,
     preserved_order: str | None = None,
+    *,
+    trigger_is_audio: bool = False,
+    trigger_transcript: str | None = None,
 ) -> str:
+    if not trigger_is_audio:
+        # Durable recovery can recreate the case without the original media
+        # arguments. Recover its explicitly recorded cause, never infer one
+        # from whichever audio message happens to be nearby in the history.
+        for message in reversed(messages):
+            if message.get("role") != "system":
+                continue
+            if str(message.get("content") or "").startswith("RESOLVED:"):
+                break
+            metadata = message.get("metadata")
+            if isinstance(metadata, dict) and metadata.get("handoff_trigger") == "audio":
+                trigger_is_audio = True
+                trigger_transcript = metadata.get("trigger_transcript")
+                break
     data = dict(preserved_data or {})
     data.update(supplied_customer_data(messages))
     data_text = "; ".join(f"{label}: {value}" for label, value in data.items())
@@ -94,9 +111,45 @@ def build_handoff_summary(
         ),
         "ninguno registrado",
     )
+    audio_origin = ""
+    if trigger_is_audio:
+        if isinstance(trigger_transcript, str) and trigger_transcript.strip():
+            # Keep the complete instruction supplied in the voice note. In
+            # particular, names, dates and personalized text must not be lost
+            # to the compact order-summary truncation.
+            audio_origin = (
+                "\n**Origen de la derivación:** nota de voz del cliente, interpretada mediante transcripción automática."
+                "\n**Transcripción automática que motivó la derivación:**\n"
+                f"{trigger_transcript.strip()}"
+            )
+        else:
+            audio_origin = (
+                "\n**Mensaje recibido:** nota de voz del cliente."
+                "\n**Transcripción automática:** no fue posible transcribir esta nota de voz; "
+                "no se dispone de su contenido en texto."
+            )
     return (
         f"**Resumen de handoff**\n"
         f"**Pedido en curso:** {preserved_order or compact_order_summary(messages)}\n"
         f"**Datos ya suministrados:** {data_text or 'ninguno identificado'}\n"
         f"**Incidente operativo:** {operational_error}"
+        f"{audio_origin}"
     )
+
+
+def format_handoff_history(messages: list[dict]) -> str:
+    """Render stored messages without presenting a transcription as typed text."""
+    role_icons = {"user": "👤", "model": "🤖", "asesor": "🧑‍💼", "system": "⚠️"}
+    rendered = []
+    for message in messages:
+        role = message.get("role")
+        content = str(message.get("content") or "")
+        metadata = message.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        if role == "user":
+            if metadata.get("is_transcription") is True and metadata.get("input_type", "audio") == "audio":
+                content = f"🎙️ [Transcripción automática de nota de voz] {content}"
+            elif metadata.get("input_type") == "audio":
+                content = f"🎙️ [Nota de voz] {content}"
+        rendered.append(f"{role_icons.get(role, '❔')}: {content}")
+    return "\n".join(rendered)

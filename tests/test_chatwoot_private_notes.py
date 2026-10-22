@@ -9,6 +9,12 @@ from unittest.mock import patch
 import pytest
 
 
+PNG_BYTES = bytes.fromhex(
+    "89504e470d0a1a0a0000000d4948445200000001000000010802000000907753de"
+    "0000000c49444154789c63f8cfc0000003010100c9fe92ef0000000049454e44ae426082"
+)
+
+
 @pytest.fixture
 def note_api(monkeypatch):
     private_config = types.ModuleType("config")
@@ -25,7 +31,13 @@ def note_api(monkeypatch):
         spec.loader.exec_module(module)
 
     calls = []
-    response = types.SimpleNamespace(status_code=201, raise_for_status=lambda: None)
+    response = types.SimpleNamespace(status_code=201, json=lambda: {
+        "id": 22, "attachments": [{"id": 31, "message_id": 22, "account_id": 10,
+            "file_type": "image", "content_type": "image/png", "file_size": len(PNG_BYTES),
+            "data_url": "https://chatwoot.example/image.png"}],
+    })
+    asset = types.SimpleNamespace(status_code=200, headers={"Content-Type": "image/png"},
+        iter_content=lambda _size: iter([PNG_BYTES]), close=lambda: None)
 
     def post(url, **kwargs):
         calls.append((url, kwargs))
@@ -35,6 +47,7 @@ def note_api(monkeypatch):
         pytest.fail("Sending a note must not look up contacts or change conversation state or assignment")
 
     monkeypatch.setattr(module, "post", post)
+    monkeypatch.setattr(module, "get_media_asset", lambda *args, **kwargs: asset)
     for name in ("get", "put", "create_conversation", "get_or_create_contact"):
         monkeypatch.setattr(module, name, unexpected_operation)
     return module, calls, response
@@ -66,7 +79,7 @@ def test_chatwoot_media_distinguishes_customer_attachments_from_private_notes(no
     kwargs = {} if is_private is None else {"is_private": is_private}
 
     assert api.send_media_to_chatwoot(
-        44, "Adjunto de prueba", b"test-image", "image/png", "test.png", **kwargs,
+        44, "Adjunto de prueba", PNG_BYTES, "image/png", "test.png", **kwargs,
     ) is response
 
     private = is_private is True
@@ -78,7 +91,7 @@ def test_chatwoot_media_distinguishes_customer_attachments_from_private_notes(no
         "message_type": "outgoing" if private else "incoming",
         "private": "true" if private else "false",
     }
-    assert request["files"] == {"attachments[]": ("test.png", b"test-image", "image/png")}
+    assert request["files"] == {"attachments[]": ("test.png", PNG_BYTES, "image/png")}
     assert request["allow_redirects"] is False
     assert request["headers"] == {"api_access_token": "test-chatwoot-token"}
     assert request["timeout"] == api.MEDIA_TIMEOUT
@@ -108,7 +121,7 @@ def test_delayed_internal_note_does_not_reopen_a_closed_ticket_but_customer_acti
         if kind == "text":
             return api.send_message_to_chatwoot(44, "Mensaje de prueba", is_private=private)
         return api.send_media_to_chatwoot(
-            44, "Adjunto de prueba", b"test-image", "image/png", "test.png", is_private=private,
+            44, "Adjunto de prueba", PNG_BYTES, "image/png", "test.png", is_private=private,
         )
 
     assert send(True) is response
