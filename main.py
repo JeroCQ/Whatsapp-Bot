@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 import chatwoot_api
 import handoff_delivery
 from bot import FILE_CATALOG, process_message_logic, transcribe_audio_message
-from conversation_summary import build_handoff_summary
+from conversation_summary import build_handoff_summary, format_handoff_history
 from config import config
 from database import (
     claim_webhook_event,
@@ -709,7 +709,28 @@ def upload_chatwoot_attachment_to_meta(attachment_url: str, fallback_mime_type: 
         return None
 
 
-def _create_handoff_ticket_if_needed(sender_phone: str, sender_name: str, new_state: dict, effective_media_id: str, message_body: str, mime_type: str, filename: str, effective_media_type: str = None, media_bytes: bytes = None, downloaded_mime_type: str = None):
+def _report_chatwoot_media_failure(phone, conversation_id, media_type, reason):
+    """Keep human control and expose a failed attachment without a blind resend."""
+    operational_event("CHATWOOT_MEDIA_DELIVERY_FAILED", phone=phone, stage="HUMAN_MEDIA",
+                      reason=reason, result="manual_review", conversation_id=conversation_id,
+                      media_type=media_type)
+    save_message_log(phone, "system", f"ERROR entregando adjunto a Chatwoot: tipo={media_type}; motivo={reason}.")
+    label = {"image": "la imagen", "audio": "la transcripción de la nota de voz"}.get(media_type, "el archivo")
+    chatwoot_api.send_message_to_chatwoot(conversation_id,
+        f"⚠️ No se pudo confirmar la entrega de {label} que envió el cliente. "
+        "Este contenido sigue pendiente de revisión; solicita al cliente que lo envíe de nuevo si no puedes abrirlo.",
+        is_private=True)
+    return {"status": "delivery_failed", "reason": reason}
+
+
+def _audio_transcript_note(transcript):
+    if transcript:
+        return f"🎙️ Transcripción automática de nota de voz del cliente:\n{transcript}"
+    return ("🎙️ El cliente envió una nota de voz, pero no fue posible transcribirla. "
+            "Se necesita solicitar su contenido por escrito. No se adjuntó el audio porque su reproducción no está verificada.")
+
+
+def _create_handoff_ticket_if_needed(sender_phone: str, sender_name: str, new_state: dict, effective_media_id: str, message_body: str, mime_type: str, filename: str, effective_media_type: str = None, media_bytes: bytes = None, downloaded_mime_type: str = None, *, audio_transcript: str = None):
     if not new_state or not new_state.get("is_paused"):
         return {"status": "not_requested"}
     if new_state.get("chatwoot_conversation_id"):
@@ -729,6 +750,12 @@ def _create_handoff_ticket_if_needed(sender_phone: str, sender_name: str, new_st
         return {"status": "cancelled"}
     if state_check.get("chatwoot_conversation_id"):
         return {"status": "created", "conversation_id": state_check["chatwoot_conversation_id"]}
+
+    if effective_media_type == "audio" and audio_transcript:
+        # Recovery jobs retain the durable conversation logs rather than the
+        # original audio bytes/arguments. Keep the cause explicit across retries.
+        save_message_log(sender_phone, "system", "HANDOFF_SOURCE: nota de voz interpretada mediante transcripción automática.",
+                         metadata={"handoff_trigger": "audio", "trigger_transcript": audio_transcript})
 
     try:
         request = handoff_delivery.ensure_request(sender_phone)
@@ -766,35 +793,37 @@ def _create_handoff_ticket_if_needed(sender_phone: str, sender_name: str, new_st
     update_chatwoot_conversation_id(sender_phone, conv_id)
     handoff_delivery.complete_request(sender_phone, reserved, conv_id)
     logs = get_message_logs(sender_phone, limit=50)
-    role_icons = {"user": "👤", "model": "🤖", "asesor": "🧑‍💼", "system": "⚠️"}
-    context_str = "\n".join([
-        f"{role_icons.get(m['role'], '❔')}: {m['content']}" for m in logs
-    ])
+    context_str = format_handoff_history(logs)
     reason = new_state.get("handoff_reason", "Razón no especificada")
     save_message_log(sender_phone, "system", f"HANDOFF: Transferido a humano. Razón: {reason}")
     operational_event("HANDOFF_CREATED", phone=sender_phone, stage="B2B_HIGH_VALUE" if reason.startswith("B2B_HIGH_VALUE") else "HANDOFF", reason=reason, result="chatwoot_created",
                       request_id=reserved["request_id"], conversation_id=conv_id, attempt=reserved.get("attempts", 0), job_id=_current_job_id())
     short_alert = f"🔔 {reason}"
     context_details = (
-        f"{build_handoff_summary(logs, state_check.get('customer_data'), state_check.get('order_summary'))}\n"
+        f"{build_handoff_summary(logs, state_check.get('customer_data'), state_check.get('order_summary'), trigger_is_audio=effective_media_type == 'audio', trigger_transcript=audio_transcript)}\n"
         f"**Motivo de transferencia:** {reason}\n\n"
         f"**Últimos mensajes:**\n{context_str}"
     )
 
-    if effective_media_id:
+    if effective_media_type == "audio":
+        # Local conversion or an HTTP 200 cannot prove playback in the advisor's
+        # Chatwoot client. The transcript is the reliable handoff content.
+        chatwoot_api.send_message_to_chatwoot(conv_id, context_details, is_private=True)
+        chatwoot_api.send_message_to_chatwoot(conv_id, short_alert, is_private=True)
+        operational_event("CHATWOOT_AUDIO_TRANSCRIPT_ONLY", phone=sender_phone, stage="HANDOFF",
+                          reason="playback_not_verified", result="transcript_only" if audio_transcript else "transcript_unavailable",
+                          conversation_id=conv_id)
+    elif effective_media_id:
         file_bytes, downloaded_mime = (media_bytes, downloaded_mime_type) if media_bytes is not None else chatwoot_api.download_meta_media(effective_media_id)
         final_mime_type = (downloaded_mime or mime_type or "audio/ogg") if effective_media_type == "audio" else (mime_type or downloaded_mime or "application/octet-stream")
         extension = chatwoot_api.extension_from_mime(final_mime_type, ".bin")
         chatwoot_api.send_message_to_chatwoot(conv_id, context_details, is_private=True)
         if file_bytes:
-            if effective_media_type == "audio":
-                chatwoot_api.send_audio_to_chatwoot(
-                    conv_id, file_bytes, final_mime_type, content=short_alert, is_private=True
-                )
-            else:
-                chatwoot_api.send_media_to_chatwoot(conv_id, short_alert, file_bytes, final_mime_type, filename or f"archivo_cliente{extension}", is_private=True)
+            delivered = chatwoot_api.send_media_to_chatwoot(conv_id, short_alert, file_bytes, final_mime_type, filename or f"archivo_cliente{extension}", is_private=True)
+            if delivered is None:
+                _report_chatwoot_media_failure(sender_phone, conv_id, effective_media_type or "document", "attachment_not_verified")
         else:
-            chatwoot_api.send_message_to_chatwoot(conv_id, short_alert + " *(Error descargando el adjunto)*", is_private=True)
+            _report_chatwoot_media_failure(sender_phone, conv_id, effective_media_type or "document", "download_failed")
     else:
         chatwoot_api.send_message_to_chatwoot(conv_id, context_details, is_private=True)
         chatwoot_api.send_message_to_chatwoot(conv_id, short_alert, is_private=True)
@@ -1101,7 +1130,10 @@ def process_whatsapp_message(sender_phone: str, sender_name: str, message_body: 
         try:
             with phone_lock(sender_phone):
                 try:
-                    _process_whatsapp_message_unlocked(sender_phone, sender_name, message_body, is_image, media_id, is_audio, audio_media_id, media_type, mime_type, filename, customer_message_received_at=received)
+                    result = _process_whatsapp_message_unlocked(sender_phone, sender_name, message_body, is_image, media_id, is_audio, audio_media_id, media_type, mime_type, filename, customer_message_received_at=received)
+                    if isinstance(result, dict) and result.get("status") == "delivery_failed":
+                        mark_webhook_event_processed("whatsapp", event_id, status="failed", error=result["reason"])
+                        return
                 except Exception as error:
                     technical = _recover_whatsapp_processing_error(sender_phone, sender_name, message_body, error, expiry,
                         mime_type, filename, has_media=bool(media_id or audio_media_id or is_image or is_audio))
@@ -1146,7 +1178,8 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
         raise RuntimeError("customer_state_unavailable")
 
     incoming_text = f"[Archivo/{effective_media_type}] {message_body or ''}" if effective_media_id else (message_body or "")
-    save_message_log(sender_phone, "user", incoming_text)
+    with message_trace(input_type=effective_media_type or "text"):
+        save_message_log(sender_phone, "user", incoming_text)
 
     preferences = follow_up_preference_patch(message_body or "", state_record)
     agreed_date = customer_agreed_not_before(message_body or "", customer_message_received_at,
@@ -1170,6 +1203,24 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
     if human_control_active(state_record):
         print("[DEBUG] 4. Bot pausado, derivando mensaje al asesor humano en Chatwoot")
         conv_id = state_record.get("chatwoot_conversation_id")
+        if is_audio:
+            audio_bytes, downloaded_mime = chatwoot_api.download_meta_media(effective_media_id)
+            transcript = transcribe_audio_message(audio_bytes, downloaded_mime or mime_type or "audio/ogg")
+            if transcript:
+                update_inbound_transcript(sender_phone, current_trace().get("source_event_id"), transcript)
+            if not conv_id:
+                _create_handoff_ticket_if_needed(sender_phone, sender_name, state_record, effective_media_id,
+                    message_body, mime_type, filename, effective_media_type, audio_bytes, downloaded_mime,
+                    audio_transcript=transcript)
+                return
+            delivered = chatwoot_api.send_message_to_chatwoot(conv_id, _audio_transcript_note(transcript),
+                                                            is_private=not bool(transcript))
+            operational_event("CHATWOOT_AUDIO_TRANSCRIPT_ONLY", phone=sender_phone, stage="HUMAN_MEDIA",
+                              reason="playback_not_verified", result="transcript_only" if transcript else "transcript_unavailable",
+                              conversation_id=conv_id)
+            if delivered is None:
+                return _report_chatwoot_media_failure(sender_phone, conv_id, "audio", "transcript_delivery_failed")
+            return
         if not conv_id:
             _create_handoff_ticket_if_needed(sender_phone, sender_name, state_record, effective_media_id, message_body, mime_type, filename, effective_media_type)
             return
@@ -1187,20 +1238,20 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
                 label = "🎥 El usuario envió un video"
             texto_chatwoot = f"{label}: {message_body}" if message_body else label
             if file_bytes:
-                if effective_media_type == "audio":
-                    chatwoot_api.send_audio_to_chatwoot(
-                        conv_id, file_bytes, final_mime_type, content=texto_chatwoot, is_private=False
-                    )
-                else:
-                    chatwoot_api.send_media_to_chatwoot(conv_id, texto_chatwoot, file_bytes, final_mime_type, final_filename, is_private=False)
+                delivered = chatwoot_api.send_media_to_chatwoot(conv_id, texto_chatwoot, file_bytes, final_mime_type, final_filename, is_private=False)
+                if delivered is None:
+                    return _report_chatwoot_media_failure(sender_phone, conv_id, effective_media_type, "attachment_not_verified")
             else:
-                chatwoot_api.send_message_to_chatwoot(conv_id, f"{label} [Error al descargar adjunto]. Texto: {message_body}", is_private=False)
+                if message_body:
+                    chatwoot_api.send_message_to_chatwoot(conv_id, message_body, is_private=False)
+                return _report_chatwoot_media_failure(sender_phone, conv_id, effective_media_type, "download_failed")
         else:
             chatwoot_api.send_message_to_chatwoot(conv_id, message_body, is_private=False)
         return
 
     audio_bytes = None
     downloaded_mime_type = None
+    transcript = None
     if is_audio:
         print("[DEBUG] 5. Audio recibido con bot activo. Descargando y transcribiendo...")
         audio_bytes, downloaded_mime_type = chatwoot_api.download_meta_media(effective_media_id) if effective_media_id else (None, None)
@@ -1241,7 +1292,8 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
         initial_state = get_or_create_customer_state(sender_phone)
         if initial_state and initial_state.get("is_paused"):
             handoff = _create_handoff_ticket_if_needed(sender_phone, sender_name, initial_state,
-                effective_media_id, message_body, mime_type, filename, effective_media_type, audio_bytes, downloaded_mime_type)
+                effective_media_id, message_body, mime_type, filename, effective_media_type, audio_bytes, downloaded_mime_type,
+                **({"audio_transcript": transcript} if is_audio else {}))
             if not handoff or handoff.get("status") != "created":
                 ai_turn.response = "Tu solicitud requiere revisión del equipo. La atención humana sigue pendiente; todavía no he podido confirmar que un asesor la haya recibido."
         primary_delivered = not bool(ai_turn.response)
@@ -1300,6 +1352,7 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
         _create_handoff_ticket_if_needed(
             sender_phone, sender_name, new_state, effective_media_id, message_body,
             mime_type, filename, effective_media_type, audio_bytes, downloaded_mime_type,
+            **({"audio_transcript": transcript} if is_audio else {}),
         )
         if primary_delivered and new_state and not new_state.get("is_paused") and not terminal_customer_signal:
             not_before = agreed_date or parse_timestamp(new_state.get("follow_up_not_before"))

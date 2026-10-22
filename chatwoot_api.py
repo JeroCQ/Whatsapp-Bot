@@ -9,6 +9,10 @@ from config import config
 from http_client import MEDIA_TIMEOUT, get, post, put
 from provider_errors import ProviderError, provider_error
 from webhook_utils import valid_whatsapp_user_id
+from chatwoot_media import (
+    MediaValidationError, content_type, get_media_asset, media_kind,
+    uploaded_attachment, validate_source_media, verify_attachment_asset,
+)
 
 
 def get_base_url():
@@ -191,7 +195,8 @@ def download_meta_media(media_id: str):
         media_res.raise_for_status()
         return media_res.content, mime_type or media_res.headers.get("Content-Type")
     except Exception as e:
-        print(f"[META DEBUG] Error descargando archivo {media_id}: {e}")
+        # Request exception text can contain Meta's signed download URL.
+        print(f"[META MEDIA] result=failed reason={type(e).__name__} status={getattr(getattr(e, 'response', None), 'status_code', None)}", flush=True)
     return None, None
 
 
@@ -204,6 +209,11 @@ def download_meta_image(media_id: str):
 
 def send_media_to_chatwoot(conversation_id: int, content: str, media_bytes: bytes, mime_type: str = "application/octet-stream", filename: str = "archivo", is_private: bool = False):
     """Forward customer media as incoming, and internal attachments as private notes."""
+    mime_type = content_type(mime_type) or "application/octet-stream"
+    maximum = getattr(config, "CHATWOOT_MAX_ATTACHMENT_BYTES", 25 * 1024 * 1024)
+    details = {"conversation_id": conversation_id, "media_kind": media_kind(mime_type),
+               "byte_size": len(media_bytes) if isinstance(media_bytes, bytes) else 0,
+               "verification_phase": "source"}
     url = f"{get_base_url()}/conversations/{conversation_id}/messages"
     files = {
         "attachments[]": (filename, media_bytes, mime_type or "application/octet-stream")
@@ -214,13 +224,26 @@ def send_media_to_chatwoot(conversation_id: int, content: str, media_bytes: byte
         "private": "true" if is_private else "false"
     }
     try:
+        validate_source_media(media_bytes, mime_type, maximum)
+        details["verification_phase"] = "upload"
         response = post(url, headers=get_multipart_headers(), files=files, data=data, timeout=MEDIA_TIMEOUT, allow_redirects=False)
-        print(f"[CHATWOOT DEBUG] Respuesta POST Archivo - Status: {response.status_code}")
-        response.raise_for_status()
+        details["provider_status"] = response.status_code
+        if response.status_code not in {200, 201}:
+            raise MediaValidationError("upload_http_error")
+        message_id, attachment = uploaded_attachment(response, expected_mime=mime_type,
+            expected_size=len(media_bytes), account_id=config.CHATWOOT_ACCOUNT_ID, diagnostics=details)
+        details.update(message_id=message_id, attachment_id=attachment["id"])
+        details["verification_phase"] = "asset"
+        verify_attachment_asset(attachment.get("data_url"), media_bytes, mime_type, maximum,
+                                fetch=get_media_asset, diagnostics=details)
+        print(f"[CHATWOOT MEDIA] {json.dumps({**details, 'result': 'verified', 'reason': 'asset_bytes_verified'}, sort_keys=True)}", flush=True)
         return response
-    except requests.exceptions.RequestException as e:
-        print(f"[CHATWOOT DEBUG] Error enviando archivo a Chatwoot: {e}")
-        return None
+    except MediaValidationError as error:
+        reason = error.reason
+    except requests.exceptions.RequestException:
+        reason = "provider_transport_error"
+    print(f"[CHATWOOT MEDIA] {json.dumps({**details, 'result': 'unverified', 'reason': reason}, sort_keys=True)}", flush=True)
+    return None
 
 
 def send_image_to_chatwoot(conversation_id: int, content: str, image_bytes: bytes, is_private: bool = False):
@@ -273,8 +296,8 @@ _prepare_audio_for_chatwoot = prepare_audio_for_delivery
 
 
 def send_audio_to_chatwoot(conversation_id: int, audio_bytes: bytes, mime_type: str = "audio/ogg",
-                           content: str = "🎙️ Nota de voz del cliente", is_private: bool = False):
-    """Prepare and upload a voice note without ever dropping the original audio."""
+                           content: str = "🎙️ Nota de voz del cliente", is_private: bool = False, *, transcript: str = None):
+    """Convert audio when explicitly requested; never attach an unverified original."""
     source_mime = (mime_type or "audio/ogg").split(";", 1)[0].strip().lower()
     try:
         prepared_bytes, prepared_mime, extension = _prepare_audio_for_chatwoot(audio_bytes, source_mime)
@@ -282,16 +305,12 @@ def send_audio_to_chatwoot(conversation_id: int, audio_bytes: bytes, mime_type: 
             conversation_id, content, prepared_bytes, prepared_mime,
             f"nota_de_voz{extension}", is_private,
         )
-    except (OSError, RuntimeError, subprocess.SubprocessError, ValueError) as exc:
-        print(f"[CHATWOOT AUDIO] No se pudo convertir la nota de voz: {exc}")
-        extension = extension_from_mime(source_mime, ".ogg")
-        response = send_media_to_chatwoot(
-            conversation_id, content, audio_bytes, source_mime,
-            f"nota_de_voz_original{extension}", is_private,
-        )
+    except (OSError, RuntimeError, subprocess.SubprocessError, ValueError):
+        print(f"[CHATWOOT AUDIO] conversation_id={conversation_id} reason=audio_conversion_failed", flush=True)
+        notice = "No se adjuntó la nota de voz porque no se pudo verificar su formato."
+        if transcript:
+            notice += f"\nTranscripción del audio: {transcript}"
         send_message_to_chatwoot(
-            conversation_id,
-            "⚠️ La nota de voz se adjuntó en su formato original. La reproducción en línea puede no estar disponible; descárgala para escucharla.",
-            is_private=is_private,
+            conversation_id, notice, is_private=is_private,
         )
-        return response
+        return None

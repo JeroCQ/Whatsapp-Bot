@@ -150,6 +150,14 @@ mismatches return 403. The Meta callback remains `https://BOT-DOMAIN/webhook`.
 
 Never place webhook secrets or API tokens in URLs. Rotate a Chatwoot webhook secret by updating the Railway secret and the corresponding account webhook together during a controlled window. Provider logs contain only sanitized status/code/message fields. Mobile push notifications are configured on the Chatwoot installation, not in this bot.
 
+Voice notes in handoffs and human attention are delivered as labelled automatic
+transcriptions; an audio file with unverified playback is not attached. Customer
+images are decoded before upload and their published storage bytes are checked
+afterward. Failed delivery retains human control and creates a private advisor
+notice. See [Chatwoot media delivery](docs/CHATWOOT_MEDIA_DELIVERY.md) for evidence,
+limits and verification in an existing or new deployment; no additional SQL is
+required for this media correction.
+
 `CHATWOOT_ASSIGNMENT_MODE` supports these values:
 
 - `automatic`: conversation creation omits `assignee_id`. Add or remove agents in

@@ -296,21 +296,22 @@ def test_handoff_summary_and_media_alert_are_private(monkeypatch):
     assert events[1][2]["is_private"] is True
 
 
-def test_audio_handoff_reuses_transcription_download_and_uploads_playable_private_audio(monkeypatch):
+def test_audio_handoff_identifies_trigger_transcription_without_unverified_audio(monkeypatch):
     _mock_handoff_dependencies(monkeypatch)
-    uploads = []
+    monkeypatch.setattr(main, "save_message_log", lambda *args, **kwargs: None)
+    notes = []
     monkeypatch.setattr(
         chatwoot_api, "download_meta_media",
         lambda media_id: pytest.fail("handoff downloaded audio a second time"),
     )
-    monkeypatch.setattr(chatwoot_api, "send_message_to_chatwoot", lambda *args, **kwargs: None)
+    monkeypatch.setattr(chatwoot_api, "send_message_to_chatwoot", lambda *args, **kwargs: notes.append((args, kwargs)))
     monkeypatch.setattr(
-        chatwoot_api, "_prepare_audio_for_chatwoot",
-        lambda data, mime: (b"converted-mp3", "audio/mpeg", ".mp3"),
+        chatwoot_api, "send_audio_to_chatwoot",
+        lambda *args, **kwargs: pytest.fail("unverified voice note must not be attached"),
     )
     monkeypatch.setattr(
         chatwoot_api, "send_media_to_chatwoot",
-        lambda *args, **kwargs: uploads.append((args, kwargs)) or Response(200),
+        lambda *args, **kwargs: pytest.fail("unverified audio must not be uploaded"),
     )
 
     main._create_handoff_ticket_if_needed(
@@ -318,15 +319,70 @@ def test_audio_handoff_reuses_transcription_download_and_uploads_playable_privat
         "audio-1", "transcripción", "audio/ogg; codecs=opus", None,
         effective_media_type="audio", media_bytes=b"original-ogg",
         downloaded_mime_type="audio/ogg; codecs=opus",
+        audio_transcript="Quiero una nota escrita a mano para mañana",
     )
 
-    assert uploads[0][0][2] == b"converted-mp3"
-    assert uploads[0][0][3] == "audio/mpeg"
-    assert uploads[0][0][4].endswith(".mp3")
-    assert uploads[0][0][5] is True
+    assert len(notes) == 2
+    summary = notes[0][0][1]
+    assert "Quiero una nota escrita a mano para mañana" in summary
+    assert "transcripci" in summary.lower()
+    assert "Origen de la derivación" in summary
+    assert all(kwargs["is_private"] is True for _, kwargs in notes)
 
 
-def test_audio_conversion_failure_preserves_original_and_visibility(monkeypatch):
+def test_audio_transcription_reaches_handoff_summary_as_trigger_without_a_second_incoming_row(monkeypatch):
+    _mock_durable_handoff(monkeypatch)
+    monkeypatch.setattr(main.config, "REDIS_URL", None)
+    state = {"is_paused": False, "chatwoot_conversation_id": None}
+    history, notes, replies, updates = [], [], [], []
+    transcript = "Quiero incluir una nota escrita a mano con el regalo de mañana"
+    monkeypatch.setattr(main, "get_or_create_customer_state", lambda *args: state)
+    monkeypatch.setattr(main, "get_message_logs", lambda *args, **kwargs: history[:])
+
+    def log(phone, role, content, **kwargs):
+        history.append({"role": role, "content": content, "metadata": {**main.current_trace(), **kwargs.get("metadata", {})}})
+
+    def update(phone, event_id, text):
+        updates.append((phone, event_id, text))
+        row = next(item for item in history if item["role"] == "user")
+        row.update(content=text)
+        row["metadata"].update(input_type="audio", is_transcription=True)
+
+    def logic(*args):
+        assert args[1] == transcript
+        state.update(is_paused=True, current_state="HUMAN_HANDOFF", handoff_reason="Validar la nota personalizada")
+        return types.SimpleNamespace(response="Tu solicitud necesita revisión del equipo", requested_files=[],
+            send_files_before_response=False, follow_up_message="")
+
+    monkeypatch.setattr(main, "save_message_log", log)
+    monkeypatch.setattr(main, "update_inbound_transcript", update)
+    monkeypatch.setattr(main, "process_message_logic", logic)
+    monkeypatch.setattr(main, "transcribe_audio_message", lambda *args: transcript)
+    monkeypatch.setattr(main, "update_chatwoot_conversation_id", lambda phone, conv: state.update(chatwoot_conversation_id=conv))
+    monkeypatch.setattr(main, "mark_webhook_event_processed", lambda *args, **kwargs: None)
+    monkeypatch.setattr(main, "send_whatsapp_message", lambda *args: replies.append(args))
+    monkeypatch.setattr(chatwoot_api, "download_meta_media", lambda *args: (b"synthetic-voice", "audio/ogg"))
+    monkeypatch.setattr(chatwoot_api, "get_or_create_contact", lambda *args, **kwargs: 12)
+    monkeypatch.setattr(chatwoot_api, "create_conversation", lambda *args, **kwargs: 34)
+    monkeypatch.setattr(chatwoot_api, "send_message_to_chatwoot", lambda *args, **kwargs: notes.append((args, kwargs)) or Response(200))
+    monkeypatch.setattr(chatwoot_api, "send_audio_to_chatwoot", lambda *args, **kwargs: pytest.fail("audio must not be attached"))
+    monkeypatch.setattr(chatwoot_api, "send_media_to_chatwoot", lambda *args, **kwargs: pytest.fail("audio must not be uploaded"))
+    main.process_whatsapp_message("573001234567", "Cliente sintético", "[Audio Nota]",
+        is_audio=True, media_id="synthetic-voice", media_type="audio", mime_type="audio/ogg",
+        event_id="synthetic-voice-trigger", customer_message_received_at=main.datetime.now(main.timezone.utc))
+    assert len([row for row in history if row["role"] == "user"]) == 1
+    assert updates == [("573001234567", "synthetic-voice-trigger", transcript)]
+    assert state["chatwoot_conversation_id"] == 34
+    assert len(replies) == 1
+    summary = notes[0][0][1]
+    assert "**Origen de la derivación:**" in summary
+    assert "**Transcripción automática que motivó la derivación:**" in summary
+    assert "🎙️ [Transcripción automática de nota de voz]" in summary
+    assert transcript in summary
+    assert all(kwargs["is_private"] for _, kwargs in notes)
+
+
+def test_audio_conversion_failure_sends_transcript_without_attaching_original(monkeypatch):
     uploads = []
     notices = []
     monkeypatch.setattr(
@@ -343,13 +399,13 @@ def test_audio_conversion_failure_preserves_original_and_visibility(monkeypatch)
     )
 
     chatwoot_api.send_audio_to_chatwoot(
-        34, b"original-ogg", "audio/ogg; codecs=opus", content="voice", is_private=False
+        34, b"original-ogg", "audio/ogg; codecs=opus", content="voice", is_private=False,
+        transcript="Necesito confirmar mi pedido",
     )
 
-    assert uploads[0][0][2:4] == (b"original-ogg", "audio/ogg")
-    assert uploads[0][0][4].startswith("nota_de_voz_original.")
-    assert uploads[0][0][5] is False
-    assert "reproducción en línea puede no estar disponible" in notices[0][0][1]
+    assert uploads == []
+    assert "Necesito confirmar mi pedido" in notices[0][0][1]
+    assert "transcripci" in notices[0][0][1].lower()
     assert notices[0][1]["is_private"] is False
 
 
@@ -371,14 +427,17 @@ def test_audio_conversion_uses_bundled_ffmpeg(monkeypatch):
     assert extension == ".mp3"
 
 
-def test_paused_conversation_routes_audio_through_audio_uploader(monkeypatch):
+def test_paused_conversation_routes_labeled_audio_transcript_without_attachment(monkeypatch):
     sent = []
     monkeypatch.setattr(main, "invalidate_follow_up", lambda *args: None)
     monkeypatch.setattr(main, "get_or_create_customer_state", lambda *args: {"is_paused": True, "chatwoot_conversation_id": 44})
     monkeypatch.setattr(main, "save_message_log", lambda *args: None)
     monkeypatch.setattr(chatwoot_api, "download_meta_media", lambda media_id: (b"ogg", "audio/ogg; codecs=opus"))
     monkeypatch.setattr(chatwoot_api, "send_media_to_chatwoot", lambda *args, **kwargs: pytest.fail("generic uploader used"))
-    monkeypatch.setattr(chatwoot_api, "send_audio_to_chatwoot", lambda *args, **kwargs: sent.append((args, kwargs)))
+    monkeypatch.setattr(chatwoot_api, "send_audio_to_chatwoot", lambda *args, **kwargs: pytest.fail("unverified audio attached"))
+    monkeypatch.setattr(main, "transcribe_audio_message", lambda *args: "¿Puedes confirmar la entrega?")
+    monkeypatch.setattr(main, "update_inbound_transcript", lambda *args: None)
+    monkeypatch.setattr(chatwoot_api, "send_message_to_chatwoot", lambda *args, **kwargs: sent.append((args, kwargs)) or Response(200))
 
     main._process_whatsapp_message_unlocked(
         "57300", "Cliente", "", media_id="audio-1", is_audio=True,
@@ -386,8 +445,93 @@ def test_paused_conversation_routes_audio_through_audio_uploader(monkeypatch):
         customer_message_received_at=main.datetime.now(main.timezone.utc),
     )
 
-    assert sent[0][0][0:3] == (44, b"ogg", "audio/ogg; codecs=opus")
+    assert sent[0][0][0] == 44
+    assert "Transcripción automática de nota de voz" in sent[0][0][1]
+    assert "¿Puedes confirmar la entrega?" in sent[0][0][1]
     assert sent[0][1]["is_private"] is False
+
+
+@pytest.fixture
+def human_media_delivery(monkeypatch):
+    state = {"is_paused": True, "chatwoot_conversation_id": 44, "current_state": "HUMAN_HANDOFF"}
+    seen = {"uploads": [], "notes": [], "logs": [], "marked": [], "transcripts": []}
+    monkeypatch.setattr(main.config, "REDIS_URL", None)
+    monkeypatch.setattr(main, "get_or_create_customer_state", lambda *args: state)
+    monkeypatch.setattr(main, "process_message_logic", lambda *args: pytest.fail("human control must remain active"))
+    monkeypatch.setattr(main, "pause_bot_for_handoff", lambda *args: pytest.fail("do not create another emergency handoff"))
+    monkeypatch.setattr(main, "send_whatsapp_message", lambda *args: pytest.fail("do not send a customer fallback during human attention"))
+    monkeypatch.setattr(main, "schedule_follow_up_sequence", lambda *args, **kwargs: pytest.fail("human attention cannot schedule followups"))
+    monkeypatch.setattr(main, "save_message_log", lambda *args, **kwargs: seen["logs"].append((args, main.current_trace())))
+    monkeypatch.setattr(main, "update_inbound_transcript", lambda *args: seen["transcripts"].append(args))
+    monkeypatch.setattr(main, "mark_webhook_event_processed", lambda *args, **kwargs: seen["marked"].append((args, kwargs)))
+    monkeypatch.setattr(chatwoot_api, "send_audio_to_chatwoot", lambda *args, **kwargs: pytest.fail("do not attach unverified audio"))
+    monkeypatch.setattr(chatwoot_api, "send_message_to_chatwoot", lambda *args, **kwargs: seen["notes"].append((args, kwargs)) or Response(200))
+    monkeypatch.setattr(chatwoot_api, "download_meta_media", lambda *args: (b"synthetic-image", "image/jpeg"))
+    return state, seen
+
+
+@pytest.mark.parametrize("business_id", ["memos", "tanaka", "velvet", "future_brand"])
+@pytest.mark.parametrize("verified", [False, True])
+def test_human_image_delivery_requires_verified_attachment_and_never_blindly_resends(
+        monkeypatch, human_media_delivery, business_id, verified):
+    state, seen = human_media_delivery
+    monkeypatch.setattr(main.config, "BUSINESS_ID", business_id)
+    monkeypatch.setattr(chatwoot_api, "send_media_to_chatwoot",
+        lambda *args, **kwargs: seen["uploads"].append((args, kwargs)) or (Response(200) if verified else None))
+    main.process_whatsapp_message("573001234567", "Cliente sintético", "",
+        is_image=True, media_id="synthetic-image", media_type="image", mime_type="image/jpeg",
+        event_id="synthetic-image-event", customer_message_received_at=main.datetime.now(main.timezone.utc))
+    assert len(seen["uploads"]) == 1
+    assert seen["uploads"][0][1]["is_private"] is False
+    assert state["is_paused"] and state["chatwoot_conversation_id"] == 44
+    incoming = [row for row in seen["logs"] if row[0][1] == "user"]
+    assert len(incoming) == 1
+    assert incoming[0][1]["input_type"] == "image"
+    assert incoming[0][1]["source_event_id"] == "synthetic-image-event"
+    if verified:
+        assert seen["notes"] == []
+        assert seen["marked"][-1][1] == {}
+    else:
+        assert len(seen["notes"]) == 1
+        assert seen["notes"][0][1]["is_private"] is True
+        assert "pendiente de revisión" in seen["notes"][0][0][1]
+        assert seen["marked"][-1][1] == {"status": "failed", "error": "attachment_not_verified"}
+
+
+def test_human_image_download_failure_preserves_caption_and_reports_missing_attachment(monkeypatch, human_media_delivery):
+    state, seen = human_media_delivery
+    monkeypatch.setattr(chatwoot_api, "download_meta_media", lambda *args: (None, None))
+    monkeypatch.setattr(chatwoot_api, "send_media_to_chatwoot", lambda *args, **kwargs: pytest.fail("no bytes to upload"))
+    main.process_whatsapp_message("573001234567", "Cliente sintético", "Este es el diseño",
+        is_image=True, media_id="synthetic-image", media_type="image", mime_type="image/jpeg",
+        event_id="synthetic-image-event", customer_message_received_at=main.datetime.now(main.timezone.utc))
+    assert seen["notes"][0] == ((44, "Este es el diseño"), {"is_private": False})
+    assert seen["notes"][1][1]["is_private"] is True
+    assert seen["marked"][-1][1] == {"status": "failed", "error": "download_failed"}
+    assert state["chatwoot_conversation_id"] == 44
+
+
+@pytest.mark.parametrize("transcript", ["Quiero confirmar el diseño", None])
+def test_audio_during_human_attention_is_transcript_or_explicit_manual_review(
+        monkeypatch, human_media_delivery, transcript):
+    state, seen = human_media_delivery
+    monkeypatch.setattr(chatwoot_api, "download_meta_media", lambda *args: (b"synthetic-voice", "audio/ogg"))
+    monkeypatch.setattr(chatwoot_api, "send_media_to_chatwoot", lambda *args, **kwargs: pytest.fail("audio cannot become an unverified attachment"))
+    monkeypatch.setattr(main, "transcribe_audio_message", lambda *args: transcript)
+    main.process_whatsapp_message("573001234567", "Cliente sintético", "[Audio Nota]",
+        is_audio=True, media_id="synthetic-voice", media_type="audio", mime_type="audio/ogg",
+        event_id="synthetic-voice-event", customer_message_received_at=main.datetime.now(main.timezone.utc))
+    assert len(seen["notes"]) == 1
+    if transcript:
+        assert transcript in seen["notes"][0][0][1]
+        assert "Transcripción automática" in seen["notes"][0][0][1]
+        assert seen["notes"][0][1]["is_private"] is False
+        assert seen["transcripts"] == [("573001234567", "synthetic-voice-event", transcript)]
+    else:
+        assert "no fue posible transcribirla" in seen["notes"][0][0][1]
+        assert seen["notes"][0][1]["is_private"] is True
+        assert seen["transcripts"] == []
+    assert state["is_paused"] and state["chatwoot_conversation_id"] == 44
 
 
 class Response:
