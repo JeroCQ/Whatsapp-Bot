@@ -1,4 +1,4 @@
-# Actualizar Tanaka o Memo's sin recrear sus proyectos
+# Actualizar un negocio existente sin recrear su proyecto
 
 Este procedimiento sirve para desplegar una versión nueva del código en una marca
 existente. No crea otra marca y no intercambia recursos entre Railway projects.
@@ -20,6 +20,21 @@ existente. No crea otra marca y no intercambia recursos entre Railway projects.
 4. No ejecutes además `enable_runtime_message_roles.sql`: ya está incluido en el
    upgrade completo. Ese archivo pequeño queda para reparar únicamente el error de
    roles sin aplicar todavía el resto del upgrade.
+
+Para el soporte de perfiles con usuario y teléfono oculto, ejecuta este upgrade
+antes de actualizar el web y los workers de cada marca. Amplía de `varchar(25)` a
+`text` las columnas `phone_number` de `customers`, `conversation_states` y
+`message_logs` en una sola operación atómica, conservando datos, claves y relaciones.
+La comprobación final `has_unbounded_whatsapp_identities` debe ser `true`.
+PostgreSQL toma bloqueos de esquema durante esa operación: inclúyela en la ventana
+de actualización del proyecto respaldado. No uses el antiguo upgrade específico
+de Tanaka para esta capacidad; los proyectos nuevos ya la reciben en el bootstrap.
+
+El identificador se conserva como llega de Meta, sin extraer un teléfono desde
+un `wamid` ni relacionar clientes por username o por un número comunicado por chat.
+Los consumidores de la API deben aceptar el valor opaco del campo `phone_number`.
+Chatwoot lo vincula mediante un `identifier` estable del negocio y número Meta,
+sin construir teléfonos `+CO.…`; cada Railway conserva sus recursos aislados.
 
 ## 3. Mantener la identidad del Railway
 
@@ -49,12 +64,22 @@ variables desde otro Railway como mecanismo de despliegue.
 La corrección de textos de seguimiento también aplica a Tanaka, Memo's, Velvet y
 negocios futuros. Se conserva el `follow_up_message` generado desde la instrucción
 de cada `BUSINESS_ID`, incluido el seguimiento posterior a un catálogo; cuando falta,
-se utiliza un mensaje general sin categorías de otra marca. No requiere migración
-SQL ni variables nuevas y conserva las cadencias existentes. Despliega el mismo
+se utiliza un mensaje general sin categorías de otra marca. Un campo explícitamente
+vacío o null ahora cancela los seguimientos. El cambio histórico de texto por sí
+solo no requería SQL; el paquete actual sí requiere el upgrade canónico para las
+preferencias persistentes, `message_logs.metadata/event_key` y `handoff_deliveries`.
+Despliega el mismo
 commit en el web y los workers de cada Railway aislado: el worker actualizado
 sustituye únicamente el antiguo texto fijo de panadería/postres en jobs ya encolados,
 sin borrar colas ni cambiar otros mensajes personalizados. Los proyectos nuevos
 siguen la misma política mediante `docs/NEW_BUSINESS_SETUP.md`.
+
+Antes de este despliegue revisa [el procedimiento de auditoría de Memo's](MEMOS_AUDIT_BACKEND.md).
+Incluye protección de jobs antiguos sin borrar Redis, separación al ejecutar,
+resultados ambiguos de proveedores, casos pendientes de asesor y reversión mediante
+`FOLLOW_UPS_ENABLED=false`. El SQL es aditivo: no borres históricos ni elimines las
+columnas nuevas al revertir una aplicación. Comprueba `queue.worker_commits` en
+`/health` y el SHA de web; un worker `unknown` o de otro SHA aún no está verificado.
 
 En cada API inbox, configura su webhook URL hacia `/chatwoot-webhook` del Railway
 de esa misma marca y guarda el `secret` del canal como
@@ -79,6 +104,11 @@ API inbox a `delivered`; si Meta falla, lo marca `failed` con un error genérico
    marca; resuelve el ticket y confirma la reactivación.
 6. No pruebes Tanaka y Memo's con la misma cola Redis ni apuntando ambos números al
    mismo callback.
+7. Comprueba un remitente con teléfono y otro con BSUID: ambos deben entrar a la
+   cola, recibir texto y catálogo y poder pasar a su propio inbox Chatwoot. Revisa
+   que el usuario con BSUID no genere `[WEBHOOK INVALID]` y que la respuesta use
+   `recipient`. Un HTTP 200 de Meta confirma aceptación, no entrega al dispositivo;
+   confirma también la recepción en la prueba del cliente.
 
 ## 5. Rollback
 

@@ -23,6 +23,17 @@ BEGIN
   END IF;
 END $$;
 
+-- Keep the legacy column name for runtime/dashboard compatibility. Its value is
+-- the WhatsApp recipient identity, which can be a phone number or a longer
+-- business-scoped user ID. PostgreSQL preserves the existing values and all
+-- primary/unique/foreign keys when widening these compatible string types.
+-- One DO statement makes the three-column change atomic and safe to rerun.
+DO $$ BEGIN
+  ALTER TABLE public.customers ALTER COLUMN phone_number TYPE text;
+  ALTER TABLE public.conversation_states ALTER COLUMN phone_number TYPE text;
+  ALTER TABLE public.message_logs ALTER COLUMN phone_number TYPE text;
+END $$;
+
 -- Current conversation, Chatwoot, follow-up, and durable-memory fields.
 ALTER TABLE public.conversation_states
   ADD COLUMN IF NOT EXISTS chatwoot_conversation_id integer,
@@ -53,6 +64,34 @@ ALTER TABLE public.message_logs DROP CONSTRAINT IF EXISTS message_logs_role_chec
 ALTER TABLE public.message_logs
   ADD CONSTRAINT message_logs_role_check
   CHECK (role IN ('user', 'model', 'system', 'asesor'));
+
+-- Correlated message metrics and durable, bounded human-handoff delivery.
+ALTER TABLE public.conversation_states
+  ADD COLUMN IF NOT EXISTS follow_up_not_before timestamptz,
+  ADD COLUMN IF NOT EXISTS follow_up_suppressed boolean NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS follow_up_suppression_reason text;
+ALTER TABLE public.message_logs
+  ADD COLUMN IF NOT EXISTS metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  ADD COLUMN IF NOT EXISTS event_key text;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_message_logs_event_key ON public.message_logs(event_key);
+CREATE TABLE IF NOT EXISTS public.handoff_deliveries (
+  business_id text NOT NULL,
+  phone_number text NOT NULL REFERENCES public.customers(phone_number),
+  request_id text NOT NULL,
+  status text NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'reserved', 'sending', 'created', 'unknown', 'exhausted', 'cancelled')),
+  attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  retry_at timestamptz NOT NULL DEFAULT now(),
+  conversation_id bigint,
+  last_error text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (business_id, phone_number)
+);
+CREATE INDEX IF NOT EXISTS idx_handoff_deliveries_pending
+  ON public.handoff_deliveries(business_id, status, retry_at);
+ALTER TABLE public.handoff_deliveries ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.handoff_deliveries FROM anon, authenticated;
 
 CREATE INDEX IF NOT EXISTS idx_message_logs_phone_created_at
   ON public.message_logs(phone_number, created_at DESC, id DESC);
@@ -120,6 +159,12 @@ SELECT
   to_regclass('public.processed_webhook_events') IS NOT NULL AS has_webhook_events,
   to_regclass('public.dashboard_admins') IS NOT NULL AS has_dashboard_admins,
   to_regclass('public.catalog_assets') IS NOT NULL AS has_catalog_assets,
+  (
+    SELECT count(*) = 3 FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name IN ('customers', 'conversation_states', 'message_logs')
+      AND column_name = 'phone_number' AND data_type = 'text'
+  ) AS has_unbounded_whatsapp_identities,
   EXISTS (
     SELECT 1 FROM information_schema.columns
     WHERE table_schema = 'public' AND table_name = 'conversation_states'

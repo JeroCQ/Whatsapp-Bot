@@ -1,3 +1,5 @@
+import hashlib
+import json
 import mimetypes
 import subprocess
 
@@ -6,6 +8,7 @@ import requests
 from config import config
 from http_client import MEDIA_TIMEOUT, get, post, put
 from provider_errors import ProviderError, provider_error
+from webhook_utils import valid_whatsapp_user_id
 
 
 def get_base_url():
@@ -30,9 +33,22 @@ def get_multipart_headers():
     return {"api_access_token": config.CHATWOOT_API_TOKEN}
 
 
+def _scoped_whatsapp_contact_identifier(user_id: str) -> str:
+    """Keep opaque identities separate across business and Meta-number deployments."""
+    identity = json.dumps(
+        [config.BUSINESS_ID, str(config.WA_PHONE_NUMBER_ID), user_id],
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    return f"whatsapp-user:{hashlib.sha256(identity.encode('utf-8')).hexdigest()}"
+
+
 def get_or_create_contact(phone: str, name: str = "Cliente WhatsApp"):
-    """Busca al cliente en Chatwoot, si no existe, lo crea. Si existe, actualiza su nombre."""
+    """Find a phone contact or a scoped opaque WhatsApp identity, then update its name."""
     url = f"{get_base_url()}/contacts"
+    opaque_identity = valid_whatsapp_user_id(phone)
+    identifier = _scoped_whatsapp_contact_identifier(phone) if opaque_identity else None
+    search_term = identifier if opaque_identity else phone
     
     try:
         inbox_id_int = int(config.CHATWOOT_INBOX_ID)
@@ -43,10 +59,16 @@ def get_or_create_contact(phone: str, name: str = "Cliente WhatsApp"):
     # 1. Buscar si el contacto ya existe
     search_url = f"{url}/search"
     try:
-        search_res = get(search_url, headers=get_headers(), params={"q": phone}, allow_redirects=False)
+        search_res = get(search_url, headers=get_headers(), params={"q": search_term}, allow_redirects=False)
         _checked(search_res, "search_contact")
-        if search_res.json().get("payload"):
-            contact = search_res.json()["payload"][0]
+        contacts = search_res.json().get("payload") or []
+        # Chatwoot's q search is partial across several fields; an opaque sender
+        # must match its complete scoped identifier, never just the first result.
+        contact = next(
+            (item for item in contacts if isinstance(item, dict) and item.get("identifier") == identifier),
+            None,
+        ) if opaque_identity else (contacts[0] if contacts else None)
+        if contact:
             contact_id = contact["id"]
             current_name = contact.get("name")
             
@@ -64,8 +86,14 @@ def get_or_create_contact(phone: str, name: str = "Cliente WhatsApp"):
     data = {
         "inbox_id": inbox_id_int,
         "name": name,
-        "phone_number": f"+{phone}" if not phone.startswith("+") else phone
     }
+    if opaque_identity:
+        # API inbox contacts accept an identifier without a phone number. Do not
+        # turn a BSUID into an invalid +CC.* phone or infer one from its digits.
+        # Contract: https://github.com/chatwoot/chatwoot/blob/642205c5c84f76cf6d24ecdd9d627eecdc766092/app/controllers/api/v1/accounts/contacts_controller.rb#L176
+        data["identifier"] = identifier
+    else:
+        data["phone_number"] = f"+{phone}" if not phone.startswith("+") else phone
     
     try:
         res = post(url, headers=get_headers(), json=data, allow_redirects=False)
@@ -76,7 +104,7 @@ def get_or_create_contact(phone: str, name: str = "Cliente WhatsApp"):
     
     return None
 
-def create_conversation(contact_id: int):
+def create_conversation(contact_id: int, *, raise_on_error: bool = False):
     """Abre un ticket nuevo para el asesor (Sin enviar mensaje aún)."""
     url = f"{get_base_url()}/conversations"
     data = {
@@ -105,6 +133,8 @@ def create_conversation(contact_id: int):
         return conversation_id
     except (ProviderError, requests.exceptions.RequestException, ValueError, TypeError, AttributeError, KeyError) as e:
         print(f"[PROVIDER ERROR] {e}")
+        if raise_on_error:
+            raise
     return None
 
 
@@ -113,7 +143,9 @@ def send_message_to_chatwoot(conversation_id: int, content: str, is_private: boo
     url = f"{get_base_url()}/conversations/{conversation_id}/messages"
     data = {
         "content": content,
-        "message_type": "incoming", 
+        # Chatwoot reopens resolved/snoozed conversations on incoming messages,
+        # including private ones. Internal notes must not impersonate a customer.
+        "message_type": "outgoing" if is_private else "incoming",
         "private": is_private       
     }
     try:
@@ -171,14 +203,14 @@ def download_meta_image(media_id: str):
 
 
 def send_media_to_chatwoot(conversation_id: int, content: str, media_bytes: bytes, mime_type: str = "application/octet-stream", filename: str = "archivo", is_private: bool = False):
-    """Sube cualquier archivo de WhatsApp como mensaje entrante visible al asesor humano."""
+    """Forward customer media as incoming, and internal attachments as private notes."""
     url = f"{get_base_url()}/conversations/{conversation_id}/messages"
     files = {
         "attachments[]": (filename, media_bytes, mime_type or "application/octet-stream")
     }
     data = {
         "content": content or "📎 Archivo del cliente",
-        "message_type": "incoming",
+        "message_type": "outgoing" if is_private else "incoming",
         "private": "true" if is_private else "false"
     }
     try:

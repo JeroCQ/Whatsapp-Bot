@@ -41,10 +41,16 @@ una conversación de prueba solo aparece en Supabase, Redis y Chatwoot de la mar
 
 Define el tono y el contexto de `follow_up_message` en la instrucción propia de
 `BUSINESS_ID`. El backend conserva ese mensaje incluso después de enviar un catálogo;
-si está vacío, utiliza un texto general sin categorías ni datos de otra marca.
-Esta política también aplica a futuros negocios y a despliegues existentes, sin
-variables nuevas ni cambios al esquema de Supabase. Las cadencias siguen siendo
-las de cada etapa comercial.
+si el campo está ausente por compatibilidad, utiliza un texto general sin categorías
+ni datos de otra marca. Un valor explícitamente vacío o null cancela el seguimiento.
+Configura `src/clients/<business_id>/business_policy.json` con zona `America/Bogota`,
+`contact_hours` y `operating_hours` separados (`days`: lunes=0, domingo=6;
+`start`/`end`: HH:MM). El default genérico sin archivo es contacto y operación
+08:00–18:00 todos los días: confirma el calendario propio antes de habilitar ventas.
+`FOLLOW_UP_MIN_SPACING_SECONDS` permite ampliar/cambiar el mínimo (900 segundos por
+defecto), y `FOLLOW_UPS_ENABLED=false` sirve para una puesta en marcha sin recordatorios.
+El bootstrap actual ya incluye preferencias, correlación y handoffs durables.
+Ver [pruebas y verificación de web/worker](MEMOS_AUDIT_BACKEND.md).
 
 ### 2. Supabase
 
@@ -56,6 +62,15 @@ las de cada etapa comercial.
 3. La variable `SUPABASE_URL` es la raíz `https://<project-ref>.supabase.co`,
    **sin `/rest/v1`**. `SUPABASE_SERVICE_ROLE_KEY` es solo servidor: nunca una
    publishable/anon key y nunca una variable del navegador.
+
+El bootstrap también prepara perfiles WhatsApp con usuario y teléfono oculto:
+`customers.phone_number`, `conversation_states.phone_number` y
+`message_logs.phone_number` son `text`, y `has_unbounded_whatsapp_identities`
+debe devolver `true`. El nombre histórico de la columna se conserva; puede contener
+un teléfono o el BSUID exacto que entrega Meta. El runtime usa `recipient` para
+BSUID y crea contactos Chatwoot con `identifier`, sin teléfono ficticio. Esta misma
+capacidad se añade a proyectos existentes mediante el upgrade canónico; no asocies
+manualmente una identidad opaca a un teléfono ni copies datos de otra marca.
 
 ### 3. Meta
 

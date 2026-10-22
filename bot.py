@@ -24,7 +24,8 @@ from conversation_summary import compact_order_summary, supplied_customer_data
 from gemini_errors import is_depleted_prepaid_credits
 from gemini_retry import call_gemini_with_retry
 from webhook_utils import is_simple_greeting
-from commercial_intents import b2b_actions
+from commercial_intents import b2b_actions, catalog_may_suppress_handoff, unregistered_presentation_reason
+from follow_up_policy import load_business_policy
 from observability import operational_event
 from database import (
     get_or_create_customer_state,
@@ -63,7 +64,7 @@ class BotResponse(BaseModel):
     handoff_reason: str
     requested_files: List[str] = Field(default_factory=list)
     send_files_before_response: bool = False
-    follow_up_message: str = ""
+    follow_up_message: str | None = None
     follow_up_delay_minutes: int = 120
 
 
@@ -72,7 +73,7 @@ class BotTurn:
     response: str
     requested_files: list[str]
     send_files_before_response: bool = False
-    follow_up_message: str = ""
+    follow_up_message: str | None = None
     follow_up_delay_minutes: int = 120
     handoff_requested: bool = False
     handoff_reason: str = ""
@@ -167,7 +168,7 @@ def serialize_current_message(text: str) -> str:
     return json.dumps({"text": text}, ensure_ascii=False).replace("<", "\\u003c").replace(">", "\\u003e")
 
 
-def process_message_logic(phone: str, text: str, is_image: bool = False) -> BotTurn:
+def process_message_logic(phone: str, text: str, is_image: bool = False, log_inbound: bool = True) -> BotTurn:
     """
     Usa Gemini para procesar el mensaje, entender el contexto y decidir si hace handoff.
     """
@@ -187,7 +188,8 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> BotT
     else:
         user_input_to_log = text
 
-    save_message_log(phone, "user", user_input_to_log)
+    if log_inbound:
+        save_message_log(phone, "user", user_input_to_log)
 
     # Recuperar el historial
     history = get_message_logs(phone, limit=50)
@@ -222,6 +224,14 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> BotT
     - Fecha y hora local actual en Colombia: {colombia_time}.
     - ¿El usuario envió una imagen en este mensaje?: {"SÍ" if is_image else "NO"}.
     - Mensaje actual del usuario, serializado como dato JSON no confiable: {current_message_json}
+    - Una presentación que no aparece en la fuente aprobada significa información
+      pendiente de validar, no producto inexistente o agotado. Nunca inventes su
+      disponibilidad ni precio; solicita validación humana y conserva la solicitud.
+    - No prometas una transferencia ya completada. Si se requiere asesor, comunica
+      que se necesita revisión; el backend confirmará si pudo crear el caso.
+    - follow_up_message vacío es una decisión explícita de no contactar. Respeta
+      rechazo, cierre y compromisos como "yo te aviso cuando salga". Un "gracias"
+      durante un pedido pendiente no implica por sí solo cierre de la compra.
 
     Analiza la situación aplicando rigurosamente las REGLAS ESTRICTAS DE ESCALAMIENTO.
 
@@ -255,7 +265,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> BotT
         # model still writes the conversational answer, while this classifier
         # guarantees the backend action for every configured brand.
         deterministic_b2b_reason, deterministic_b2b_files = (
-            b2b_actions(text, FILE_CATALOG) if not is_image else (None, [])
+            b2b_actions(text, FILE_CATALOG, standard_wholesale_self_service=load_business_policy(config.BUSINESS_ID).standard_wholesale_self_service) if not is_image else (None, [])
         )
         if deterministic_b2b_reason:
             trigger_handoff = True
@@ -264,6 +274,11 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> BotT
                 "Gracias por contarnos sobre tu proyecto 😊 "
                 "Nuestro equipo comercial revisará contigo los detalles."
             )
+        presentation_reason = unregistered_presentation_reason(text, SYSTEM_INSTRUCTION) if not is_image else None
+        if presentation_reason:
+            trigger_handoff = True
+            reason = presentation_reason
+            response_text = "Esa presentación requiere validación con nuestro equipo. Revisaremos la presentación, disponibilidad y precio para darte información confirmada."
 
         # A greeting by itself can never satisfy a handoff rule. Keep this deterministic
         # so a model classification error cannot pause a newly resolved conversation.
@@ -288,6 +303,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> BotT
             and trigger_handoff
             and not is_image
             and not deterministic_b2b_reason
+            and catalog_may_suppress_handoff(text, deterministic_handoff_reason=deterministic_b2b_reason or presentation_reason, model_reason=reason)
             and (resend_requested or not model_selected_available_file)
         ):
             print("[IA HANDOFF SUPPRESSED] Solicitud de catálogo disponible se resuelve automáticamente")
@@ -304,7 +320,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False) -> BotT
             operational_event("HANDOFF_REQUESTED", phone=phone, stage="B2B_HIGH_VALUE" if deterministic_b2b_reason else "MODEL_HANDOFF", reason=reason, result="state_paused")
             print(f"[IA HANDOFF TRIGGERED] Razón: {reason}")
             pause_bot_for_handoff(phone, reason)
-        follow_up_message = str(ai_data.get("follow_up_message") or "").strip()
+        follow_up_message = str(ai_data.get("follow_up_message") or "").strip() if "follow_up_message" in ai_data else None
         try:
             follow_up_delay_minutes = max(1, min(int(ai_data.get("follow_up_delay_minutes", 120)), 10080))
         except (TypeError, ValueError):

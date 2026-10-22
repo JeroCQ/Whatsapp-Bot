@@ -35,8 +35,8 @@ def test_maquila_and_distributor_each_emit_one_catalog_and_one_handoff_reason():
 
 
 def test_catalog_stage_replaces_first_response_and_has_three_attempts():
-    first = follow_up_plan("Hola, ¿qué buscas?", [], "")
-    catalog = follow_up_plan("Te comparto opciones", ["catalogo_distibuidores"], "")
+    first = follow_up_plan("Hola, ¿qué buscas?", [])
+    catalog = follow_up_plan("Te comparto opciones", ["catalogo_distibuidores"])
     assert first.stage == "FIRST_RESPONSE"
     assert first.delays_minutes == (10, 90, -1)
     assert catalog.stage == "CATALOG_SENT"
@@ -62,7 +62,7 @@ def test_catalog_follow_up_keeps_each_business_custom_message(catalog_id, custom
     assert plan.messages == (custom_message,) * 3
 
 
-@pytest.mark.parametrize("model_message", ["", " \n\t "])
+@pytest.mark.parametrize("model_message", [None])
 def test_catalog_follow_up_without_custom_text_uses_business_neutral_fallback(model_message):
     plan = follow_up_plan("Te comparto las opciones", ["catalogo_acme"], model_message)
 
@@ -92,7 +92,7 @@ def test_catalog_follow_up_replaces_exact_obsolete_model_text():
 
 def test_incomplete_and_payment_stages_use_aggressive_cadences_and_context():
     incomplete = follow_up_plan("¿En qué barrio estás?", [], "Solo me falta tu barrio. ¿Dónde te encuentras?")
-    payment = follow_up_plan("Tu total es $32.000. ¿Cómo deseas pagar?", [], "")
+    payment = follow_up_plan("Tu total es $32.000. ¿Cómo deseas pagar?", [])
     assert incomplete.stage == "INCOMPLETE_INTENT"
     assert incomplete.delays_minutes == (10, 45, 180)
     assert incomplete.messages[0] == "Solo me falta tu barrio. ¿Dónde te encuentras?"
@@ -101,7 +101,7 @@ def test_incomplete_and_payment_stages_use_aggressive_cadences_and_context():
 
 
 def test_deferred_delivery_is_resumed_at_next_service_opening():
-    plan = follow_up_plan("Te atendemos mañana", [], "")
+    plan = follow_up_plan("Te atendemos mañana", [], not_before=datetime(2026, 10, 19, 8))
     assert plan.stage == "DEFERRED_DELIVERY"
     assert plan.delays_minutes == (-1,)
 
@@ -118,19 +118,9 @@ def test_service_window_moves_attempt_and_never_sends_at_night():
 
 def test_attempt_claim_is_idempotent_and_sequence_token_stays_active():
     import queue_client
-
-    class Redis:
-        def __init__(self):
-            self.current = "token"
-            self.claimed = set()
-
-        def eval(self, _script, _count, active_key, attempt_key, token, _ttl):
-            if self.current != token or attempt_key in self.claimed:
-                return 0
-            self.claimed.add(attempt_key)
-            return 1
-
-    queue = type("Queue", (), {"connection": Redis()})()
+    import fakeredis
+    queue = type("Queue", (), {"connection": fakeredis.FakeRedis()})()
+    queue.connection.set("whatsapp-follow-up-token:57300", "token")
     with patch.object(queue_client, "get_queue", return_value=queue):
         assert queue_client.claim_follow_up_attempt("57300", "token", "CATALOG_SENT", 1)
         assert not queue_client.claim_follow_up_attempt("57300", "token", "CATALOG_SENT", 1)

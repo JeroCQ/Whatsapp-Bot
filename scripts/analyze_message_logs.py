@@ -7,9 +7,14 @@ import csv
 import argparse
 import re
 import statistics
+import sys
+import json
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from message_metrics import correlated_response_metrics, correlated_response_latencies
 
 
 DEFAULT_INPUT = Path("src/clients/tanaka/message_logs_rows.csv")
@@ -92,6 +97,11 @@ def main(path: Path, show_phones: bool = False) -> None:
         row["content"] = row["content"] or ""
         row["timestamp"] = datetime.fromisoformat(str(row["created_at"]))
 
+    print("correlated_response_metrics=" + json.dumps(correlated_response_metrics(rows), sort_keys=True))
+    if not rows:
+        print("messages=0 evaluated_customers=0")
+        return
+
     conversations: dict[str, list[dict[str, object]]] = defaultdict(list)
     for row in rows:
         conversations[str(row["phone_number"])].append(row)
@@ -109,6 +119,9 @@ def main(path: Path, show_phones: bool = False) -> None:
     # outage. Mixing them in would attribute infrastructure failure to the bot.
     rows = [row for row in rows if str(row["phone_number"]) in customers]
     conversations = {phone: conversation for phone, conversation in conversations.items() if phone in customers}
+    if not rows:
+        print(f"excluded_credit_customers={len(excluded_credit_customers)} messages=0 evaluated_customers=0")
+        return
     catalog_customers = {
         str(row["phone_number"])
         for row in rows
@@ -150,21 +163,10 @@ def main(path: Path, show_phones: bool = False) -> None:
         )
     }
 
-    bot_latencies: list[float] = []
-    any_latencies: list[float] = []
+    bot_latencies, any_latencies = correlated_response_latencies(rows)
     handoff_latencies: list[float] = []
     for conversation in conversations.values():
         for index, row in enumerate(conversation):
-            if row["role"] == "user":
-                for following in conversation[index + 1 :]:
-                    if following["role"] == "user":
-                        break
-                    if following["role"] in {"model", "asesor"}:
-                        delay = (following["timestamp"] - row["timestamp"]).total_seconds()
-                        any_latencies.append(delay)
-                        if following["role"] == "model":
-                            bot_latencies.append(delay)
-                        break
             if (
                 row["role"] == "system"
                 and str(row["content"]).startswith("HANDOFF")
@@ -215,14 +217,16 @@ def main(path: Path, show_phones: bool = False) -> None:
     print(f"orders_with_total_quote={len(quoted_customers)} ({len(quoted_customers) / len(customers):.1%})")
     observed_gmv = sum(value for value in converted.values() if value is not None)
     print(f"strong_conversions={len(converted)} ({len(converted) / len(customers):.1%})")
-    print(f"observed_gmv_cop={observed_gmv} average_order_cop={observed_gmv / len(converted):.0f}")
+    average_order = f"{observed_gmv / len(converted):.0f}" if converted else "unknown"
+    print(f"observed_gmv_cop={observed_gmv} average_order_cop={average_order}")
     print(f"operational_handoffs={len(operational_handoffs)} unique_customers={len({str(row['phone_number']) for row in operational_handoffs})}")
     print(f"resolved_sessions={sum(outcomes.values())} sold={outcomes['sold']} not_sold={outcomes['not_sold']} unknown={outcomes['unknown']}")
     print(f"returned_after_resolved={len(returned_after_resolved)} sold_after_resolved={post_outcomes['sold']} not_sold_after_resolved={post_outcomes['not_sold']} unknown_after_resolved={post_outcomes['unknown']}")
-    print(f"bot_response_seconds_median={statistics.median(bot_latencies):.1f} p90={percentile(bot_latencies, .9):.1f}")
-    print(f"any_response_under_60_seconds={sum(delay <= 60 for delay in any_latencies) / len(any_latencies):.1%}")
-    print(f"operational_handoff_to_advisor_minutes_median={statistics.median(handoff_latencies) / 60:.1f} p90={percentile(handoff_latencies, .9) / 60:.1f}")
-    print(f"operational_handoff_answered_under_1_hour={sum(delay <= 3600 for delay in handoff_latencies) / len(handoff_latencies):.1%}")
+    print("latency_attribution=explicit_reply_ids_only")
+    print(f"bot_response_seconds_median={statistics.median(bot_latencies) if bot_latencies else 'unknown'} p90={percentile(bot_latencies, .9) if bot_latencies else 'unknown'}")
+    print(f"any_response_under_60_seconds={sum(delay <= 60 for delay in any_latencies) / len(any_latencies) if any_latencies else 'unknown'}")
+    print(f"operational_handoff_to_advisor_minutes_median={statistics.median(handoff_latencies) / 60 if handoff_latencies else 'unknown'} p90={percentile(handoff_latencies, .9) / 60 if handoff_latencies else 'unknown'}")
+    print(f"operational_handoff_answered_under_1_hour={sum(delay <= 3600 for delay in handoff_latencies) / len(handoff_latencies) if handoff_latencies else 'unknown'}")
     print("new_customers_by_day=" + ",".join(f"{day}:{count}" for day, count in sorted(first_contact_by_day.items())))
     if show_phones:
         print("checkout_form_without_strong_conversion=" + ",".join(sorted(checkout_forms - set(converted))))

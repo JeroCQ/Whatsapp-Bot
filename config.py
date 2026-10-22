@@ -1,8 +1,9 @@
 import os
 import logging
+import sys
 from chatwoot_security import normalize_chatwoot_root
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logging.basicConfig(level=logging.INFO, stream=sys.stdout, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 GEMINI_DASHBOARD_DEFAULT_MODEL = "gemini-3.6-flash"

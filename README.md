@@ -179,6 +179,43 @@ For scalable queued processing, also set:
 - `GEMINI_MAX_CONCURRENT` - optional, defaults to `8` per process.
 - `PHONE_LOCK_TTL_SECONDS` - optional, defaults to `180`.
 
+### Perfiles con usuario y teléfono oculto
+
+El remitente de WhatsApp puede ser un teléfono o un identificador de usuario
+limitado al negocio (BSUID), por ejemplo `CO.Example123` o `CO.ENT.Example123`.
+El webhook acepta `from`, `from_user_id` y `from_parent_user_id`, y relaciona los
+contactos de cada mensaje mediante `wa_id`, `user_id` o `parent_user_id`. Una
+única entrada con un único contacto también puede usar su identidad explícita.
+En lotes no se asigna el primer contacto a todos los remitentes. El nombre o
+`profile.username` sirven de etiqueta, nunca como destino ni clave de historial.
+
+Cuando Meta entrega un teléfono inequívocamente asociado al mensaje, se conserva
+su historial existente. Si solo entrega un BSUID, ese valor opaco se conserva sin
+quitarle letras, puntos ni cambiar mayúsculas. No se deduce un teléfono desde
+`wamid`, el username o un número escrito manualmente por un operador.
+
+Texto, adjuntos y catálogos usan `to` para teléfonos y `recipient` para BSUID.
+Chatwoot crea el contacto sin teléfono ficticio y con un `identifier` estable
+aislado por `BUSINESS_ID` y `WA_PHONE_NUMBER_ID`. El campo histórico `phone_number`
+de los datos y APIs ahora también admite BSUID; los consumidores deben devolver
+el identificador exacto, sin añadir `+` ni normalizarlo. Los jobs conservan la
+identidad completa en sus argumentos; los IDs RQ largos incluyen un digest para
+conservar su unicidad.
+
+Para proyectos nuevos, `supabase/bootstrap.sql` crea las tres columnas de identidad
+como `text`. Para proyectos existentes, respalda y ejecuta
+`supabase/upgrade_existing_brand.sql` **antes de desplegar** web y workers; la
+comprobación `has_unbounded_whatsapp_identities` debe ser `true`. El upgrade
+conserva valores, claves y relaciones existentes. No mezcla historiales ni crea
+excepciones por persona o negocio. Verifica después tanto un teléfono como un
+perfil con usuario en el despliegue aislado correspondiente.
+
+El contrato de recepción y destino se contrastó con la implementación y pruebas
+de [Chatwoot](https://github.com/chatwoot/chatwoot/blob/642205c5c84f76cf6d24ecdd9d627eecdc766092/app/services/whatsapp/providers/base_service.rb#L57)
+y el SDK [PyWa 4.5.0](https://pypi.org/project/pywa/4.5.0/). Las pruebas locales
+simulan Meta/Chatwoot y ejecutan los scripts canónicos en PostgreSQL; la entrega
+real al dispositivo debe comprobarse después del despliegue.
+
 ### AI-controlled presaved files
 
 Set `PRESAVED_FILES_JSON` to a JSON array. Each entry gives Gemini a safe ID and a
@@ -215,7 +252,8 @@ solo carga `PRESAVED_FILES_JSON` y el despliegue se selecciona con `BUSINESS_ID`
 
 Gemini prepara `follow_up_message` con la instrucción del negocio seleccionado por
 `BUSINESS_ID` y el contexto de la conversación. Ese texto personalizado se conserva
-también después de enviar un catálogo. Cuando queda vacío, el backend usa mensajes
+también después de enviar un catálogo. Un campo vacío (o null explícito) cancela
+el seguimiento. Solo un campo ausente por compatibilidad permite mensajes
 generales, sin categorías de productos ni nombres de otra marca. Por ejemplo:
 “¿Pudiste revisar las opciones que te compartí? Cuéntame cuál te interesa y te ayudo
 a continuar 😊”. No hacen falta variables nuevas ni condiciones por negocio en el código.
@@ -228,8 +266,18 @@ con el worker actualizado. Los demás textos personalizados se conservan.
 
 El follow up usa trabajos programados de RQ: requiere `REDIS_URL` y un worker con
 scheduler (el worker incluido ya usa `with_scheduler=True`). El token de cancelación
-también vive en Redis, así que **no requiere modificar el esquema de Supabase**. Sin
-Redis el bot responde normalmente, pero no programa seguimientos no durables.
+también vive en Redis. La versión actual requiere el bootstrap o upgrade canónico
+de Supabase para preferencias persistentes, trazabilidad y recuperación de handoffs.
+Sin Redis el bot responde normalmente, pero no programa seguimientos no durables.
+
+La programación usa un instante de referencia, consolida colisiones en la apertura
+y mantiene `FOLLOW_UP_MIN_SPACING_SECONDS` (900 por defecto) durante la ejecución,
+incluso después de caídas. Los calendarios de contacto y operación se configuran en
+`src/clients/{BUSINESS_ID}/business_policy.json`, con override opcional
+`BUSINESS_POLICY_JSON`. Una fecha acordada no se adelanta ni extiende las 24 horas
+contadas desde el timestamp original de Meta. `FOLLOW_UPS_ENABLED=false` desactiva
+los seguimientos sin vaciar Redis. Ver despliegue, compatibilidad y reversión en
+[`docs/MEMOS_AUDIT_BACKEND.md`](docs/MEMOS_AUDIT_BACKEND.md).
 
 Una respuesta de simple confirmación (`ok`, `listo`, `bueno`) no cierra el pendiente
 si anteriormente se solicitaron datos. Gemini debe mencionar en el follow up los datos

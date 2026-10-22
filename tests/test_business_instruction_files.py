@@ -1,7 +1,22 @@
 from pathlib import Path
+import re
+import unicodedata
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def normalized_instruction(business_id):
+    instruction = (ROOT / f"src/clients/{business_id}/system_instruction.txt").read_text(encoding="utf-8")
+    instruction = unicodedata.normalize("NFKD", instruction).encode("ascii", "ignore").decode().lower()
+    return instruction.replace("**", "").replace("`", "")
+
+
+def paragraphs_containing(instruction, text):
+    rules = re.split(r"\n\s*\n|\n(?=\s*(?:\* |- |\d+\. ))", instruction)
+    return [rule for rule in rules if text in rule]
 
 
 def test_memos_instruction_is_available_to_the_selected_deployment():
@@ -20,7 +35,7 @@ def test_velvet_instruction_uses_confirmed_identity_catalog_and_logistics():
     assert "Caja x 12 unidades: $50.000 COP" in instruction
     assert "Desde 96 unidades en adelante: $2.900 COP" in instruction
     assert "Carrera 10 # 47-31, Barrio El Troncal, Cali" in instruction
-    assert "Lunes a sábado de 9:00 a.m. a 5:00 p.m." in instruction
+    assert "Lunes a sábado de 9:00 a.m. a 6:00 p.m." in instruction
     assert "dentro de la ciudad que no pertenezcan a las zonas más lejanas" in instruction
     assert "$9.000 COP" in instruction
     assert "follow_up_delay_minutes = 120" in instruction
@@ -48,6 +63,8 @@ def test_velvet_instruction_does_not_import_unconfirmed_tanaka_commercial_facts(
     assert "51400015704" not in instruction
     assert "NIT 901888354" not in instruction
     assert "nevera térmica" not in instruction
+    assert "3025991292" not in instruction
+    assert "tanakasaludablecali@gmail.com" not in instruction
 
 
 def test_velvet_instruction_preserves_sales_flow_and_brand_identified_handoff():
@@ -101,7 +118,7 @@ def test_tanaka_instruction_answers_before_using_catalog_and_limits_follow_up():
     assert "súper pendiente" in instruction
     assert "hasta tres intentos" in instruction
     assert "entre las 8:00 a.m. y las 6:00 p.m." in instruction
-    assert "usa de 1 a 3 líneas breves" in instruction
+    assert "usa 1 o 2 frases breves" in instruction
     assert "no una renuncia a vender" in instruction
     assert "recomendación pertinente" in instruction
     assert "no transcribas listas extensas" in instruction
@@ -128,7 +145,7 @@ def test_tanaka_instruction_defines_current_customer_and_shipping_rules():
     assert "$13.850 por un litro volumétrico a Medellín y Bogotá" in instruction
     assert "$15.350 por litro volumétrico a Barranquilla" in instruction
     assert "@tanakasaludable" in instruction
-    assert "etiquetarnos cuando recibas o pruebes tus productos" in instruction
+    assert "solo invita a etiquetar a Tanaka después de que el cliente haya comprado o recibido productos" in instruction
 
 
 def test_tanaka_instruction_preserves_purchase_momentum_and_recognizes_returning_customers():
@@ -140,7 +157,7 @@ def test_tanaka_instruction_preserves_purchase_momentum_and_recognizes_returning
     assert "NO pidas todavía dirección exacta" in instruction
     assert "facturación electrónica son completamente opcionales" in instruction
     assert "https://www.instagram.com/tanakasaludable/?hl=es" in instruction
-    assert "al pie de ese mismo mensaje" in instruction
+    assert "añade en una línea separada el enlace completo" in instruction
 
 
 def test_tanaka_instruction_includes_official_business_contact_and_dispatch_details():
@@ -152,3 +169,91 @@ def test_tanaka_instruction_includes_official_business_contact_and_dispatch_deta
     assert "salen únicamente los lunes o martes" in instruction
     assert "Tardan aproximadamente dos días en llegar" in instruction
     assert "lunes a miércoles" not in instruction
+
+
+@pytest.mark.parametrize("business_id", ["tanaka", "velvet"])
+def test_business_payment_defaults_to_the_exact_shared_bold_key(business_id):
+    instruction = normalized_instruction(business_id)
+    bold_rules = paragraphs_containing(instruction, "@bold3187622894")
+
+    assert bold_rules
+    assert set(re.findall(r"@bold[a-z0-9_]*", instruction)) == {"@bold3187622894"}
+    assert any(re.search(r"primera opcion|opcion principal|prioridad|primero", paragraph) for paragraph in bold_rules)
+    assert not re.search(r"\b(?:llave|clave)\s+(?:bold\s+)?3187622894\b", instruction)
+
+
+@pytest.mark.parametrize("business_id,own_account,other_account", [
+    ("tanaka", "51400015704", "74194555052"),
+    ("velvet", "74194555052", "51400015704"),
+])
+def test_business_bank_account_remains_isolated_and_only_an_alternative_on_request(
+    business_id, own_account, other_account,
+):
+    instruction = normalized_instruction(business_id)
+    bank_rules = paragraphs_containing(instruction, own_account)
+
+    assert bank_rules
+    assert other_account not in instruction
+    assert all("bancolombia" in paragraph for paragraph in bank_rules)
+    assert any(re.search(r"(?:solo|unicamente).*(?:solicit|pid|prefier|pida)|(?:solicit|pid|prefier|pida).*alternativ", paragraph) for paragraph in bank_rules)
+
+
+@pytest.mark.parametrize("business_id", ["tanaka", "velvet"])
+def test_business_card_terminal_is_available_only_in_person(business_id):
+    instruction = normalized_instruction(business_id)
+    terminal_rules = paragraphs_containing(instruction, "datafono")
+
+    assert terminal_rules
+    assert any(re.search(r"(?:solo|unicamente|exclusivamente).*presencial|presencial.*(?:solo|unicamente|exclusivamente)", paragraph) for paragraph in terminal_rules)
+    assert "por el momento no se cuenta con pago con tarjeta de credito, datafono" not in instruction
+    assert not any("datafono a domicilio" in paragraph and "no" not in paragraph for paragraph in terminal_rules)
+
+
+@pytest.mark.parametrize("business_id", ["tanaka", "velvet"])
+def test_business_payment_link_discloses_total_surcharge_and_requires_a_real_link(business_id):
+    instruction = normalized_instruction(business_id)
+    link_rules = paragraphs_containing(instruction, "link")
+    surcharge_rules = [paragraph for paragraph in link_rules if re.search(r"2[,.]5\s*%", paragraph)]
+
+    assert surcharge_rules
+    assert any("total" in paragraph and "domicilio" in paragraph for paragraph in surcharge_rules)
+    assert any(re.search(r"desglos|subtotal", paragraph) for paragraph in link_rules)
+    assert any(re.search(r"no invent|nunca invent|no gener|no constru", paragraph) for paragraph in link_rules)
+    assert any("handoff" in paragraph and re.search(r"no (?:hay|existe|esta|consta|tienes|cuentas)|falta|sin (?:un )?(?:link|enlace)", paragraph) for paragraph in link_rules)
+
+
+@pytest.mark.parametrize("business_id", ["tanaka", "velvet"])
+def test_business_pickup_uses_confirmed_location_and_six_pm_closing(business_id):
+    instruction = normalized_instruction(business_id)
+    pickup_rules = paragraphs_containing(instruction, "carrera 10")
+
+    assert pickup_rules
+    assert any(re.search(r"carrera 10\s*#\s*47-31", paragraph) and "troncal" in paragraph for paragraph in pickup_rules)
+    assert any("base aerea" in paragraph for paragraph in pickup_rules)
+    assert re.search(r"lunes a sabado,? de 9:00 a\.m\. a 6:00 p\.m\.", instruction)
+    assert not any(re.search(r"lunes a viernes\s*\(9:00 a\.m\. a 5:00 p\.m\.\)", paragraph) for paragraph in pickup_rules)
+    assert not any(re.search(r"sabados\s*\(9:00 a\.m\. a 12:00 p\.m\.\)", paragraph) for paragraph in pickup_rules)
+
+
+@pytest.mark.parametrize("business_id", ["tanaka", "velvet"])
+def test_business_delivery_cost_objection_offers_pickup_instead_of_unauthorized_discount(business_id):
+    instruction = normalized_instruction(business_id)
+    pickup_rules = [paragraph for paragraph in instruction.split("\n\n") if re.search(r"recog|recoger", paragraph)]
+
+    assert any("domicilio" in paragraph and re.search(r"caro|costoso|costo|coste|valor", paragraph) and re.search(r"queja|objecion|caro|costoso", paragraph) for paragraph in pickup_rules)
+
+
+@pytest.mark.parametrize("business_id", ["tanaka", "velvet"])
+def test_new_payment_options_keep_human_verification_and_no_automatic_confirmation(business_id):
+    instruction = normalized_instruction(business_id)
+    payment_rules = paragraphs_containing(instruction, "comprobante")
+
+    assert any("handoff" in paragraph and re.search(r"valid|verific", paragraph) for paragraph in payment_rules)
+    assert any(re.search(r"(?:nunca|no).*(?:confirm|aprobad|pagad)", paragraph) for paragraph in payment_rules)
+
+
+def test_velvet_payment_microclosures_do_not_restore_the_old_default_transfer_menu():
+    instruction = normalized_instruction("velvet")
+    assert "preguntando solo si prefiere nequi, bancolombia o daviplata" not in instruction
+    assert "ofrece una sola vez nequi, bancolombia o daviplata como opciones" not in instruction
+    assert "domicilio o recogida, nequi, bancolombia o daviplata" not in instruction
