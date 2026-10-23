@@ -827,6 +827,7 @@ def test_cross_origin_storage_redirect_does_not_leak_chatwoot_credentials(monkey
             return Response(302, headers={"Location": "https://storage.example/file"})
         return Response(200, headers={"Content-Type": "image/png"}, chunks=[b"abc"])
     monkeypatch.setattr(main, "get", fake_get)
+    monkeypatch.setattr(main, "get_media_asset", fake_get)
     monkeypatch.setattr(main, "post", lambda *a, **k: Response(200, {"id": "media-1"}))
     assert main.upload_chatwoot_attachment_to_meta("/file") == "media-1"
     assert calls == [
