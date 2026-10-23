@@ -3,6 +3,7 @@
 import hashlib
 import ipaddress
 import os
+import re
 import subprocess
 from urllib.parse import urljoin, urlsplit
 
@@ -22,6 +23,45 @@ class MediaValidationError(ValueError):
     def __init__(self, reason):
         self.reason = reason
         super().__init__(reason)
+
+
+def storage_error_code(response):
+    """Extract a fixed diagnostic code, never customer content or a signed URL.
+
+    Chatwoot can wrap an S3 exception in JSON with HTTP 422, while object stores
+    normally return XML with HTTP 403/404. Limit reads of streamed error bodies.
+    """
+    codes = (
+        "SignatureDoesNotMatch", "InvalidAccessKeyId", "ExpiredToken", "InvalidToken",
+        "RequestTimeTooSkewed", "RequestExpired", "AuthorizationQueryParametersError",
+        "AuthorizationHeaderMalformed", "AccessDenied", "NoSuchBucket", "NoSuchKey",
+        "InvalidBucketName", "Forbidden",
+    )
+    try:
+        body = bytearray()
+        for chunk in response.iter_content(2048):
+            if not isinstance(chunk, bytes):
+                return ""
+            body.extend(chunk[:8192 - len(body)])
+            if len(body) >= 8192:
+                break
+        text = body.decode("utf-8", errors="replace")
+    except (requests.exceptions.RequestException, AttributeError, TypeError, ValueError):
+        return ""
+    code = next((code for code in codes if re.search(r"\b" + code + r"\b", text)), "")
+    if code:
+        return code
+    # Chatwoot renders e.message, which may omit the SDK class/error code.
+    known_messages = {
+        "access denied": "AccessDenied",
+        "the aws access key id you provided does not exist in our records": "InvalidAccessKeyId",
+        "the request signature we calculated does not match the signature you provided": "SignatureDoesNotMatch",
+        "the specified bucket does not exist": "NoSuchBucket",
+        "the specified key does not exist": "NoSuchKey",
+        "the provided token has expired": "ExpiredToken",
+    }
+    lowered = text.lower()
+    return next((code for message, code in known_messages.items() if message in lowered), "")
 
 
 def get_media_asset(url, **kwargs):
@@ -108,7 +148,10 @@ def uploaded_attachment(response, *, expected_mime, expected_size, account_id, d
         raise MediaValidationError("upload_account_id_mismatch")
     if attachment.get("file_type") != media_kind(expected_mime):
         raise MediaValidationError("upload_media_kind_mismatch")
-    if content_type(attachment.get("content_type")) != content_type(expected_mime):
+    # Chatwoot releases such as v4.4 omit content_type from attachment metadata.
+    # Validate it when supplied; the object's HTTP MIME and exact bytes remain
+    # mandatory below, including on those older installations.
+    if "content_type" in attachment and content_type(attachment["content_type"]) != content_type(expected_mime):
         raise MediaValidationError("upload_content_type_mismatch")
     if type(attachment.get("file_size")) is not int or attachment["file_size"] != expected_size:
         raise MediaValidationError("upload_size_mismatch")
@@ -161,6 +204,8 @@ def verify_attachment_asset(url, original, mime, max_bytes, *, fetch=get_media_a
                 target = _safe_asset_url(urljoin(target, location))
                 continue
             if response.status_code != 200:
+                if diagnostics is not None:
+                    diagnostics["storage_error_code"] = storage_error_code(response)
                 raise MediaValidationError("asset_http_error")
             declared = response.headers.get("Content-Length") or response.headers.get("content-length")
             if declared is not None:

@@ -117,6 +117,101 @@ def test_valid_jpeg_uses_the_actual_decoder_and_readback_contract(media_api):
     assert f.asset.closed
 
 
+@pytest.mark.parametrize("business,account", [("tanaka", 10), ("memos", 20), ("velvet", 30), ("future-brand", 40)])
+def test_chatwoot_44_response_without_content_type_still_verifies_real_object(media_api, business, account):
+    f = media_api
+    f.api.config.BUSINESS_ID = business
+    f.api.config.CHATWOOT_ACCOUNT_ID = str(account)
+    f.attachment["account_id"] = account
+    # Actual v4.4 Attachment#file_metadata contract, rather than develop's MIME.
+    f.attachment.pop("content_type")
+    f.attachment.update(extension="png", thumb_url="", width=None, height=None)
+    assert send_image(f) is f.uploaded
+    assert f.asset.read and f.asset.closed
+
+
+def test_legacy_metadata_keeps_account_isolation(media_api):
+    f = media_api
+    f.attachment.pop("content_type")
+    f.attachment["account_id"] = 99
+    assert send_image(f) is None
+    assert not f.calls["get"]
+
+
+@pytest.mark.parametrize("failure", ["mime", "bytes"])
+def test_legacy_metadata_never_bypasses_actual_content_verification(media_api, failure):
+    f = media_api
+    f.attachment.pop("content_type")
+    if failure == "mime":
+        f.asset.headers["Content-Type"] = "text/html"
+    else:
+        f.asset.data = b"<html>not the uploaded object</html>"
+    assert send_image(f) is None
+    assert len(f.calls["post"]) == 1
+    assert f.asset.closed
+
+
+def test_storage_exception_wrapped_in_422_is_diagnosed_without_resubmission(media_api, capsys):
+    f = media_api
+    f.uploaded.status_code = 422
+    f.uploaded.data = b'{"error":"Aws::S3::Errors::AccessDenied PRIVATE_CUSTOMER https://storage.example/?signature=SECRET"}'
+    assert send_image(f) is None
+    assert len(f.calls["post"]) == 1 and not f.calls["get"]
+    output = capsys.readouterr().out
+    assert '"storage_error_code": "AccessDenied"' in output
+    assert "PRIVATE_CUSTOMER" not in output and "SECRET" not in output
+
+
+def test_chatwoot_exception_message_without_sdk_class_is_classified(media_api, capsys):
+    f = media_api
+    f.uploaded.status_code = 422
+    f.uploaded.headers["X-Request-Id"] = "e9a6cdb0-6ab3-435c-a035-000000000001"
+    f.uploaded.data = b'{"error":"Access Denied"}'
+    assert send_image(f) is None
+    output = capsys.readouterr().out
+    assert '"storage_error_code": "AccessDenied"' in output
+    assert '"provider_request_id": "e9a6cdb0-6ab3-435c-a035-000000000001"' in output
+    assert f.uploaded.closed and len(f.calls["post"]) == 1
+
+
+def test_storage_xml_403_exposes_only_known_code_and_closes_object(media_api, capsys):
+    f = media_api
+    f.asset.status_code = 403
+    f.asset.data = b'<Error><Code>SignatureDoesNotMatch</Code><Message>PRIVATE_SIGNED_URL</Message></Error>'
+    assert send_image(f) is None
+    output = capsys.readouterr().out
+    assert '"storage_error_code": "SignatureDoesNotMatch"' in output
+    assert "PRIVATE_SIGNED_URL" not in output
+    assert f.asset.closed and len(f.calls["post"]) == 1
+
+
+def test_storage_error_body_timeout_preserves_http_failure_without_resubmitting(media_api, capsys):
+    f = media_api
+    f.asset.status_code = 403
+
+    def broken_body(_size):
+        raise requests.ReadTimeout("PRIVATE_SIGNED_URL")
+        yield  # Make the failure happen during streaming rather than before it.
+
+    f.asset.iter_content = broken_body
+    assert send_image(f) is None
+    output = capsys.readouterr().out
+    assert '"asset_status": 403' in output and '"storage_error_code": ""' in output
+    assert "PRIVATE_SIGNED_URL" not in output
+    assert f.asset.closed and len(f.calls["post"]) == 1
+
+
+def test_storage_error_diagnostic_bounds_stream_and_never_echoes_unknown_error():
+    from chatwoot_media import storage_error_code
+
+    class LargeError:
+        def iter_content(self, _size):
+            yield b"private-unrecognized-response" * 400
+            pytest.fail("error body must not be read past the diagnostic limit")
+
+    assert storage_error_code(LargeError()) == ""
+
+
 @pytest.mark.parametrize("invalid_image", [b"<html>not an image</html>", b"\x89PNG\r\n\x1a\ntruncated", b""])
 def test_invalid_image_is_not_uploaded_even_if_its_mime_claims_png(media_api, invalid_image):
     f = media_api

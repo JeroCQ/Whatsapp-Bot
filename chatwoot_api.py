@@ -1,6 +1,7 @@
 import hashlib
 import json
 import mimetypes
+import re
 import subprocess
 
 import imageio_ffmpeg
@@ -11,7 +12,7 @@ from provider_errors import ProviderError, provider_error
 from webhook_utils import valid_whatsapp_user_id
 from chatwoot_media import (
     MediaValidationError, content_type, get_media_asset, media_kind,
-    uploaded_attachment, validate_source_media, verify_attachment_asset,
+    storage_error_code, uploaded_attachment, validate_source_media, verify_attachment_asset,
 )
 
 
@@ -223,12 +224,17 @@ def send_media_to_chatwoot(conversation_id: int, content: str, media_bytes: byte
         "message_type": "outgoing" if is_private else "incoming",
         "private": "true" if is_private else "false"
     }
+    response = None
     try:
         validate_source_media(media_bytes, mime_type, maximum)
         details["verification_phase"] = "upload"
         response = post(url, headers=get_multipart_headers(), files=files, data=data, timeout=MEDIA_TIMEOUT, allow_redirects=False)
         details["provider_status"] = response.status_code
+        request_id = response.headers.get("X-Request-Id") or response.headers.get("x-request-id") or ""
+        if re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", request_id):
+            details["provider_request_id"] = request_id
         if response.status_code not in {200, 201}:
+            details["storage_error_code"] = storage_error_code(response)
             raise MediaValidationError("upload_http_error")
         message_id, attachment = uploaded_attachment(response, expected_mime=mime_type,
             expected_size=len(media_bytes), account_id=config.CHATWOOT_ACCOUNT_ID, diagnostics=details)
@@ -242,6 +248,8 @@ def send_media_to_chatwoot(conversation_id: int, content: str, media_bytes: byte
         reason = error.reason
     except requests.exceptions.RequestException:
         reason = "provider_transport_error"
+    if response is not None:
+        response.close()
     print(f"[CHATWOOT MEDIA] {json.dumps({**details, 'result': 'unverified', 'reason': reason}, sort_keys=True)}", flush=True)
     return None
 

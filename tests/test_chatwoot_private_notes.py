@@ -31,7 +31,7 @@ def note_api(monkeypatch):
         spec.loader.exec_module(module)
 
     calls = []
-    response = types.SimpleNamespace(status_code=201, json=lambda: {
+    response = types.SimpleNamespace(status_code=201, headers={}, json=lambda: {
         "id": 22, "attachments": [{"id": 31, "message_id": 22, "account_id": 10,
             "file_type": "image", "content_type": "image/png", "file_size": len(PNG_BYTES),
             "data_url": "https://chatwoot.example/image.png"}],
