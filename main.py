@@ -5,7 +5,7 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
-from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, unquote, urlencode, urljoin, urlsplit, urlunsplit
 
 import requests
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
@@ -71,7 +71,7 @@ from webhook_utils import (
     whatsapp_recipient_fields,
 )
 from chatwoot_security import chatwoot_scope, verify_chatwoot_signature, chatwoot_event_diagnostics
-from chatwoot_media import MediaValidationError, _safe_asset_url, get_media_asset, storage_error_code
+from chatwoot_media import MediaValidationError, _safe_asset_url, get_media_asset, storage_error_code, prepare_image_for_whatsapp
 from provider_errors import ProviderError, provider_error, provider_transport_error, sanitize_text
 from outage_recovery import find_recoveries
 from catalog_delivery_recovery import find_catalog_recoveries
@@ -179,13 +179,16 @@ async def _run_outage_recovery(since: str):
 
 
 def _attachment_url(attachment: dict) -> str:
-    """Return the best downloadable URL from a Chatwoot attachment payload."""
-    return attachment.get("data_url") or attachment.get("download_url") or attachment.get("thumb_url")
+    """Return the original file, never its thumbnail."""
+    return attachment.get("data_url") or attachment.get("download_url")
 
 
 def _attachment_filename(attachment: dict, default: str = "archivo") -> str:
     """Return a stable filename for forwarding a Chatwoot attachment to WhatsApp."""
-    return attachment.get("file_name") or attachment.get("filename") or attachment.get("name") or default
+    explicit = attachment.get("file_name") or attachment.get("filename") or attachment.get("name")
+    if explicit:
+        return os.path.basename(str(explicit)) or default
+    return os.path.basename(unquote(urlsplit(_attachment_url(attachment) or "").path)) or default
 
 
 def normalize_media_type(file_type: str = None, mime_type: str = None, url: str = None) -> str:
@@ -637,10 +640,11 @@ def deliver_presaved_file(to_number: str, file_id: str) -> tuple[bool, str | Non
         return False, f"{file_id}: {type(exc).__name__}: {technical}"
 
 
-def upload_chatwoot_attachment_to_meta(attachment_url: str, fallback_mime_type: str = "application/octet-stream", filename: str = "archivo") -> str:
+def upload_chatwoot_attachment_to_meta(attachment_url: str, fallback_mime_type: str = "application/octet-stream", filename: str = "archivo", *, attachment_created_at=None) -> str:
     """Download a Chatwoot attachment and upload it to Meta's temporary media store."""
     diagnostic = {"phase": "chatwoot_download", "host": "", "http_status": None,
                   "storage_error_code": ""}
+    update_trace(chatwoot_attachment_error="")
     try:
         attachment_url = urljoin(config.CHATWOOT_BASE_URL + "/", attachment_url)
         configured = urlsplit(config.CHATWOOT_BASE_URL)
@@ -648,51 +652,101 @@ def upload_chatwoot_attachment_to_meta(attachment_url: str, fallback_mime_type: 
         if target.username or target.password or target.fragment or target.scheme != "https" or target.netloc != configured.netloc:
             raise MediaValidationError("attachment_origin_rejected")
         chatwoot_headers = {"api_access_token": config.CHATWOOT_API_TOKEN}
-        current_url = attachment_url
-        for redirects in range(4):
-            current_target = urlsplit(current_url)
-            is_chatwoot_origin = current_target.netloc == configured.netloc
-            diagnostic.update(phase="chatwoot_download" if is_chatwoot_origin else "storage_download",
-                              host=current_target.hostname or "", http_status=None,
-                              redirects_followed=redirects)
-            fetch = get if is_chatwoot_origin else get_media_asset
-            res = fetch(current_url, headers=chatwoot_headers if is_chatwoot_origin else {},
-                        timeout=MEDIA_TIMEOUT, allow_redirects=False, stream=True)
+        created_at = parse_timestamp(attachment_created_at)
+        age = (datetime.now(timezone.utc) - created_at).total_seconds() if created_at else None
+        # Chatwoot can publish message_created before ActiveStorage has finished
+        # uploading its object. Only a recent, dated message can use this brief
+        # availability wait; old/missing objects keep their existing fail-fast path.
+        pending_deadline = time.monotonic() + 20 if age is not None and -30 <= age <= 120 else None
+        pending_delays = (1, 2, 4, 8)
+        pending_retries = 0
+        while True:
+            current_url = attachment_url
             try:
-                diagnostic["http_status"] = res.status_code
-                if res.status_code in {301, 302, 303, 307, 308}:
-                    if redirects == 3:
-                        raise MediaValidationError("attachment_redirect_limit")
-                    location = res.headers.get("Location")
-                    if not location:
-                        raise MediaValidationError("attachment_redirect_missing")
-                    current_url = _safe_asset_url(urljoin(current_url, location))
-                    continue
-                if res.status_code != 200:
-                    if res.status_code >= 400:
-                        diagnostic["storage_error_code"] = storage_error_code(res)
-                    raise MediaValidationError("attachment_download_http_error")
-                try:
-                    declared_size = int(res.headers.get("Content-Length", "0") or 0)
-                except (TypeError, ValueError) as error:
-                    raise MediaValidationError("attachment_invalid_length") from error
-                if declared_size < 0 or declared_size > config.CHATWOOT_MAX_ATTACHMENT_BYTES:
-                    raise MediaValidationError("attachment_too_large")
-                chunks = []
-                size = 0
-                for chunk in res.iter_content(64 * 1024):
-                    size += len(chunk)
-                    diagnostic["downloaded_bytes"] = size
-                    if size > config.CHATWOOT_MAX_ATTACHMENT_BYTES:
-                        raise MediaValidationError("attachment_too_large")
-                    chunks.append(chunk)
-                media_bytes = b"".join(chunks)
-                if not media_bytes:
-                    raise MediaValidationError("attachment_empty")
-                mime_type = (res.headers.get("Content-Type") or fallback_mime_type or "application/octet-stream").split(";")[0]
-                break
-            finally:
-                res.close()
+                for redirects in range(4):
+                    current_target = urlsplit(current_url)
+                    is_chatwoot_origin = current_target.netloc == configured.netloc
+                    diagnostic.update(phase="chatwoot_download" if is_chatwoot_origin else "storage_download",
+                                      host=current_target.hostname or "", http_status=None,
+                                      storage_error_code="", redirects_followed=redirects)
+                    request_timeout = MEDIA_TIMEOUT
+                    if pending_retries:
+                        remaining = pending_deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise MediaValidationError("attachment_pending_upload_timeout")
+                        request_timeout = tuple(min(value, remaining) for value in MEDIA_TIMEOUT)
+                    fetch = get if is_chatwoot_origin else get_media_asset
+                    res = fetch(current_url, headers=chatwoot_headers if is_chatwoot_origin else {},
+                                timeout=request_timeout, allow_redirects=False, stream=True)
+                    try:
+                        diagnostic["http_status"] = res.status_code
+                        if res.status_code in {301, 302, 303, 307, 308}:
+                            if redirects == 3:
+                                raise MediaValidationError("attachment_redirect_limit")
+                            location = res.headers.get("Location")
+                            if not location:
+                                raise MediaValidationError("attachment_redirect_missing")
+                            current_url = _safe_asset_url(urljoin(current_url, location))
+                            continue
+                        if res.status_code != 200:
+                            if res.status_code >= 400:
+                                diagnostic["storage_error_code"] = storage_error_code(res)
+                            raise MediaValidationError("attachment_download_http_error")
+                        try:
+                            declared_size = int(res.headers.get("Content-Length", "0") or 0)
+                        except (TypeError, ValueError) as error:
+                            raise MediaValidationError("attachment_invalid_length") from error
+                        if declared_size < 0 or declared_size > config.CHATWOOT_MAX_ATTACHMENT_BYTES:
+                            raise MediaValidationError("attachment_too_large")
+                        chunks = []
+                        size = 0
+                        for chunk in res.iter_content(64 * 1024):
+                            if pending_retries and time.monotonic() >= pending_deadline:
+                                raise MediaValidationError("attachment_pending_upload_timeout")
+                            size += len(chunk)
+                            diagnostic["downloaded_bytes"] = size
+                            if size > config.CHATWOOT_MAX_ATTACHMENT_BYTES:
+                                raise MediaValidationError("attachment_too_large")
+                            chunks.append(chunk)
+                        media_bytes = b"".join(chunks)
+                        if not media_bytes:
+                            raise MediaValidationError("attachment_empty")
+                        mime_type = (res.headers.get("Content-Type") or fallback_mime_type or "application/octet-stream").split(";")[0].strip().lower()
+                        if mime_type == "application/octet-stream" and fallback_mime_type:
+                            mime_type = fallback_mime_type.split(";")[0].strip().lower()
+                        break
+                    finally:
+                        res.close()
+            except MediaValidationError as error:
+                pending_object = (
+                    error.reason == "attachment_download_http_error"
+                    and diagnostic["phase"] == "storage_download"
+                    and diagnostic["http_status"] == 404
+                    and diagnostic["storage_error_code"] == "NoSuchKey"
+                )
+                if not pending_object or pending_deadline is None or pending_retries >= len(pending_delays):
+                    raise
+                delay = pending_delays[pending_retries]
+                if time.monotonic() + delay >= pending_deadline:
+                    raise MediaValidationError("attachment_pending_upload_timeout") from error
+                _check_customer_window()
+                pending_retries += 1
+                diagnostic["pending_upload_retries"] = pending_retries
+                print(f"[CHATWOOT ATTACHMENT WAIT] {json.dumps({**diagnostic, 'result': 'waiting', 'reason': 'recent_storage_object_not_ready', 'delay_seconds': delay}, sort_keys=True)}", flush=True)
+                time.sleep(delay)
+                _check_customer_window()
+                # Reopen the validated Chatwoot URL rather than reusing an S3
+                # signature that could expire while its upload is still pending.
+                continue
+            break
+
+        _check_customer_window()
+
+        if normalize_media_type(mime_type=mime_type, url=filename) == "image":
+            diagnostic["phase"] = "image_prepare"
+            media_bytes, mime_type, extension = prepare_image_for_whatsapp(media_bytes, mime_type)
+            filename = f"{os.path.splitext(filename)[0] or 'imagen'}{extension}"
+            diagnostic["prepared_bytes"] = len(media_bytes)
 
         # Meta rejects some containers produced by Chatwoot, including WAV.
         if normalize_media_type(mime_type=mime_type, url=filename) == "audio":
@@ -700,6 +754,7 @@ def upload_chatwoot_attachment_to_meta(attachment_url: str, fallback_mime_type: 
             filename = f"{os.path.splitext(filename)[0] or 'audio'}{extension}"
 
         diagnostic.update(phase="meta_upload", host="graph.facebook.com", http_status=None)
+        _check_customer_window()
         url = f"https://graph.facebook.com/v20.0/{config.WA_PHONE_NUMBER_ID}/media"
         headers = {"Authorization": f"Bearer {config.WA_TOKEN}"}
         files = {"file": (filename, media_bytes, mime_type)}
@@ -708,6 +763,10 @@ def upload_chatwoot_attachment_to_meta(attachment_url: str, fallback_mime_type: 
         try:
             diagnostic["http_status"] = response.status_code
             if response.status_code not in {200, 201}:
+                error = provider_error("meta", "upload_media", response, (config.WA_TOKEN,))
+                for field, value in (("provider_error_code", error.code), ("provider_error_subcode", error.subcode)):
+                    if value.isascii() and value.isdecimal() and len(value) <= 12:
+                        diagnostic[field] = value
                 raise MediaValidationError("attachment_meta_upload_http_error")
             media_id = response.json().get("id")
             if not media_id:
@@ -723,6 +782,7 @@ def upload_chatwoot_attachment_to_meta(attachment_url: str, fallback_mime_type: 
     except Exception as error:
         diagnostic["error_type"] = type(error).__name__
         reason = "attachment_processing_error"
+    update_trace(chatwoot_attachment_error=reason)
     print(f"[CHATWOOT ATTACHMENT] {json.dumps({**diagnostic, 'result': 'failed', 'reason': reason}, sort_keys=True)}", flush=True)
     return None
 
@@ -1425,6 +1485,27 @@ def _chatwoot_sender_label(data: dict) -> str:
     return f"{sender_type}:{sender_id if sender_id is not None else 'unknown'}"
 
 
+def _notify_advisor_attachment_failure(conversation_id, message_id, error):
+    """Expose an outgoing file failure even when its UI status is overlooked."""
+    reason = error.safe_message if isinstance(error, ProviderError) else ""
+    explanations = {
+        "attachment_original_url_missing": "Falta el enlace al archivo original.",
+        "attachment_download_http_error": "No se pudo descargar el archivo original desde el almacenamiento.",
+        "attachment_pending_upload_timeout": "El archivo no terminó de estar disponible en el almacenamiento dentro del tiempo de espera.",
+        "attachment_meta_upload_http_error": "WhatsApp rechazó la subida del archivo; revisa su tamaño y formato.",
+        "attachment_image_format_unsupported": "La imagen debe estar en formato JPEG o PNG.",
+        "attachment_too_large": "El archivo supera el tamaño admitido por esta integración.",
+    }
+    detail = explanations.get(reason, "El envío necesita revisión; no hay confirmación de entrega.")
+    chatwoot_api.send_message_to_chatwoot(
+        conversation_id,
+        f"⚠️ No se confirmó el envío a WhatsApp del adjunto del mensaje #{message_id}. {detail}\n"
+        "El botón Reintentar de Chatwoot no confirma un nuevo envío por esta integración. "
+        "Revisa el fallo antes de volver a enviarlo como un mensaje nuevo para evitar duplicados.",
+        is_private=True,
+    )
+
+
 def process_chatwoot_event(data: dict, event_id: str = None):
     with message_trace(source="human", source_event_id=event_id or "", job_id=_current_job_id(), inbound_message_ids=[]):
         return _process_chatwoot_event_untraced(data, event_id)
@@ -1436,6 +1517,7 @@ def _process_chatwoot_event_untraced(data: dict, event_id: str = None):
     event_conv_id = None
     message_id = None
     is_public_outgoing = False
+    attachments = None
     try:
         account_id, inbox_id = chatwoot_scope(data)
         if account_id != str(config.CHATWOOT_ACCOUNT_ID) or inbox_id != str(config.CHATWOOT_INBOX_ID):
@@ -1481,23 +1563,34 @@ def _process_chatwoot_event_untraced(data: dict, event_id: str = None):
                         )
                     save_message_log(phone, "asesor", f"Catálogo enviado por asesor: {catalog_command}")
                 elif attachments:
+                    # Validate all original links before contacting Meta, so a
+                    # missing later file cannot silently complete a partial send.
+                    if not isinstance(attachments, list) or any(
+                        not isinstance(attachment, dict) or not _attachment_url(attachment)
+                        for attachment in attachments
+                    ):
+                        raise ProviderError("chatwoot", "forward_attachment", None,
+                                            message="attachment_original_url_missing", confirmed_not_sent=True)
                     for attachment in attachments:
                         data_url = _attachment_url(attachment)
-                        if not data_url:
-                            print(f"[CHATWOOT DEBUG] Adjunto sin URL descargable: {attachment}")
-                            continue
                         attachment_mime = attachment.get("content_type") or attachment.get("mime_type") or "application/octet-stream"
                         attachment_filename = _attachment_filename(attachment)
                         whatsapp_media_type = normalize_media_type(attachment.get("file_type"), attachment_mime, data_url)
-                        meta_media_id = upload_chatwoot_attachment_to_meta(data_url, attachment_mime, attachment_filename)
+                        meta_media_id = upload_chatwoot_attachment_to_meta(
+                            data_url, attachment_mime, attachment_filename,
+                            attachment_created_at=data.get("created_at"),
+                        )
                         if not meta_media_id:
-                            raise ProviderError("chatwoot", "forward_attachment", None, message="attachment upload failed")
+                            raise ProviderError("chatwoot", "forward_attachment", None,
+                                                message=current_trace().get("chatwoot_attachment_error") or "attachment upload failed")
                         send_whatsapp_media(phone, meta_media_id, whatsapp_media_type, content, attachment_filename)
                 if content and not attachments and not catalog_command:
                     send_whatsapp_message(phone, content)
                 if not catalog_command:
                     save_message_log(phone, "asesor", content or "[Adjunto enviado por asesor]")
-                chatwoot_api.update_message_status(conv_id, message_id, "delivered")
+                # Meta's synchronous response acknowledges acceptance. It does
+                # not prove that the customer's device received the message.
+                chatwoot_api.update_message_status(conv_id, message_id, "sent")
                 print(
                     f"[CHATWOOT DELIVERY] forwarded event_id={event_id} conversation_id={conv_id} "
                     f"sender={_chatwoot_sender_label(data)} has_content={bool(content)} "
@@ -1547,6 +1640,8 @@ def _process_chatwoot_event_untraced(data: dict, event_id: str = None):
             chatwoot_api.update_message_status(
                 event_conv_id, message_id, "failed", "No se pudo entregar el mensaje a WhatsApp"
             )
+            if attachments:
+                _notify_advisor_attachment_failure(event_conv_id, message_id, e)
         mark_webhook_event_processed("chatwoot", event_id, status="failed", error=str(e))
         # Let RQ apply its failure/retry policy instead of reporting a dropped
         # attachment as a successfully completed job.

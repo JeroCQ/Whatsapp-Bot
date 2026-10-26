@@ -1,5 +1,10 @@
 # Audio e imágenes en derivaciones y atención humana
 
+La investigación y corrección del **26 de octubre de 2026** (webhook antes de
+terminar la subida y fotos grandes del asesor) está en
+[CHATWOOT_OUTBOUND_MEDIA_RECOVERY.md](CHATWOOT_OUTBOUND_MEDIA_RECOVERY.md).
+Las secciones siguientes conservan la evidencia de los incidentes anteriores.
+
 ## Incidente confirmado del 23 de octubre de 2026
 
 La investigación actual utiliza **únicamente**

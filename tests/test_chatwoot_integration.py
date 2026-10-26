@@ -715,7 +715,7 @@ def test_agent_text_forwarding_is_scoped(monkeypatch):
     monkeypatch.setattr(chatwoot_api, "update_message_status", lambda *a: statuses.append(a))
     main.process_chatwoot_event(payload())
     assert sent == [("57300", "agent reply")]
-    assert statuses == [(44, 91, "delivered")]
+    assert statuses == [(44, 91, "sent")]
     sent.clear()
     main.process_chatwoot_event(payload(account=99))
     assert sent == []
@@ -790,12 +790,60 @@ def test_agent_attachment_forwarding(monkeypatch):
     sent = []
     monkeypatch.setattr(main, "get_phone_by_chatwoot_id", lambda value: "57300")
     monkeypatch.setattr(main, "save_message_log", lambda *a: None)
-    monkeypatch.setattr(main, "upload_chatwoot_attachment_to_meta", lambda *a: "media-1")
+    monkeypatch.setattr(main, "upload_chatwoot_attachment_to_meta", lambda *a, **k: "media-1")
     monkeypatch.setattr(main, "send_whatsapp_media", lambda *a: sent.append(a) or True)
     monkeypatch.setattr(main, "mark_webhook_event_processed", lambda *a, **k: None)
     monkeypatch.setattr(chatwoot_api, "update_message_status", lambda *a: None)
     main.process_chatwoot_event(event)
     assert sent == [("57300", "media-1", "image", "agent reply", "proof.png")]
+
+
+@pytest.mark.parametrize("business_id", ["tanaka", "velvet", "memos", "new_business"])
+def test_agent_video_keeps_original_creation_time_and_waits_before_single_send(monkeypatch, business_id):
+    event = payload()
+    event["created_at"] = main.datetime.now(main.timezone.utc).isoformat()
+    event["attachments"] = [{"data_url": "/rails/original.mp4", "content_type": "video/mp4", "file_type": "video"}]
+    uploaded, sent, statuses = [], [], []
+    monkeypatch.setattr(main.config, "BUSINESS_ID", business_id)
+    monkeypatch.setattr(main, "get_phone_by_chatwoot_id", lambda _value: "57300")
+    monkeypatch.setattr(main, "save_message_log", lambda *a: None)
+    monkeypatch.setattr(main, "upload_chatwoot_attachment_to_meta", lambda *a, **k: uploaded.append((a, k)) or "video-media")
+    monkeypatch.setattr(main, "send_whatsapp_media", lambda *a: sent.append(a) or True)
+    monkeypatch.setattr(main, "mark_webhook_event_processed", lambda *a, **k: None)
+    monkeypatch.setattr(chatwoot_api, "update_message_status", lambda *a: statuses.append(a))
+
+    main.process_chatwoot_event(event)
+
+    assert uploaded == [(("/rails/original.mp4", "video/mp4", "original.mp4"),
+                         {"attachment_created_at": event["created_at"]})]
+    assert sent == [("57300", "video-media", "video", "agent reply", "original.mp4")]
+    assert statuses == [(44, 91, "sent")]
+
+
+@pytest.mark.parametrize("attachments", [
+    [{"file_type": "video"}],
+    [{"file_type": "video", "thumb_url": "https://private.example/thumbnail?secret=DO_NOT_LOG"}],
+    [{"data_url": "/valid.png"}, {"thumb_url": "https://private.example/DO_NOT_LOG"}],
+])
+def test_missing_original_attachment_fails_before_any_send_and_without_payload_leak(monkeypatch, capsys, attachments):
+    event = payload()
+    event["attachments"] = attachments
+    statuses, notes, logs = [], [], []
+    monkeypatch.setattr(main, "get_phone_by_chatwoot_id", lambda _value: "57300")
+    monkeypatch.setattr(main, "save_message_log", lambda *a: logs.append(a))
+    monkeypatch.setattr(main, "upload_chatwoot_attachment_to_meta", lambda *a, **k: pytest.fail("no original can be uploaded"))
+    monkeypatch.setattr(main, "send_whatsapp_media", lambda *a: pytest.fail("no part can be sent"))
+    monkeypatch.setattr(main, "mark_webhook_event_processed", lambda *a, **k: None)
+    monkeypatch.setattr(chatwoot_api, "update_message_status", lambda *a: statuses.append(a))
+    monkeypatch.setattr(chatwoot_api, "send_message_to_chatwoot", lambda *a, **k: notes.append((a, k)))
+
+    with pytest.raises(ProviderError, match="attachment_original_url_missing"):
+        main.process_chatwoot_event(event)
+
+    assert statuses == [(44, 91, "failed", "No se pudo entregar el mensaje a WhatsApp")]
+    assert not logs
+    assert len(notes) == 1 and notes[0][1] == {"is_private": True}
+    assert "DO_NOT_LOG" not in capsys.readouterr().out
 
 
 def test_chatwoot_provider_log_redacts_api_token(monkeypatch, capsys):
@@ -865,29 +913,33 @@ def test_attachment_forwarding_failure_is_retriable(monkeypatch):
     statuses = []
     monkeypatch.setattr(main, "get_phone_by_chatwoot_id", lambda value: "57300")
     monkeypatch.setattr(main, "save_message_log", lambda *a: None)
-    monkeypatch.setattr(main, "upload_chatwoot_attachment_to_meta", lambda *a: None)
+    monkeypatch.setattr(main, "upload_chatwoot_attachment_to_meta", lambda *a, **k: None)
     monkeypatch.setattr(main, "mark_webhook_event_processed", lambda *a, **k: marked.append((a, k)))
     monkeypatch.setattr(chatwoot_api, "update_message_status", lambda *a: statuses.append(a))
+    notes = []
+    monkeypatch.setattr(chatwoot_api, "send_message_to_chatwoot", lambda *a, **k: notes.append((a, k)))
 
     with pytest.raises(ProviderError):
         main.process_chatwoot_event(event, event_id="message_created:91")
     assert marked[-1][1]["status"] == "failed"
     assert statuses == [(44, 91, "failed", "No se pudo entregar el mensaje a WhatsApp")]
+    assert len(notes) == 1 and notes[0][1] == {"is_private": True}
 
 
-def test_chatwoot_api_message_status_uses_api_inbox_update_endpoint(monkeypatch):
+@pytest.mark.parametrize("status", ["sent", "delivered"])
+def test_chatwoot_api_message_status_uses_api_inbox_update_endpoint(monkeypatch, status):
     captured = {}
 
     def fake_put(url, **kwargs):
         captured.update(url=url, json=kwargs["json"])
-        return Response(200, {"id": 91, "status": "delivered"})
+        return Response(200, {"id": 91, "status": status})
 
     monkeypatch.setattr(chatwoot_api, "put", fake_put)
 
-    assert chatwoot_api.update_message_status(44, 91, "delivered") is not None
+    assert chatwoot_api.update_message_status(44, 91, status) is not None
     assert captured == {
         "url": "https://app.chatwoot.com/api/v1/accounts/10/conversations/44/messages/91",
-        "json": {"status": "delivered"},
+        "json": {"status": status},
     }
 
 

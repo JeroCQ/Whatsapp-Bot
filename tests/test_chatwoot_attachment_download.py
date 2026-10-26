@@ -199,3 +199,221 @@ def test_meta_rejection_is_distinct_from_storage_failure_and_not_retried(downloa
     assert event["http_status"] == 403 and event["storage_error_code"] == ""
     assert len(f.calls["post"]) == 1
     assert f.uploaded.closed
+
+
+def test_meta_error_records_numeric_code_without_provider_body(downloader, capsys):
+    f = downloader
+    f.uploaded.status_code = 400
+    f.uploaded.body = {"error": {"code": 100, "error_subcode": 2018001,
+                                  "message": "private-error-body private-meta-token"}}
+    assert f.main.upload_chatwoot_attachment_to_meta("/image.png") is None
+    event = diagnostics(capsys)
+    assert event["provider_error_code"] == "100"
+    assert event["provider_error_subcode"] == "2018001"
+    assert len(f.calls["post"]) == 1
+
+
+def test_oversized_image_is_prepared_before_the_only_meta_upload(downloader, monkeypatch):
+    f = downloader
+    original = b"large-photo"
+    f.origin[:] = [Response(data=original, headers={"Content-Type": "image/png"})]
+    prepared = []
+
+    def prepare(data, mime):
+        prepared.append((data, mime))
+        return b"small-jpeg", "image/jpeg", ".jpg"
+
+    monkeypatch.setattr(f.main, "prepare_image_for_whatsapp", prepare)
+    assert f.main.upload_chatwoot_attachment_to_meta("/photo.png", filename="photo.png") == "media-test"
+    assert prepared == [(original, "image/png")]
+    assert f.calls["post"][0][1]["files"]["file"] == ("photo.jpg", b"small-jpeg", "image/jpeg")
+    assert len(f.calls["post"]) == 1
+
+
+def test_invalid_image_preparation_cannot_reach_meta(downloader, monkeypatch, capsys):
+    f = downloader
+
+    def prepare(*_args):
+        raise f.main.MediaValidationError("attachment_image_prepare_failed")
+
+    monkeypatch.setattr(f.main, "prepare_image_for_whatsapp", prepare)
+    assert f.main.upload_chatwoot_attachment_to_meta("/photo.png") is None
+    assert f.calls["post"] == []
+    assert diagnostics(capsys)["reason"] == "attachment_image_prepare_failed"
+
+
+def test_generic_http_mime_uses_attachment_metadata(downloader):
+    f = downloader
+    f.origin[:] = [Response(headers={"Content-Type": "application/octet-stream"})]
+    assert f.main.upload_chatwoot_attachment_to_meta("/video", "video/mp4", "video.mp4") == "media-test"
+    assert f.calls["post"][0][1]["files"]["file"][2] == "video/mp4"
+
+
+@pytest.fixture
+def pending_upload(monkeypatch, downloader):
+    f = downloader
+    clock = types.SimpleNamespace(elapsed=0.0, sleeps=[])
+
+    def sleep(seconds):
+        clock.sleeps.append(seconds)
+        clock.elapsed += seconds
+
+    monkeypatch.setattr(f.main, "time", types.SimpleNamespace(
+        monotonic=lambda: clock.elapsed, sleep=sleep,
+    ))
+    f.clock = clock
+    f.created_at = f.main.datetime.now(f.main.timezone.utc).isoformat()
+    f.responses = []
+
+    def origin(url, **kwargs):
+        assert url == "https://chatwoot.example/video"
+        f.calls["origin"].append((url, kwargs))
+        response = Response(302, headers={
+            "Location": f"https://storage.example/video?signature=private-signature-{len(f.calls['origin'])}",
+        })
+        f.responses.append(response)
+        return response
+
+    monkeypatch.setattr(f.main, "get", origin)
+    return f
+
+
+def test_recent_attachment_waits_for_storage_upload_and_refreshes_signed_url(monkeypatch, pending_upload, capsys):
+    f = pending_upload
+
+    def storage(url, **kwargs):
+        f.calls["storage"].append((url, kwargs))
+        response = (Response(404, data=b"<Error><Code>NoSuchKey</Code></Error>")
+                    if f.clock.elapsed < 10 else Response(headers={"Content-Type": "video/mp4"}))
+        f.responses.append(response)
+        return response
+
+    monkeypatch.setattr(f.main, "get_media_asset", storage)
+    assert f.main.upload_chatwoot_attachment_to_meta(
+        "/video", "video/mp4", "video.mp4", attachment_created_at=f.created_at,
+    ) == "media-test"
+
+    assert f.clock.sleeps == [1, 2, 4, 8]
+    assert len(f.calls["origin"]) == len(f.calls["storage"]) == 5
+    assert len({url for url, _kwargs in f.calls["storage"]}) == 5
+    assert all(kwargs["headers"] == {} for _url, kwargs in f.calls["storage"])
+    assert all(kwargs["headers"] == {"api_access_token": "private-chatwoot-token"}
+               for _url, kwargs in f.calls["origin"])
+    assert len(f.calls["post"]) == 1
+    assert all(response.closed for response in [*f.responses, f.uploaded])
+    event = diagnostics(capsys)
+    assert event["pending_upload_retries"] == 4
+    assert event["storage_error_code"] == ""
+
+
+def test_recent_attachment_stops_after_four_pending_upload_retries(monkeypatch, pending_upload, capsys):
+    f = pending_upload
+
+    def storage(url, **kwargs):
+        f.calls["storage"].append((url, kwargs))
+        response = Response(404, data=b"<Error><Code>NoSuchKey</Code></Error>")
+        f.responses.append(response)
+        return response
+
+    monkeypatch.setattr(f.main, "get_media_asset", storage)
+    assert f.main.upload_chatwoot_attachment_to_meta("/video", attachment_created_at=f.created_at) is None
+    assert f.clock.sleeps == [1, 2, 4, 8]
+    assert len(f.calls["origin"]) == len(f.calls["storage"]) == 5
+    assert f.calls["post"] == []
+    assert all(response.closed for response in f.responses)
+    assert diagnostics(capsys)["storage_error_code"] == "NoSuchKey"
+
+
+@pytest.mark.parametrize("created_at", [None, "invalid", "2026-01-01T00:00:00+00:00", "2099-01-01T00:00:00+00:00"])
+def test_missing_old_or_future_timestamp_does_not_wait_for_missing_object(monkeypatch, pending_upload, created_at):
+    f = pending_upload
+    response = Response(404, data=b"<Error><Code>NoSuchKey</Code></Error>")
+    monkeypatch.setattr(f.main, "get_media_asset", lambda *args, **kwargs: response)
+    assert f.main.upload_chatwoot_attachment_to_meta("/video", attachment_created_at=created_at) is None
+    assert len(f.calls["origin"]) == 1
+    assert f.clock.sleeps == []
+    assert f.calls["post"] == []
+    assert response.closed
+
+
+@pytest.mark.parametrize(("status", "code"), [
+    (403, "NoSuchKey"), (403, "SignatureDoesNotMatch"), (403, "AccessDenied"),
+    (404, "NoSuchBucket"), (404, ""), (500, "NoSuchKey"),
+])
+def test_recent_timestamp_does_not_retry_other_storage_errors(monkeypatch, pending_upload, status, code):
+    f = pending_upload
+    response = Response(status, data=f"<Error><Code>{code}</Code></Error>".encode())
+    monkeypatch.setattr(f.main, "get_media_asset", lambda *args, **kwargs: response)
+    assert f.main.upload_chatwoot_attachment_to_meta("/video", attachment_created_at=f.created_at) is None
+    assert len(f.calls["origin"]) == 1
+    assert f.clock.sleeps == []
+    assert f.calls["post"] == []
+    assert response.closed
+
+
+def test_pending_upload_wait_counts_network_time_against_budget(monkeypatch, pending_upload, capsys):
+    f = pending_upload
+    response = Response(404, data=b"<Error><Code>NoSuchKey</Code></Error>")
+
+    def storage(*args, **kwargs):
+        f.clock.elapsed = 19.5
+        return response
+
+    monkeypatch.setattr(f.main, "get_media_asset", storage)
+    assert f.main.upload_chatwoot_attachment_to_meta("/video", attachment_created_at=f.created_at) is None
+    assert f.clock.sleeps == []
+    assert f.calls["post"] == []
+    assert response.closed
+    assert diagnostics(capsys)["reason"] == "attachment_pending_upload_timeout"
+
+
+def test_pending_upload_retry_checks_window_after_wait(monkeypatch, pending_upload):
+    f = pending_upload
+    response = Response(404, data=b"<Error><Code>NoSuchKey</Code></Error>")
+    monkeypatch.setattr(f.main, "get_media_asset", lambda *args, **kwargs: response)
+
+    def check_window():
+        if f.clock.elapsed:
+            raise f.main.ProviderError("meta", "window_validation", 400, message="original_customer_window_expired")
+
+    monkeypatch.setattr(f.main, "_check_customer_window", check_window)
+    assert f.main.upload_chatwoot_attachment_to_meta("/video", attachment_created_at=f.created_at) is None
+    assert f.clock.sleeps == [1]
+    assert len(f.calls["origin"]) == 1
+    assert f.calls["post"] == []
+    assert response.closed
+
+
+def test_pending_upload_retry_cannot_overrun_budget_during_download(monkeypatch, pending_upload, capsys):
+    f = pending_upload
+    missing = Response(404, data=b"<Error><Code>NoSuchKey</Code></Error>")
+    delayed = Response()
+
+    def chunks(chunk_size):
+        f.clock.elapsed = 21
+        yield b"late-video-bytes"
+
+    delayed.iter_content = chunks
+    responses = [missing, delayed]
+    monkeypatch.setattr(f.main, "get_media_asset", lambda *args, **kwargs: responses.pop(0))
+    assert f.main.upload_chatwoot_attachment_to_meta("/video", attachment_created_at=f.created_at) is None
+    assert f.clock.sleeps == [1]
+    assert f.calls["post"] == []
+    assert missing.closed and delayed.closed
+    assert diagnostics(capsys)["reason"] == "attachment_pending_upload_timeout"
+
+
+def test_meta_transport_error_after_pending_upload_is_not_retried(monkeypatch, pending_upload, capsys):
+    f = pending_upload
+    responses = [Response(404, data=b"<Error><Code>NoSuchKey</Code></Error>"), Response()]
+    monkeypatch.setattr(f.main, "get_media_asset", lambda *args, **kwargs: responses.pop(0))
+
+    def post(*args, **kwargs):
+        f.calls["post"].append((args, kwargs))
+        raise requests.ReadTimeout("provider result unknown")
+
+    monkeypatch.setattr(f.main, "post", post)
+    assert f.main.upload_chatwoot_attachment_to_meta("/video", attachment_created_at=f.created_at) is None
+    assert f.clock.sleeps == [1]
+    assert len(f.calls["post"]) == 1
+    assert diagnostics(capsys)["reason"] == "attachment_transport_error"
