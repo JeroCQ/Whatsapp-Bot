@@ -5,6 +5,7 @@ import ipaddress
 import os
 import re
 import subprocess
+import time
 from urllib.parse import urljoin, urlsplit
 
 import imageio_ffmpeg
@@ -13,6 +14,8 @@ import requests
 
 ASSET_TIMEOUT = (3, 10)
 IMAGE_DECODE_TIMEOUT = 10
+WHATSAPP_IMAGE_MAX_BYTES = 5 * 1024 * 1024
+OUTBOUND_IMAGE_PREPARATION_TIMEOUT = 15
 _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 _asset_session = requests.Session()
 # Storage URLs must never inherit API authentication, netrc credentials or retries.
@@ -79,6 +82,55 @@ def content_type(value):
 def media_kind(mime):
     family = content_type(mime).split("/", 1)[0]
     return family if family in {"image", "audio", "video"} else "file"
+
+
+def prepare_image_for_whatsapp(data, mime):
+    """Keep supported small images intact; fit oversized photos to Meta's limit.
+
+    The Chatwoot original remains unchanged. Only the outgoing copy is converted,
+    locally, using the ffmpeg binary already bundled for audio. No business state
+    or storage configuration is needed in either new or existing deployments.
+    """
+    if not isinstance(data, bytes) or not data:
+        raise MediaValidationError("attachment_image_empty_or_invalid")
+    normalized_mime = content_type(mime)
+    extension = {"image/jpeg": ".jpg", "image/png": ".png"}.get(normalized_mime)
+    if extension is None:
+        raise MediaValidationError("attachment_image_format_unsupported")
+    if len(data) <= WHATSAPP_IMAGE_MAX_BYTES:
+        return data, normalized_mime, extension
+
+    deadline = time.monotonic() + OUTBOUND_IMAGE_PREPARATION_TIMEOUT
+    try:
+        executable = imageio_ffmpeg.get_ffmpeg_exe()
+        # Fix the input decoder so an attachment cannot be interpreted as a
+        # playlist that fetches additional resources. Produce one bounded frame.
+        decoder = "mjpeg" if normalized_mime == "image/jpeg" else "png"
+        for dimension, quality in ((2048, 3), (1280, 5)):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise MediaValidationError("attachment_image_prepare_timeout")
+            scale = (f"scale=w='min({dimension},iw)':h='min({dimension},ih)'"
+                     ":force_original_aspect_ratio=decrease")
+            result = subprocess.run(
+                [executable, "-nostdin", "-hide_banner", "-loglevel", "error",
+                 "-xerror", "-threads", "1", "-f", "image2pipe", "-c:v", decoder,
+                 "-i", "pipe:0", "-map", "0:v:0", "-frames:v", "1", "-vf", scale,
+                 "-threads", "1", "-codec:v", "mjpeg", "-q:v", str(quality),
+                 "-pix_fmt", "yuvj420p", "-f", "image2pipe", "pipe:1"],
+                input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                timeout=remaining, check=True,
+            )
+            prepared = result.stdout
+            if not prepared or not prepared.startswith(b"\xff\xd8\xff"):
+                raise MediaValidationError("attachment_image_prepare_invalid_output")
+            if len(prepared) <= WHATSAPP_IMAGE_MAX_BYTES:
+                return prepared, "image/jpeg", ".jpg"
+    except subprocess.TimeoutExpired as error:
+        raise MediaValidationError("attachment_image_prepare_timeout") from error
+    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+        raise MediaValidationError("attachment_image_prepare_failed") from error
+    raise MediaValidationError("attachment_image_too_large_after_prepare")
 
 
 def validate_source_media(data, mime, max_bytes):

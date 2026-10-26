@@ -162,7 +162,7 @@ def send_message_to_chatwoot(conversation_id: int, content: str, is_private: boo
 
 def update_message_status(conversation_id: int, message_id: int, status: str, external_error: str = None):
     """Reflect external WhatsApp delivery back into an API-inbox message."""
-    if not conversation_id or not message_id or status not in {"delivered", "failed"}:
+    if not conversation_id or not message_id or status not in {"sent", "delivered", "failed"}:
         return None
     url = f"{get_base_url()}/conversations/{int(conversation_id)}/messages/{int(message_id)}"
     data = {"status": status}
