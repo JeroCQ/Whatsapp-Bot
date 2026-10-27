@@ -22,7 +22,7 @@ from file_catalog import (
 )
 from conversation_summary import compact_order_summary, supplied_customer_data
 from gemini_errors import is_depleted_prepaid_credits
-from gemini_retry import call_gemini_with_retry
+from gemini_runtime import run_gemini
 from webhook_utils import is_simple_greeting
 from commercial_intents import b2b_actions, catalog_may_suppress_handoff, unregistered_presentation_reason
 from follow_up_policy import load_business_policy
@@ -38,19 +38,24 @@ from database import (
 )
 
 # 1. Inicializar el cliente con el nuevo SDK
-client = genai.Client(api_key=config.GEMINI_API_KEY)
+client = genai.Client(
+    api_key=config.GEMINI_API_KEY,
+    http_options=types.HttpOptions(
+        timeout=int(config.GEMINI_REQUEST_TIMEOUT_SECONDS * 1000),
+        retry_options=types.HttpRetryOptions(attempts=1),
+    ),
+)
 _gemini_semaphore = threading.BoundedSemaphore(config.GEMINI_MAX_CONCURRENT)
 
 
 def _call_gemini(operation: str, generate):
-    """Apply the deployment-wide retry policy without holding a slot while sleeping."""
-    def limited_call():
-        with _gemini_semaphore:
-            return generate()
-
-    return call_gemini_with_retry(
+    """Bound provider calls and this process's semaphore wait before handoff."""
+    return run_gemini(
         operation,
-        limited_call,
+        generate,
+        semaphore=_gemini_semaphore,
+        request_timeout_seconds=config.GEMINI_REQUEST_TIMEOUT_SECONDS,
+        operation_timeout_seconds=config.GEMINI_OPERATION_TIMEOUT_SECONDS,
         attempts=config.GEMINI_RETRY_ATTEMPTS,
         base_seconds=config.GEMINI_RETRY_BASE_SECONDS,
         max_seconds=config.GEMINI_RETRY_MAX_SECONDS,
@@ -126,7 +131,7 @@ def transcribe_audio_message(audio_bytes: bytes, mime_type: str = "audio/ogg") -
         started_at = time.perf_counter()
         response = _call_gemini(
             "audio_transcription",
-            lambda: client.models.generate_content(
+            lambda http_options: client.models.generate_content(
                 model="gemini-flash-latest",
                 contents=[
                     "Transcribe este audio de WhatsApp en español. "
@@ -136,7 +141,7 @@ def transcribe_audio_message(audio_bytes: bytes, mime_type: str = "audio/ogg") -
                         mime_type=mime_type or "audio/ogg",
                     ),
                 ],
-                config=types.GenerateContentConfig(temperature=0),
+                config=types.GenerateContentConfig(temperature=0, http_options=http_options),
             ),
         )
         duration_ms = int((time.perf_counter() - started_at) * 1000)
@@ -241,10 +246,11 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
         started_at = time.perf_counter()
         response = _call_gemini(
             "message_logic",
-            lambda: client.models.generate_content(
+            lambda http_options: client.models.generate_content(
                 model="gemini-flash-latest",
                 contents=prompt,
                 config=types.GenerateContentConfig(
+                    http_options=http_options,
                     system_instruction=system_instruction_with_files,
                     response_mime_type="application/json",
                     response_schema=BotResponse,

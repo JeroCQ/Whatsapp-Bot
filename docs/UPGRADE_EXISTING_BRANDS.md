@@ -61,6 +61,16 @@ jitter de 0,5) o definir sus propios `GEMINI_RETRY_ATTEMPTS`,
 `GEMINI_RETRY_JITTER_SECONDS`. Configúralos en el proyecto de cada marca; no copies
 variables desde otro Railway como mecanismo de despliegue.
 
+La compatibilidad con los errores reales `code/details` de `google-genai==1.28.0`
+y los límites de espera tampoco requieren SQL ni variables nuevas obligatorias.
+Los valores opcionales `GEMINI_REQUEST_TIMEOUT_SECONDS` (default `20`) y
+`GEMINI_OPERATION_TIMEOUT_SECONDS` (default `60`) se aplican a cada instalación.
+El segundo incluye semáforo y backoff; cada llamada SDK tiene un solo intento
+interno. Un turno con audio puede ejecutar dos operaciones. HTTPX limita fases de
+red, de modo que el presupuesto no es una garantía absoluta de tiempo de una
+petición ya en vuelo. Mantener web y RQ del negocio en el mismo SHA; no aumentar
+el timeout RQ ni reabrir automáticamente conversaciones en atención humana.
+
 La corrección de textos de seguimiento también aplica a Tanaka, Memo's, Velvet y
 negocios futuros. Se conserva el `follow_up_message` generado desde la instrucción
 de cada `BUSINESS_ID`, incluido el seguimiento posterior a un catálogo; cuando falta,

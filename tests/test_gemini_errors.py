@@ -1,3 +1,8 @@
+import httpx
+import pytest
+from google.genai.errors import ClientError, ServerError
+from rq.timeouts import JobTimeoutException
+
 from gemini_errors import (
     gemini_error_status_code,
     is_depleted_prepaid_credits,
@@ -87,3 +92,42 @@ def test_does_not_retry_permanent_or_depleted_credit_errors():
 
 def test_recognizes_transport_timeout_as_transient():
     assert is_transient_gemini_error(TimeoutError("timed out"))
+
+
+def test_pinned_sdk_server_error_uses_real_code_and_details_contract():
+    error = ServerError(503, {"error": {"code": 503, "status": "UNAVAILABLE", "message": "Synthetic overload"}})
+    assert not hasattr(error, "status_code") and not hasattr(error, "response_json")
+    assert gemini_error_status_code(error) == 503
+    assert is_transient_gemini_error(error)
+
+
+def test_pinned_sdk_prepaid_credit_error_is_not_retried():
+    error = ClientError(429, {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED",
+                                        "message": "Your prepayment credits are depleted."}})
+    assert is_depleted_prepaid_credits(error)
+    assert not is_transient_gemini_error(error)
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404])
+def test_pinned_sdk_permanent_errors_are_not_transient(status):
+    error = ClientError(status, {"error": {"code": status, "status": "INVALID_ARGUMENT"}})
+    assert gemini_error_status_code(error) == status
+    assert not is_transient_gemini_error(error)
+
+
+@pytest.mark.parametrize("error", [httpx.ReadTimeout("synthetic"), httpx.ConnectTimeout("synthetic"),
+                                    httpx.ConnectError("synthetic"), httpx.ReadError("synthetic")])
+def test_actual_sdk_httpx_network_failures_are_transient(error):
+    assert gemini_error_status_code(error) is None
+    assert is_transient_gemini_error(error)
+
+
+def test_worker_execution_deadline_is_not_a_provider_timeout():
+    assert not is_transient_gemini_error(JobTimeoutException("synthetic job deadline"))
+
+
+def test_response_status_is_supported_without_reading_the_response_body():
+    error = RuntimeError("synthetic")
+    error.response = httpx.Response(503)
+    assert gemini_error_status_code(error) == 503
+    assert is_transient_gemini_error(error)

@@ -1,5 +1,6 @@
 import os
 import logging
+import math
 import sys
 from chatwoot_security import normalize_chatwoot_root
 
@@ -108,6 +109,10 @@ class Settings:
     REDIS_URL = os.getenv("REDIS_URL")
     QUEUE_NAME = os.getenv("QUEUE_NAME", "whatsapp-events")
     GEMINI_MAX_CONCURRENT = int(os.getenv("GEMINI_MAX_CONCURRENT", "8"))
+    # SDK timeouts use milliseconds; these operator settings use seconds.
+    # Keep normal inference well below the default 180-second RQ/lock limits.
+    GEMINI_REQUEST_TIMEOUT_SECONDS = float(os.getenv("GEMINI_REQUEST_TIMEOUT_SECONDS", "20"))
+    GEMINI_OPERATION_TIMEOUT_SECONDS = float(os.getenv("GEMINI_OPERATION_TIMEOUT_SECONDS", "60"))
     # Total provider attempts for transient Gemini failures. Delays happen
     # outside the concurrency semaphore so an overloaded request never blocks
     # another brand-local worker slot while it waits to retry.
@@ -151,6 +156,10 @@ class Settings:
             error_msg = f"FALTAN VARIABLES DE ENTORNO CRÍTICAS: {', '.join(missing)}"
             logger.error(error_msg)
             raise ValueError(error_msg)
+        for name in ("GEMINI_REQUEST_TIMEOUT_SECONDS", "GEMINI_OPERATION_TIMEOUT_SECONDS"):
+            value = getattr(cls, name)
+            if not math.isfinite(value) or value < 0.001:
+                raise ValueError(f"{name} must be a finite positive timeout of at least 0.001 seconds")
         chatwoot_values = [cls.CHATWOOT_BASE_URL, cls.CHATWOOT_API_TOKEN, cls.CHATWOOT_ACCOUNT_ID, cls.CHATWOOT_INBOX_ID]
         if any(chatwoot_values):
             if not all(chatwoot_values) or not (

@@ -425,6 +425,8 @@ Search Railway logs for these markers:
   does not hold a `GEMINI_MAX_CONCURRENT` slot.
 - `[GEMINI RETRY EXHAUSTED]` - all configured attempts failed; the normal
   customer fallback and Chatwoot handoff run after this marker.
+- `[GEMINI BUDGET EXHAUSTED]` - the operation cannot start another request or
+  wait within its remaining time budget; the normal handoff path runs.
 - `[METRIC] gemini_message_logic` - Gemini text response latency.
 - `[METRIC] gemini_audio_transcription` - Gemini audio transcription latency.
 - `[METRIC] http_request host=graph.facebook.com` - WhatsApp/Meta API request latency/status.
@@ -457,6 +459,21 @@ jitter, y se puede ajustar por despliegue con `GEMINI_RETRY_ATTEMPTS`,
 agota esos intentos, pausa el bot y crea un handoff. Cuando la causa es
 facturación, el motivo distingue expresamente `no hay créditos prepagados` y no
 se reintenta.
+
+El SDK fijado (`google-genai==1.28.0`) publica sus errores como `code/details`;
+el clasificador reconoce esos campos y mantiene compatibilidad con los anteriores
+`status_code/response_json`. La espera HTTP usa por defecto
+`GEMINI_REQUEST_TIMEOUT_SECONDS=20`, y el presupuesto para semáforo, intentos y
+backoff es `GEMINI_OPERATION_TIMEOUT_SECONDS=60` por operación. El SDK recibe
+milisegundos y un único intento interno; los tres intentos los controla el backend.
+HTTPX limita fases/inactividad de red: el presupuesto no garantiza interrumpir
+una petición ya iniciada exactamente a los 60 segundos. Un turno con voz puede
+necesitar transcripción e inferencia, cada una con su propio presupuesto. Estos
+defaults dejan margen nominal antes del timeout RQ de 180 segundos para responder
+y derivar; no aumentan ni desactivan ese límite.
+
+El [health check del 27 de octubre](docs/GEMINI_HEALTHCHECK_2026_10_27.md)
+documenta los fallos observados y la verificación posterior al despliegue.
 
 Esta política aplica por igual a instalaciones nuevas y actualizaciones de marcas
 existentes, no agrega estado compartido y no requiere cambios en Supabase. Cada
