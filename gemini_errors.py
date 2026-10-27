@@ -2,21 +2,27 @@
 
 from collections.abc import Mapping
 
+import httpx
+
 
 def _error_payload(exc: Exception) -> Mapping:
-    payload = getattr(exc, "response_json", None)
-    if not isinstance(payload, Mapping):
-        return {}
-    error = payload.get("error", payload)
-    return error if isinstance(error, Mapping) else {}
+    # google-genai 1.28 exposes APIError.details/code. Keep the legacy names
+    # for existing wrappers without relying on string matching an exception.
+    for attribute in ("response_json", "details"):
+        payload = getattr(exc, attribute, None)
+        if isinstance(payload, Mapping):
+            error = payload.get("error", payload)
+            if isinstance(error, Mapping):
+                return error
+    return {}
 
 
 def is_depleted_prepaid_credits(exc: Exception) -> bool:
     """Return whether Gemini rejected the request because billing credit ran out."""
     error = _error_payload(exc)
-    status_code = getattr(exc, "status_code", None) or error.get("code")
-    status = str(error.get("status", "")).upper()
-    message = str(error.get("message", exc)).lower()
+    status_code = gemini_error_status_code(exc)
+    status = str(error.get("status") or getattr(exc, "status", "")).upper()
+    message = str(error.get("message") or getattr(exc, "message", None) or exc).lower()
 
     return (
         status_code == 429
@@ -28,11 +34,20 @@ def is_depleted_prepaid_credits(exc: Exception) -> bool:
 def gemini_error_status_code(exc: Exception) -> int | None:
     """Extract a provider HTTP status without depending on an SDK exception class."""
     error = _error_payload(exc)
-    raw_status = getattr(exc, "status_code", None) or error.get("code")
-    try:
-        return int(raw_status)
-    except (TypeError, ValueError):
-        return None
+    response = getattr(exc, "response", None)
+    for raw_status in (
+        getattr(exc, "status_code", None),
+        getattr(exc, "code", None),
+        error.get("code"),
+        getattr(response, "status_code", None),
+    ):
+        if isinstance(raw_status, bool):
+            continue
+        try:
+            return int(raw_status)
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def is_transient_gemini_error(exc: Exception) -> bool:
@@ -41,4 +56,4 @@ def is_transient_gemini_error(exc: Exception) -> bool:
         return False
     if gemini_error_status_code(exc) in {429, 500, 502, 503, 504}:
         return True
-    return isinstance(exc, (ConnectionError, TimeoutError))
+    return isinstance(exc, (ConnectionError, TimeoutError, httpx.TimeoutException, httpx.NetworkError))

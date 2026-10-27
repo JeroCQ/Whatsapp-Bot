@@ -1,4 +1,6 @@
 import pytest
+from google.genai.errors import ClientError, ServerError
+from rq.timeouts import JobTimeoutException
 
 from gemini_retry import call_gemini_with_retry
 
@@ -89,3 +91,41 @@ def test_attempt_count_is_never_less_than_one():
         retry(provider_call, attempts=0)
 
     assert calls == 1
+
+
+def test_real_sdk_503_retries_and_recovers_without_customer_side_effects(capsys):
+    calls, sleeps = [], []
+
+    def provider_call():
+        calls.append("inference")
+        if len(calls) < 3:
+            raise ServerError(503, {"error": {"code": 503, "status": "UNAVAILABLE",
+                                               "message": "PRIVATE_PROVIDER_PAYLOAD"}})
+        return "synthetic response"
+
+    assert retry(provider_call, sleeps=sleeps) == "synthetic response"
+    assert calls == ["inference"] * 3
+    assert sleeps == [1.25, 2]
+    output = capsys.readouterr().out
+    assert "status=503" in output and "PRIVATE_PROVIDER_PAYLOAD" not in output
+
+
+@pytest.mark.parametrize("error", [
+    ClientError(429, {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED",
+                                "message": "Your prepayment credits are depleted."}}),
+    ClientError(400, {"error": {"code": 400, "status": "INVALID_ARGUMENT"}}),
+    ClientError(401, {"error": {"code": 401, "status": "UNAUTHENTICATED"}}),
+    JobTimeoutException("synthetic job execution deadline"),
+])
+def test_real_permanent_errors_and_worker_deadlines_are_reraised_immediately(error):
+    calls, sleeps = [], []
+
+    def provider_call():
+        calls.append("inference")
+        raise error
+
+    with pytest.raises(type(error)) as caught:
+        retry(provider_call, sleeps=sleeps)
+    assert caught.value is error
+    assert calls == ["inference"]
+    assert sleeps == []

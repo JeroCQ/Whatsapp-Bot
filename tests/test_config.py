@@ -99,6 +99,8 @@ class SupabaseKeyConfigTests(TestCase):
             self.assertEqual(config.GEMINI_RETRY_BASE_SECONDS, 1)
             self.assertEqual(config.GEMINI_RETRY_MAX_SECONDS, 8)
             self.assertEqual(config.GEMINI_RETRY_JITTER_SECONDS, 0.5)
+            self.assertEqual(config.GEMINI_REQUEST_TIMEOUT_SECONDS, 20)
+            self.assertEqual(config.GEMINI_OPERATION_TIMEOUT_SECONDS, 60)
 
     def test_gemini_retry_settings_can_be_tuned_per_isolated_deployment(self):
         env = {
@@ -107,6 +109,8 @@ class SupabaseKeyConfigTests(TestCase):
             "GEMINI_RETRY_BASE_SECONDS": "0.25",
             "GEMINI_RETRY_MAX_SECONDS": "3",
             "GEMINI_RETRY_JITTER_SECONDS": "0.1",
+            "GEMINI_REQUEST_TIMEOUT_SECONDS": "12.5",
+            "GEMINI_OPERATION_TIMEOUT_SECONDS": "45",
         }
         with mock.patch.dict(os.environ, env, clear=True):
             config = load_config()
@@ -114,6 +118,17 @@ class SupabaseKeyConfigTests(TestCase):
             self.assertEqual(config.GEMINI_RETRY_BASE_SECONDS, 0.25)
             self.assertEqual(config.GEMINI_RETRY_MAX_SECONDS, 3)
             self.assertEqual(config.GEMINI_RETRY_JITTER_SECONDS, 0.1)
+            self.assertEqual(config.GEMINI_REQUEST_TIMEOUT_SECONDS, 12.5)
+            self.assertEqual(config.GEMINI_OPERATION_TIMEOUT_SECONDS, 45)
+
+    def test_gemini_timeouts_reject_invalid_values(self):
+        for name in ("GEMINI_REQUEST_TIMEOUT_SECONDS", "GEMINI_OPERATION_TIMEOUT_SECONDS"):
+            for value in ("0", "-1", "nan", "inf"):
+                with self.subTest(name=name, value=value), mock.patch.dict(
+                    os.environ, {**REQUIRED_ENV, name: value}, clear=True
+                ):
+                    with self.assertRaisesRegex(ValueError, name):
+                        load_config()
 
 
 class ChatwootAssignmentConfigTests(TestCase):

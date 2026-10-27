@@ -173,6 +173,8 @@ lectura/edición de la instrucción, historial y carga del catálogo al objeto
 | `CATALOG_STORAGE_BUCKET` | Opcional | `catalogos` por defecto; bucket creado por bootstrap. |
 | `APP_ENV` | Opcional | `production` por defecto. |
 | `GEMINI_MAX_CONCURRENT` | Opcional | Entero; default `8`. |
+| `GEMINI_REQUEST_TIMEOUT_SECONDS` | Opcional | Timeout HTTP por intento, en segundos; default `20`. El SDK recibe milisegundos. |
+| `GEMINI_OPERATION_TIMEOUT_SECONDS` | Opcional | Presupuesto para adquisición del semáforo, intentos y backoff por operación; default `60`. HTTPX aplica límites por fase, no una interrupción absoluta de una petición ya iniciada. |
 | `GEMINI_RETRY_ATTEMPTS` | Opcional | Intentos totales ante `429/5xx` transitorios; default `3`. |
 | `GEMINI_RETRY_BASE_SECONDS` | Opcional | Espera exponencial inicial; default `1`. |
 | `GEMINI_RETRY_MAX_SECONDS` | Opcional | Tope de cada espera, incluido jitter; default `8`. |
