@@ -28,6 +28,12 @@ una conversación de prueba solo aparece en Supabase, Redis y Chatwoot de la mar
 
 ## Orden obligatorio: GitHub → Supabase → Meta → Chatwoot → Railway → dashboard
 
+Los errores de inferencia/transcripción conservan su causa en notas privadas del
+asesor; el cliente recibe una transición natural. `GEMINI_USAGE` registra tokens
+y versión resuelta para diagnosticar costos sin contenido del cliente. No activa
+modelos externos de respaldo. Ver [política y opciones](INFERENCE_HANDOFF_AND_MODEL_OPTIONS.md),
+que también aplica a instalaciones existentes sin migración SQL.
+
 ### 1. GitHub
 
 1. Crea `src/clients/<business_id>/system_instruction.txt` en una rama real ya

@@ -71,6 +71,13 @@ red, de modo que el presupuesto no es una garantía absoluta de tiempo de una
 petición ya en vuelo. Mantener web y RQ del negocio en el mismo SHA; no aumentar
 el timeout RQ ni reabrir automáticamente conversaciones en atención humana.
 
+Los errores de inferencia/transcripción se comunican al asesor mediante notas
+privadas. El cliente recibe una transición natural, confirmada después de crear
+el caso; si está pendiente, recibe un texto neutral. El evento `GEMINI_USAGE`
+añade contadores y versión resuelta del SDK sin guardar contenido ni cambiar el
+modelo. [Comportamiento, costos orientativos y evaluación de respaldos](INFERENCE_HANDOFF_AND_MODEL_OPTIONS.md).
+Aplica también a nuevos negocios sin pasos SQL ni variables adicionales.
+
 La corrección de PDF salientes del 28 de octubre añade
 `CHATWOOT_MAX_DOCUMENT_BYTES`: default y máximo 104857600 bytes (100 MiB).
 Aplica a PDF asesor → WhatsApp y tiene precedencia sobre el límite genérico de

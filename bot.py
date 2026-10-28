@@ -1,6 +1,7 @@
 # EN bot.py - Reemplaza tu archivo actual por este ajustado:
 
 import json
+import re
 import time
 import threading
 from dataclasses import dataclass, replace
@@ -21,6 +22,7 @@ from file_catalog import (
     merge_managed_catalogs,
 )
 from conversation_summary import compact_order_summary, supplied_customer_data
+from customer_messages import HUMAN_HANDOFF_MESSAGE
 from gemini_errors import (
     GeminiResponseError,
     gemini_error_status_code,
@@ -32,7 +34,7 @@ from gemini_runtime import GeminiOperationTimeout, run_gemini
 from webhook_utils import is_simple_greeting
 from commercial_intents import b2b_actions, catalog_may_suppress_handoff, unregistered_presentation_reason
 from follow_up_policy import load_business_policy
-from observability import operational_event
+from observability import operational_event, update_trace
 from database import (
     get_or_create_customer_state,
     get_catalog_assets,
@@ -80,6 +82,26 @@ def _record_gemini_failure(error: Exception, operation: str, started_at: float, 
         duration_ms=max(0, int((time.perf_counter() - started_at) * 1000)),
     )
     return gemini_handoff_reason(category, status)
+
+
+def _record_gemini_usage(response, operation: str, started_at: float, phone: str = ""):
+    """Log SDK-reported counts and resolved model, never prompts or responses."""
+    usage = getattr(response, "usage_metadata", None)
+    counts = {}
+    for field in ("prompt_token_count", "candidates_token_count", "thoughts_token_count",
+                  "cached_content_token_count", "total_token_count"):
+        value = getattr(usage, field, None)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            counts[field] = value
+    version = getattr(response, "model_version", None)
+    version = version.removeprefix("models/") if isinstance(version, str) else ""
+    version = version if re.fullmatch(r"gemini-[A-Za-z0-9._-]{1,96}", version) else "unknown"
+    operational_event(
+        "GEMINI_USAGE", phone=phone, stage=operation.upper(), reason="provider_usage_metadata",
+        result="observed", operation=operation, requested_model="gemini-flash-latest",
+        resolved_model=version, duration_ms=max(0, int((time.perf_counter() - started_at) * 1000)),
+        **counts,
+    )
 
 
 def _parse_gemini_response(text):
@@ -154,6 +176,7 @@ SYSTEM_INSTRUCTION = _SYSTEM_INSTRUCTION_PATH.read_text(encoding="utf-8").strip(
 
 def transcribe_audio_message(audio_bytes: bytes, mime_type: str = "audio/ogg") -> str:
     """Transcribe a WhatsApp voice note so the bot can answer it as text."""
+    update_trace(gemini_audio_handoff_reason="")
     if not audio_bytes:
         return None
 
@@ -176,11 +199,13 @@ def transcribe_audio_message(audio_bytes: bytes, mime_type: str = "audio/ogg") -
         )
         duration_ms = int((time.perf_counter() - started_at) * 1000)
         print(f"[METRIC] gemini_audio_transcription duration_ms={duration_ms}")
+        _record_gemini_usage(response, "audio_transcription", started_at)
         transcript = (response.text or "").strip()
         return transcript or None
     except Exception as error:
         print("[ERROR GEMINI] Falló la transcripción de audio:")
-        _record_gemini_failure(error, "audio_transcription", started_at)
+        reason = _record_gemini_failure(error, "audio_transcription", started_at)
+        update_trace(gemini_audio_handoff_reason=reason)
         return None
 
 
@@ -289,6 +314,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
         )
         duration_ms = int((time.perf_counter() - started_at) * 1000)
         print(f"[METRIC] gemini_message_logic phone={phone} duration_ms={duration_ms}")
+        _record_gemini_usage(response, "message_logic", started_at, phone)
         
         ai_data = _parse_gemini_response(response.text)
         
@@ -378,16 +404,13 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
 
         if is_depleted_prepaid_credits(e):
             print("[CRITICAL GEMINI] Créditos prepagados agotados; revisa facturación en AI Studio.")
-            pause_bot_for_handoff(phone, "Gemini no respondió: no hay créditos prepagados")
-            return BotTurn(
-                "En este momento no puedo procesar tu solicitud automáticamente. "
-                "Ya la remití a un asesor para que pueda ayudarte.",
-                [],
-            )
+            handoff_reason = "Gemini no respondió: no hay créditos prepagados"
 
         pause_bot_for_handoff(phone, handoff_reason)
         return BotTurn(
-            "No pude procesar tu solicitud automáticamente. "
-            "Ya la remití a un asesor para que pueda ayudarte.",
+            HUMAN_HANDOFF_MESSAGE,
             [],
+            follow_up_message="",
+            handoff_requested=True,
+            handoff_reason=handoff_reason,
         )

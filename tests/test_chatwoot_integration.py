@@ -1645,8 +1645,79 @@ def test_handoff_failure_keeps_paused_and_cannot_promise_created(monkeypatch):
     main._process_whatsapp_message_unlocked("57300", "Cliente", "Eso es precios al por mayor",
         customer_message_received_at=main.datetime.now(main.timezone.utc))
     assert sequence[:2] == ["create_pending", "send"]
-    assert "pendiente" in sent[0]
+    assert sent[0] == "Gracias por tu mensaje. Permíteme un momento para continuar ayudándote."
     assert "Ya te transferí" not in sent[0]
+
+
+@pytest.mark.parametrize("business", ["tanaka", "memos", "velvet", "future_brand"])
+@pytest.mark.parametrize("input_kind", ["text", "audio"])
+@pytest.mark.parametrize("handoff_status", ["created", "pending", "unknown"])
+def test_inference_handoff_keeps_cause_private_and_transitions_only_after_case_attempt(
+        monkeypatch, business, input_kind, handoff_status):
+    from customer_messages import HUMAN_HANDOFF_MESSAGE, HANDOFF_PENDING_MESSAGE
+    _mock_durable_handoff(monkeypatch)
+    reason = "Gemini no respondió: servicio de Google temporalmente no disponible (HTTP 503)"
+    state = {"is_paused": False, "chatwoot_conversation_id": None, "current_state": "GREETING"}
+    notes, sent, history, sequence = [], [], [], []
+    monkeypatch.setattr(main.config, "BUSINESS_ID", business)
+    monkeypatch.setattr(main, "invalidate_follow_up", lambda *a: None)
+    monkeypatch.setattr(main, "queue_enabled", lambda: False)
+    monkeypatch.setattr(main, "get_or_create_customer_state", lambda *a: state)
+    monkeypatch.setattr(main, "get_message_logs", lambda *a, **k: history[:])
+    monkeypatch.setattr(main, "save_message_log", lambda phone, role, content, **k: history.append({"role": role, "content": content}))
+    monkeypatch.setattr(main, "schedule_follow_up_sequence", lambda *a, **k: pytest.fail("human handoff must suppress followups"))
+    monkeypatch.setattr(main, "update_chatwoot_conversation_id", lambda phone, cid: state.update(chatwoot_conversation_id=cid))
+
+    def pause(phone, cause):
+        state.update(is_paused=True, current_state="HUMAN_HANDOFF", handoff_reason=cause)
+    def failed_logic(*args):
+        pause("57300", reason)
+        return types.SimpleNamespace(response=HUMAN_HANDOFF_MESSAGE, requested_files=[],
+            handoff_requested=True, handoff_reason=reason, follow_up_message="", send_files_before_response=False)
+    def failed_transcription(*args):
+        main.update_trace(gemini_audio_handoff_reason=reason)
+        return None
+    def create_conversation(*args, **kwargs):
+        sequence.append("case_created")
+        return 34
+    def waiting_handoff(*args, **kwargs):
+        sequence.append("case_attempted")
+        return {"status": handoff_status}
+    def send(phone, text):
+        sequence.append("customer_notice")
+        sent.append(text)
+
+    monkeypatch.setattr(main, "pause_bot_for_handoff", pause)
+    monkeypatch.setattr(main, "process_message_logic", failed_logic)
+    monkeypatch.setattr(main, "transcribe_audio_message", failed_transcription)
+    monkeypatch.setattr(main, "send_whatsapp_message", send)
+    monkeypatch.setattr(chatwoot_api, "download_meta_media", lambda *a: (b"synthetic-voice", "audio/ogg"))
+    monkeypatch.setattr(chatwoot_api, "get_or_create_contact", lambda *a, **k: 12)
+    monkeypatch.setattr(chatwoot_api, "create_conversation", create_conversation)
+    monkeypatch.setattr(chatwoot_api, "send_message_to_chatwoot", lambda *a, **k: notes.append((a, k)))
+    monkeypatch.setattr(chatwoot_api, "send_media_to_chatwoot", lambda *a, **k: pytest.fail("unverified voice cannot be attached"))
+    if handoff_status != "created":
+        monkeypatch.setattr(main, "_create_handoff_ticket_if_needed", waiting_handoff)
+
+    with main.message_trace(source_event_id="synthetic-failed-turn"):
+        main._process_whatsapp_message_unlocked("57300", "Cliente", "Quiero comprar",
+            is_audio=input_kind == "audio", media_id="synthetic-voice" if input_kind == "audio" else None,
+            media_type="audio" if input_kind == "audio" else None,
+            customer_message_received_at=main.datetime.now(main.timezone.utc))
+
+    assert state["is_paused"] and state["handoff_reason"] == reason
+    assert sent == [HUMAN_HANDOFF_MESSAGE if handoff_status == "created" else HANDOFF_PENDING_MESSAGE]
+    assert sequence[0] == ("case_created" if handoff_status == "created" else "case_attempted")
+    assert sequence[1] == "customer_notice"
+    assert not any(term in sent[0].lower() for term in ("gemini", "google", "error", "503", "técnic", "inferencia", "créditos"))
+    if handoff_status == "created":
+        assert state["chatwoot_conversation_id"] == 34
+        assert len(notes) == 2
+        assert all(kwargs.get("is_private") is True for args, kwargs in notes)
+        assert all(reason in args[1] for args, kwargs in notes)
+    else:
+        assert state["chatwoot_conversation_id"] is None
+        assert notes == []
 
 
 @pytest.mark.parametrize("error,ambiguous", [(ProviderError("chatwoot", "create_conversation", 429), False),
@@ -1848,5 +1919,5 @@ def test_non_delivery_error_still_creates_emergency_case_under_original_lock_and
     assert len(observed["paused"]) == len(observed["handoffs"]) == 1
     assert observed["handoffs"][0]["source_event_id"] == "synthetic-emergency"
     assert len(observed["posts"]) == 1
-    assert "necesita revisión" in observed["posts"][0]["text"]["body"]
+    assert observed["posts"][0]["text"]["body"] == "Te comunico con nuestro equipo para continuar ayudándote."
     assert state["is_paused"]

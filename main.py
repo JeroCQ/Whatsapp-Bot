@@ -20,6 +20,7 @@ import chatwoot_api
 import handoff_delivery
 from bot import FILE_CATALOG, process_message_logic, transcribe_audio_message
 from conversation_summary import build_handoff_summary, format_handoff_history
+from customer_messages import HANDOFF_PENDING_MESSAGE, handoff_transition_message
 from config import config
 from database import (
     claim_webhook_event,
@@ -1221,13 +1222,12 @@ def _recover_whatsapp_processing_error(sender_phone, sender_name, message_body, 
             reason = "El bot encontró un error técnico y no pudo completar la solicitud. Requiere revisión humana."
         pause_bot_for_handoff(sender_phone, reason)
         state = get_or_create_customer_state(sender_phone, sender_name or "Cliente")
-        _create_handoff_ticket_if_needed(sender_phone, sender_name or "Cliente", state, None,
-                                        message_body, mime_type, filename)
+        handoff = _create_handoff_ticket_if_needed(sender_phone, sender_name or "Cliente", state, None,
+                                                 message_body, mime_type, filename)
         # A failed POST can already have reached Meta. Do not send the original
         # reply or a second fallback through the failing channel automatically.
         if not text_delivery_failed and meta_window_is_open(expiry):
-            send_whatsapp_message(sender_phone,
-                "Tuve un problema técnico y tu solicitud necesita revisión del equipo. La atención humana puede seguir pendiente.")
+            send_whatsapp_message(sender_phone, handoff_transition_message(handoff))
     except Exception as recovery_error:
         print(f"[ERROR RECOVERY] {sanitize_text(recovery_error, (config.WA_TOKEN, config.SUPABASE_KEY, config.CHATWOOT_API_TOKEN))}")
         operational_event("RESPONSE_RECOVERY_FAILED", phone=sender_phone, stage="DIRECT_RESPONSE",
@@ -1371,20 +1371,20 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
     if is_audio:
         print("[DEBUG] 5. Audio recibido con bot activo. Descargando y transcribiendo...")
         audio_bytes, downloaded_mime_type = chatwoot_api.download_meta_media(effective_media_id) if effective_media_id else (None, None)
+        update_trace(gemini_audio_handoff_reason="")
         transcript = transcribe_audio_message(audio_bytes, downloaded_mime_type or mime_type or "audio/ogg")
         if not transcript:
-            reason = "No fue posible transcribir la nota de voz. Requiere revisión humana."
+            reason = current_trace().get("gemini_audio_handoff_reason") or "No fue posible transcribir la nota de voz. Requiere revisión humana."
             save_message_log(sender_phone, "system", "ERROR procesando audio: transcription_failed")
             pause_bot_for_handoff(sender_phone, reason)
-            send_whatsapp_message(
-                sender_phone,
-                "Perdón, no pude procesar bien tu nota de voz. Tu solicitud necesita revisión del equipo.",
-            )
             state = get_or_create_customer_state(sender_phone, sender_name or "Cliente")
-            _create_handoff_ticket_if_needed(
+            handoff = _create_handoff_ticket_if_needed(
                 sender_phone, sender_name or "Cliente", state, effective_media_id,
                 message_body, mime_type, filename, effective_media_type, audio_bytes, downloaded_mime_type,
             )
+            response = handoff_transition_message(handoff)
+            send_whatsapp_message(sender_phone, response)
+            save_message_log(sender_phone, "model", response)
             return
         print(f"[DEBUG] 5.1 Transcripción de audio: {transcript}")
         message_body = transcript
@@ -1411,7 +1411,11 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
                 effective_media_id, message_body, mime_type, filename, effective_media_type, audio_bytes, downloaded_mime_type,
                 **({"audio_transcript": transcript} if is_audio else {}))
             if not handoff or handoff.get("status") != "created":
-                ai_turn.response = "Tu solicitud requiere revisión del equipo. La atención humana sigue pendiente; todavía no he podido confirmar que un asesor la haya recibido."
+                ai_turn.response = HANDOFF_PENDING_MESSAGE
+        elif getattr(ai_turn, "handoff_requested", False):
+            # A missing/unconfirmed paused state cannot justify telling the
+            # customer that an advisor already received the conversation.
+            ai_turn.response = HANDOFF_PENDING_MESSAGE
         primary_delivered = not bool(ai_turn.response)
         delivered_files = []
         file_errors = []

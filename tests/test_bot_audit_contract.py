@@ -163,6 +163,9 @@ def test_exhausted_google_503_handoff_is_specific_correlated_and_private(routed_
     assert "HTTP 503" in pauses[0][1]
     assert "créditos" not in pauses[0][1]
     assert turn.requested_files == []
+    assert turn.response == "Te comunico con nuestro equipo para continuar ayudándote."
+    assert turn.handoff_requested and turn.handoff_reason == pauses[0][1]
+    assert turn.follow_up_message == ""
     output = capsys.readouterr().out
     event = next(json.loads(line.split("] ", 1)[1]) for line in output.splitlines()
                  if line.startswith("[OPERATIONAL_EVENT]") and '"GEMINI_OPERATION_FAILED"' in line)
@@ -184,16 +187,20 @@ def test_prepaid_credit_handoff_remains_distinct(routed_bot, monkeypatch):
         raise ClientError(429, {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED",
                                           "message": "Your prepayment credits are depleted."}})
     monkeypatch.setattr(route.module, "_call_gemini", depleted)
-    route.module.process_message_logic("57300", "Hola")
+    turn = route.module.process_message_logic("57300", "Hola")
     assert pauses == [("57300", "Gemini no respondió: no hay créditos prepagados")]
+    assert turn.response == "Te comunico con nuestro equipo para continuar ayudándote."
+    assert turn.handoff_requested and turn.follow_up_message == ""
 
 
 @pytest.mark.parametrize("response", [None, "not JSON", "[]", '"some string"'])
 def test_invalid_model_json_hands_off_with_format_reason(routed_bot, monkeypatch, response):
     route, pauses = routed_bot
     monkeypatch.setattr(route.module, "_call_gemini", lambda *a: types.SimpleNamespace(text=response))
-    route.module.process_message_logic("57300", "Hola")
+    turn = route.module.process_message_logic("57300", "Hola")
     assert pauses == [("57300", "Gemini no respondió: respuesta de Google con formato inválido")]
+    assert turn.response == "Te comunico con nuestro equipo para continuar ayudándote."
+    assert turn.handoff_requested and turn.follow_up_message == ""
 
 
 def test_audio_timeout_records_specific_failure_without_audio_or_provider_body(routed_bot, monkeypatch, capsys):
@@ -208,3 +215,43 @@ def test_audio_timeout_records_specific_failure_without_audio_or_provider_body(r
     assert '"reason": "network_timeout"' in output
     assert "PRIVATE_PROVIDER_RESPONSE" not in output
     assert "PRIVATE_AUDIO" not in output
+
+
+@pytest.mark.parametrize("routed_bot", ["memos", "tanaka", "velvet"], indirect=True)
+def test_usage_records_sdk_counts_and_resolved_model_without_content(routed_bot, monkeypatch, capsys):
+    from google.genai import types as genai_types
+    route, _ = routed_bot
+    response = genai_types.GenerateContentResponse(
+        model_version="gemini-test-flash-001",
+        usage_metadata=genai_types.GenerateContentResponseUsageMetadata(
+            prompt_token_count=5000, candidates_token_count=300,
+            thoughts_token_count=100, cached_content_token_count=4000, total_token_count=5400),
+        candidates=[genai_types.Candidate(content=genai_types.Content(parts=[
+            genai_types.Part(text=json.dumps({"response": "PRIVATE_MODEL_TEXT", "trigger_handoff": False}))]))],
+    )
+    monkeypatch.setattr(route.module, "_call_gemini", lambda *args: response)
+    route.module.process_message_logic("57300", "PRIVATE_CUSTOMER_TEXT")
+    output = capsys.readouterr().out
+    event = next(json.loads(line.split("] ", 1)[1]) for line in output.splitlines()
+                 if line.startswith("[OPERATIONAL_EVENT]") and '"GEMINI_USAGE"' in line)
+    assert event["resolved_model"] == "gemini-test-flash-001"
+    assert event["prompt_token_count"] == 5000
+    assert event["cached_content_token_count"] == 4000
+    assert event["thoughts_token_count"] == 100
+    assert event["candidates_token_count"] == 300
+    assert event["total_token_count"] == 5400
+    assert event["business_id"] == route.module.config.BUSINESS_ID
+    assert event["operation"] == "message_logic"
+    assert "PRIVATE_MODEL_TEXT" not in output and "PRIVATE_CUSTOMER_TEXT" not in output
+
+
+def test_usage_ignores_missing_or_unexpected_provider_fields(routed_bot, capsys):
+    route, _ = routed_bot
+    response = types.SimpleNamespace(model_version="https://private.invalid/token", usage_metadata=types.SimpleNamespace(
+        prompt_token_count=True, total_token_count=-1, thoughts_token_count="PRIVATE_PAYLOAD"))
+    route.module._record_gemini_usage(response, "audio_transcription", route.module.time.perf_counter())
+    output = capsys.readouterr().out
+    event = json.loads(next(line.split("] ", 1)[1] for line in output.splitlines() if '"GEMINI_USAGE"' in line))
+    assert event["resolved_model"] == "unknown"
+    assert not any(field in event for field in ("prompt_token_count", "total_token_count", "thoughts_token_count"))
+    assert "private.invalid" not in output and "PRIVATE_PAYLOAD" not in output
