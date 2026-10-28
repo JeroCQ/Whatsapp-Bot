@@ -132,7 +132,10 @@ Existing required variables are still needed:
 - Chatwoot variables used by handoff: `CHATWOOT_BASE_URL`, `CHATWOOT_API_TOKEN`, `CHATWOOT_ACCOUNT_ID`, `CHATWOOT_INBOX_ID`, and `CHATWOOT_ASSIGNMENT_MODE`. Set the mode to `automatic` to omit `assignee_id` and let Chatwoot's inbox collaborators, availability, and assignment policy control distribution. Set it to `fixed` only for an intentional rollback or single-agent deployment; fixed mode requires a positive numeric `CHATWOOT_ASSIGNEE_ID`.
 - Chatwoot webhook/media security: `CHATWOOT_API_INBOX_WEBHOOK_SECRET` for API-inbox
   agent delivery, optional `CHATWOOT_WEBHOOK_SECRET` for a separate account webhook,
-  and optional `CHATWOOT_MAX_ATTACHMENT_BYTES` (default 25 MiB)
+  optional `CHATWOOT_MAX_ATTACHMENT_BYTES` (default 25 MiB for incoming files and
+  non-PDF outgoing files), and `CHATWOOT_MAX_DOCUMENT_BYTES` (default/max 100 MiB
+  for outgoing PDFs). PDFs stream through temporary disk storage; their bytes
+  are preserved. See [the October 28 health check](docs/HEALTHCHECK_2026_10_28.md).
 
 ### Isolated Chatwoot configuration
 

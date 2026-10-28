@@ -68,6 +68,9 @@ class Settings:
     # callback while keeping each deployment scoped to one account/inbox.
     CHATWOOT_API_INBOX_WEBHOOK_SECRET = os.getenv("CHATWOOT_API_INBOX_WEBHOOK_SECRET")
     CHATWOOT_MAX_ATTACHMENT_BYTES = int(os.getenv("CHATWOOT_MAX_ATTACHMENT_BYTES", str(25 * 1024 * 1024)))
+    # Outgoing PDF documents have a separate limit; the legacy media/download
+    # guard remains in force for other files and incoming customer attachments.
+    CHATWOOT_MAX_DOCUMENT_BYTES = int(os.getenv("CHATWOOT_MAX_DOCUMENT_BYTES", str(100 * 1024 * 1024)))
     APP_ENV = os.getenv("APP_ENV", "production").strip().lower()
 
     # Backwards-compatible aliases for older helper code/deployments.
@@ -186,6 +189,8 @@ class Settings:
                 raise ValueError("CHATWOOT_ASSIGNEE_ID is required when CHATWOOT_ASSIGNMENT_MODE=fixed")
             if cls.CHATWOOT_MAX_ATTACHMENT_BYTES <= 0:
                 raise ValueError("CHATWOOT_MAX_ATTACHMENT_BYTES must be positive")
+            if not 0 < cls.CHATWOOT_MAX_DOCUMENT_BYTES <= 100 * 1024 * 1024:
+                raise ValueError("CHATWOOT_MAX_DOCUMENT_BYTES must be positive and at most 104857600 (100 MiB)")
 
 config = Settings()
 config.validate()

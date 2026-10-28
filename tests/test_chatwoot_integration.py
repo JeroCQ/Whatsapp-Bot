@@ -798,6 +798,107 @@ def test_agent_attachment_forwarding(monkeypatch):
     assert sent == [("57300", "media-1", "image", "agent reply", "proof.png")]
 
 
+@pytest.fixture
+def outgoing_attachment_batch(monkeypatch):
+    event = payload()
+    event["content"] = None
+    event["created_at"] = main.datetime.now(main.timezone.utc).isoformat()
+    event["attachments"] = [
+        {"data_url": f"/rails/photo-{index}.png", "content_type": "image/png",
+         "file_type": "image", "file_name": f"photo-{index}.png"}
+        for index in range(1, 10)
+    ]
+    observed = {"operations": [], "accepted": [], "statuses": [], "marked": [], "notes": [], "logs": []}
+    monkeypatch.setattr(main, "get_phone_by_chatwoot_id", lambda _value: "57300")
+    monkeypatch.setattr(main, "invalidate_follow_up", lambda _phone: None)
+    monkeypatch.setattr(main, "save_message_log", lambda *args: observed["logs"].append(args))
+    monkeypatch.setattr(main, "send_whatsapp_message", lambda *args: pytest.fail("an attachment-only batch cannot send text"))
+    monkeypatch.setattr(main, "mark_webhook_event_processed", lambda *args, **kwargs: observed["marked"].append((args, kwargs)))
+    monkeypatch.setattr(chatwoot_api, "update_message_status", lambda *args: observed["statuses"].append(args))
+    monkeypatch.setattr(chatwoot_api, "send_message_to_chatwoot", lambda *args, **kwargs: observed["notes"].append((args, kwargs)))
+    return event, observed
+
+
+@pytest.mark.parametrize("business_id", ["tanaka", "velvet", "memos", "new_business"])
+def test_public_outgoing_batch_forwards_all_nine_images_in_order_once(
+        monkeypatch, outgoing_attachment_batch, business_id):
+    event, observed = outgoing_attachment_batch
+    monkeypatch.setattr(main.config, "BUSINESS_ID", business_id)
+
+    def upload(url, mime, filename, **kwargs):
+        observed["operations"].append(("upload", url, mime, filename, kwargs))
+        return f"media-{filename}"
+
+    def send(*args):
+        observed["operations"].append(("send", *args))
+        observed["accepted"].append(args)
+        return {"messages": [{"id": f"accepted-{len(observed['accepted'])}"}]}
+
+    monkeypatch.setattr(main, "upload_chatwoot_attachment_to_meta", upload)
+    monkeypatch.setattr(main, "send_whatsapp_media", send)
+
+    main.process_chatwoot_event(event, event_id="message_created:91")
+
+    expected_operations = []
+    for index in range(1, 10):
+        filename = f"photo-{index}.png"
+        expected_operations.extend([
+            ("upload", f"/rails/{filename}", "image/png", filename,
+             {"attachment_created_at": event["created_at"]}),
+            ("send", "57300", f"media-{filename}", "image", None, filename),
+        ])
+    assert observed["operations"] == expected_operations
+    assert len(observed["accepted"]) == 9
+    assert observed["statuses"] == [(44, 91, "sent")]
+    assert observed["marked"] == [(("chatwoot", "message_created:91"), {})]
+    assert observed["notes"] == []
+
+
+@pytest.mark.parametrize("failure_stage", ["upload", "send"])
+def test_partial_attachment_batch_stays_failed_without_replaying_accepted_image(
+        monkeypatch, outgoing_attachment_batch, capsys, failure_stage):
+    event, observed = outgoing_attachment_batch
+
+    def upload(url, mime, filename, **kwargs):
+        observed["operations"].append(("upload", filename))
+        if filename == "photo-2.png" and failure_stage == "upload":
+            return None
+        return f"media-{filename}"
+
+    def send(*args):
+        observed["operations"].append(("send", args[-1]))
+        if args[-1] == "photo-2.png":
+            raise ProviderError("meta", "send_media", None, message="transport error")
+        observed["accepted"].append(args)
+        return {"messages": [{"id": "accepted-first-image"}]}
+
+    monkeypatch.setattr(main, "upload_chatwoot_attachment_to_meta", upload)
+    monkeypatch.setattr(main, "send_whatsapp_media", send)
+
+    with pytest.raises(ProviderError):
+        main.process_chatwoot_event(event, event_id="message_created:91")
+
+    expected_operations = [("upload", "photo-1.png"), ("send", "photo-1.png"), ("upload", "photo-2.png")]
+    if failure_stage == "send":
+        expected_operations.append(("send", "photo-2.png"))
+    assert observed["operations"] == expected_operations
+    assert observed["accepted"] == [("57300", "media-photo-1.png", "image", None, "photo-1.png")]
+    assert observed["statuses"] == [(44, 91, "failed", "No se pudo entregar el mensaje a WhatsApp")]
+    assert observed["marked"][-1][1]["status"] == "failed"
+    assert observed["logs"] == []
+    assert len(observed["notes"]) == 1
+    assert observed["notes"][0][1] == {"is_private": True}
+    assert "evitar duplicados" in observed["notes"][0][0][1]
+    assert "[CHATWOOT DELIVERY] forwarded" not in capsys.readouterr().out
+
+    # Chatwoot's Retry UI can emit a status update. It must not replay the
+    # already accepted first image, including after an ambiguous second send.
+    event.update(event="message_updated", status="sent")
+    main.process_chatwoot_event(event, event_id="message_updated:91")
+    assert observed["operations"] == expected_operations
+    assert observed["statuses"] == [(44, 91, "failed", "No se pudo entregar el mensaje a WhatsApp")]
+
+
 @pytest.mark.parametrize("business_id", ["tanaka", "velvet", "memos", "new_business"])
 def test_agent_video_keeps_original_creation_time_and_waits_before_single_send(monkeypatch, business_id):
     event = payload()

@@ -141,6 +141,31 @@ class ChatwootAssignmentConfigTests(TestCase):
         "CHATWOOT_WEBHOOK_SECRET": "webhook-secret",
     }
 
+    def test_outgoing_pdf_defaults_work_for_existing_and_new_brands(self):
+        for business in ("tanaka", "memos", "velvet", "future_brand"):
+            with self.subTest(business=business), mock.patch.dict(
+                os.environ, {**self.CHATWOOT_ENV, "BUSINESS_ID": business}, clear=True
+            ):
+                config = load_config()
+                self.assertEqual(config.CHATWOOT_MAX_DOCUMENT_BYTES, 100 * 1024 * 1024)
+                self.assertEqual(config.CHATWOOT_MAX_ATTACHMENT_BYTES, 25 * 1024 * 1024)
+
+    def test_pdf_limit_does_not_override_existing_other_media_guard(self):
+        env = {**self.CHATWOOT_ENV, "CHATWOOT_MAX_DOCUMENT_BYTES": "52428800",
+               "CHATWOOT_MAX_ATTACHMENT_BYTES": "10485760"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            config = load_config()
+            self.assertEqual(config.CHATWOOT_MAX_DOCUMENT_BYTES, 50 * 1024 * 1024)
+            self.assertEqual(config.CHATWOOT_MAX_ATTACHMENT_BYTES, 10 * 1024 * 1024)
+
+    def test_pdf_limit_rejects_unbounded_or_invalid_values(self):
+        for value in ("0", "-1", "104857601"):
+            with self.subTest(value=value), mock.patch.dict(
+                os.environ, {**self.CHATWOOT_ENV, "CHATWOOT_MAX_DOCUMENT_BYTES": value}, clear=True
+            ):
+                with self.assertRaisesRegex(ValueError, "CHATWOOT_MAX_DOCUMENT_BYTES"):
+                    load_config()
+
     def test_automatic_mode_accepts_missing_assignee(self):
         with mock.patch.dict(os.environ, {**self.CHATWOOT_ENV, "CHATWOOT_ASSIGNMENT_MODE": "automatic"}, clear=True):
             self.assertIsNone(load_config().CHATWOOT_ASSIGNEE_ID)

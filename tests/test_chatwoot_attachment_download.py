@@ -1,6 +1,7 @@
 """Chatwoot storage failures remain diagnosable without exposing signed URLs."""
 
 import importlib
+import hashlib
 import json
 import sys
 import types
@@ -49,6 +50,7 @@ def downloader(monkeypatch):
         "CHATWOOT_BASE_URL": "https://chatwoot.example",
         "CHATWOOT_API_TOKEN": "private-chatwoot-token", "WA_TOKEN": "private-meta-token",
         "WA_PHONE_NUMBER_ID": "test-number", "CHATWOOT_MAX_ATTACHMENT_BYTES": 1024,
+        "CHATWOOT_MAX_DOCUMENT_BYTES": 100 * 1024 * 1024,
     }.items():
         monkeypatch.setattr(main.config, name, value)
     origin_responses = [Response()]
@@ -74,6 +76,189 @@ def downloader(monkeypatch):
     monkeypatch.setattr(main, "post", post)
     return types.SimpleNamespace(main=main, origin=origin_responses, storage=storage_responses,
         uploaded=uploaded, calls=calls)
+
+
+class PdfResponse(Response):
+    """Generate a large synthetic PDF stream without allocating the complete file."""
+
+    def __init__(self, size, *, declared=None, mime="application/pdf"):
+        headers = {"Content-Type": mime}
+        if declared is not None:
+            headers["Content-Length"] = str(declared)
+        super().__init__(headers=headers)
+        self.size = size
+
+    def iter_content(self, chunk_size):
+        prefix = b"%PDF-1.7\n"
+        yield prefix
+        remaining = self.size - len(prefix)
+        chunk = b"0" * chunk_size
+        while remaining:
+            piece = chunk[:min(remaining, chunk_size)]
+            yield piece
+            remaining -= len(piece)
+
+
+@pytest.fixture
+def pdf_files(monkeypatch, downloader):
+    files = []
+    create_file = downloader.main.tempfile.TemporaryFile
+
+    def tracked_file(*args, **kwargs):
+        created = create_file(*args, **kwargs)
+        files.append(created)
+        return created
+
+    monkeypatch.setattr(downloader.main.tempfile, "TemporaryFile", tracked_file)
+    return files
+
+
+@pytest.mark.parametrize("business", ["tanaka", "memos", "velvet", "future_brand"])
+def test_pdf_above_old_limit_streams_once_to_own_meta_number(monkeypatch, downloader, pdf_files, capsys, business):
+    f = downloader
+    size = 26 * 1024 * 1024
+    source = PdfResponse(size, declared=size)
+    f.origin[:] = [source]
+    monkeypatch.setattr(f.main.config, "BUSINESS_ID", business)
+    monkeypatch.setattr(f.main.config, "WA_PHONE_NUMBER_ID", business + "-number")
+
+    def post(url, **kwargs):
+        f.calls["post"].append((url, kwargs))
+        assert url.endswith(f"/{business}-number/media")
+        assert "files" not in kwargs
+        encoder = kwargs["data"]
+        assert isinstance(encoder, f.main.MultipartEncoder)
+        file_name, handle, mime = encoder.fields["file"]
+        assert (file_name, mime) == ("portfolio.pdf", "application/pdf")
+        assert not handle.closed
+        expected_hash = hashlib.sha256()
+        for chunk in source.iter_content(64 * 1024):
+            expected_hash.update(chunk)
+        actual_hash = hashlib.sha256()
+        while chunk := handle.read(64 * 1024):
+            actual_hash.update(chunk)
+        assert actual_hash.digest() == expected_hash.digest()
+        handle.seek(0)
+        prepared = requests.Request("POST", url, headers=kwargs["headers"], data=encoder).prepare()
+        assert prepared.body is encoder  # requests must not buffer the PDF.
+        assert prepared.headers["Content-Length"] == str(encoder.len)
+        # Exercise the actual encoder in bounded reads, as requests does; a
+        # files= payload or an eager bytes body would fail this assertion.
+        assert encoder.fields["messaging_product"] == "whatsapp"
+        length = 0
+        prefix = b""
+        while chunk := encoder.read(64 * 1024):
+            if not prefix:
+                prefix = chunk
+            assert len(chunk) <= 64 * 1024
+            length += len(chunk)
+        assert b"%PDF-1.7" in prefix
+        assert size < length == encoder.len == int(kwargs["headers"]["Content-Length"])
+        assert kwargs["headers"]["Content-Type"] == encoder.content_type
+        return f.uploaded
+
+    monkeypatch.setattr(f.main, "post", post)
+    assert f.main.upload_chatwoot_attachment_to_meta("/portfolio.pdf", filename="portfolio.pdf") == "media-test"
+    event = diagnostics(capsys)
+    assert event["maximum_bytes"] == 100 * 1024 * 1024
+    assert event["declared_bytes"] == event["downloaded_bytes"] == size
+    assert event["media_kind"] == "document"
+    assert len(f.calls["post"]) == len(pdf_files) == 1
+    assert source.closed and f.uploaded.closed and pdf_files[0].closed
+
+
+@pytest.mark.parametrize("declared", [None, 1, 100 * 1024 * 1024 + 1])
+def test_pdf_above_provider_limit_never_reaches_meta(downloader, pdf_files, capsys, declared):
+    f = downloader
+    # The provider cap still wins over an accidentally excessive local setting.
+    f.main.config.CHATWOOT_MAX_DOCUMENT_BYTES = 200 * 1024 * 1024
+    source = PdfResponse(100 * 1024 * 1024 + 1, declared=declared)
+    f.origin[:] = [source]
+    assert f.main.upload_chatwoot_attachment_to_meta("/portfolio.pdf", filename="portfolio.pdf") is None
+    event = diagnostics(capsys)
+    assert event["reason"] == "attachment_too_large"
+    assert event["maximum_bytes"] == 100 * 1024 * 1024
+    assert source.closed and all(handle.closed for handle in pdf_files)
+    assert f.calls["post"] == []
+    if declared and declared > event["maximum_bytes"]:
+        assert pdf_files == []
+
+
+def test_configured_lower_document_limit_is_enforced(downloader, pdf_files, capsys):
+    f = downloader
+    f.main.config.CHATWOOT_MAX_DOCUMENT_BYTES = 16
+    source = PdfResponse(17)
+    f.origin[:] = [source]
+    assert f.main.upload_chatwoot_attachment_to_meta("/portfolio.pdf", filename="portfolio.pdf") is None
+    assert diagnostics(capsys)["maximum_bytes"] == 16
+    assert source.closed and pdf_files[0].closed and f.calls["post"] == []
+
+
+@pytest.mark.parametrize("mime, fallback, filename", [
+    ("application/pdf", "application/octet-stream", "portfolio.pdf"),
+    ("application/octet-stream", "application/pdf", "portfolio"),
+    ("application/octet-stream", "application/octet-stream", "portfolio.PDF"),
+])
+def test_pdf_type_can_use_metadata_or_generic_mime_extension(downloader, pdf_files, mime, fallback, filename):
+    f = downloader
+    f.origin[:] = [PdfResponse(2048, mime=mime)]
+    assert f.main.upload_chatwoot_attachment_to_meta("/portfolio", fallback, filename) == "media-test"
+    assert f.calls["post"][0][1]["data"].fields["file"][2] == "application/pdf"
+    assert pdf_files[0].closed
+
+
+@pytest.mark.parametrize("mime, filename", [("image/jpeg", "misleading.pdf"), ("application/msword", "portfolio.doc")])
+def test_non_pdf_retains_original_attachment_limit(downloader, pdf_files, mime, filename):
+    f = downloader
+    f.origin[:] = [PdfResponse(2048, declared=2048, mime=mime)]
+    assert f.main.upload_chatwoot_attachment_to_meta("/file", filename=filename) is None
+    assert f.calls["post"] == pdf_files == []
+
+
+def test_pdf_extension_cannot_disguise_non_pdf_content(downloader, pdf_files, capsys):
+    f = downloader
+    source = Response(data=b"not a PDF", headers={"Content-Type": "application/octet-stream"})
+    f.origin[:] = [source]
+    assert f.main.upload_chatwoot_attachment_to_meta("/portfolio.pdf", filename="portfolio.pdf") is None
+    assert diagnostics(capsys)["reason"] == "attachment_pdf_signature_mismatch"
+    assert source.closed and pdf_files[0].closed and f.calls["post"] == []
+
+
+@pytest.mark.parametrize("failure", ["storage", "meta_transport", "meta_rejected", "expired_window"])
+def test_pdf_temporary_file_is_closed_on_failure_without_post_retry(monkeypatch, downloader, pdf_files, failure):
+    f = downloader
+    source = PdfResponse(2048)
+    f.origin[:] = [source]
+    if failure == "storage":
+        def broken_stream(_chunk_size):
+            yield b"%PDF-1.7\n"
+            raise requests.ReadTimeout("private-signature")
+        source.iter_content = broken_stream
+    elif failure == "meta_transport":
+        def failed_post(*args, **kwargs):
+            f.calls["post"].append((args, kwargs))
+            raise requests.ReadTimeout("provider outcome unknown")
+        monkeypatch.setattr(f.main, "post", failed_post)
+    elif failure == "meta_rejected":
+        f.uploaded.status_code = 400
+    else:
+        def expired():
+            raise f.main.ProviderError("meta", "window_validation", 400, message="original_customer_window_expired")
+        monkeypatch.setattr(f.main, "_check_customer_window", expired)
+    assert f.main.upload_chatwoot_attachment_to_meta("/portfolio.pdf", filename="portfolio.pdf") is None
+    assert source.closed and pdf_files[0].closed
+    assert len(f.calls["post"]) == (1 if failure.startswith("meta_") else 0)
+
+
+def test_pdf_download_deadline_releases_file_before_contacting_meta(monkeypatch, downloader, pdf_files, capsys):
+    f = downloader
+    source = PdfResponse(2048)
+    f.origin[:] = [source]
+    moments = iter([0.0, 61.0])
+    monkeypatch.setattr(f.main.time, "monotonic", lambda: next(moments))
+    assert f.main.upload_chatwoot_attachment_to_meta("/portfolio.pdf", filename="portfolio.pdf") is None
+    assert diagnostics(capsys)["reason"] == "attachment_download_timeout"
+    assert source.closed and pdf_files[0].closed and f.calls["post"] == []
 
 
 def diagnostics(capsys):
