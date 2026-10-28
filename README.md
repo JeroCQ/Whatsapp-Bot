@@ -2,6 +2,10 @@
 
 FastAPI WhatsApp sales bot with Chatwoot handoff and Gemini responses.
 
+Future planning: [Gemini → OpenAI fallback activation plan](docs/MODEL_FALLBACK_ACTIVATION_PLAN.md).
+This is documentation only: merging it does not activate OpenAI or require a new API key,
+environment variable, database migration, or manual setup.
+
 ## Deployments por negocio
 
 Para cualquier negocio nuevo, comienza por el runbook canónico
