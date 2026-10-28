@@ -145,3 +145,66 @@ def test_velvet_standard_wholesale_keeps_approved_self_service_policy(routed_bot
         "requested_files": ["catalogo_mochis_mayorista"]})
     assert not turn.handoff_requested
     assert pauses == []
+
+
+@pytest.mark.parametrize("routed_bot", ["memos", "tanaka", "velvet"], indirect=True)
+def test_exhausted_google_503_handoff_is_specific_correlated_and_private(routed_bot, monkeypatch, capsys):
+    from google.genai.errors import ServerError
+    from observability import message_trace
+    route, pauses = routed_bot
+    module = route.module
+    def unavailable(*args):
+        raise ServerError(503, {"error": {"code": 503, "message": "PRIVATE_PROVIDER_RESPONSE"}})
+    monkeypatch.setattr(module, "_call_gemini", unavailable)
+    with message_trace(source_event_id="synthetic-inbound", job_id="synthetic-job"):
+        turn = module.process_message_logic("57300", "PRIVATE_CUSTOMER_MESSAGE")
+    assert len(pauses) == 1 and pauses[0][0] == "57300"
+    assert "Google temporalmente no disponible" in pauses[0][1]
+    assert "HTTP 503" in pauses[0][1]
+    assert "créditos" not in pauses[0][1]
+    assert turn.requested_files == []
+    output = capsys.readouterr().out
+    event = next(json.loads(line.split("] ", 1)[1]) for line in output.splitlines()
+                 if line.startswith("[OPERATIONAL_EVENT]") and '"GEMINI_OPERATION_FAILED"' in line)
+    assert event["reason"] == "provider_unavailable"
+    assert event["provider_status"] == 503
+    assert event["business_id"] == module.config.BUSINESS_ID
+    assert event["source_event_id"] == "synthetic-inbound"
+    assert event["job_id"] == "synthetic-job"
+    assert event["model"] == "gemini-flash-latest"
+    assert event["duration_ms"] >= 0
+    assert "PRIVATE_PROVIDER_RESPONSE" not in output
+    assert "PRIVATE_CUSTOMER_MESSAGE" not in output
+
+
+def test_prepaid_credit_handoff_remains_distinct(routed_bot, monkeypatch):
+    from google.genai.errors import ClientError
+    route, pauses = routed_bot
+    def depleted(*args):
+        raise ClientError(429, {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED",
+                                          "message": "Your prepayment credits are depleted."}})
+    monkeypatch.setattr(route.module, "_call_gemini", depleted)
+    route.module.process_message_logic("57300", "Hola")
+    assert pauses == [("57300", "Gemini no respondió: no hay créditos prepagados")]
+
+
+@pytest.mark.parametrize("response", [None, "not JSON", "[]", '"some string"'])
+def test_invalid_model_json_hands_off_with_format_reason(routed_bot, monkeypatch, response):
+    route, pauses = routed_bot
+    monkeypatch.setattr(route.module, "_call_gemini", lambda *a: types.SimpleNamespace(text=response))
+    route.module.process_message_logic("57300", "Hola")
+    assert pauses == [("57300", "Gemini no respondió: respuesta de Google con formato inválido")]
+
+
+def test_audio_timeout_records_specific_failure_without_audio_or_provider_body(routed_bot, monkeypatch, capsys):
+    import httpx
+    route, _ = routed_bot
+    def timeout(*args):
+        raise httpx.ReadTimeout("PRIVATE_PROVIDER_RESPONSE")
+    monkeypatch.setattr(route.module, "_call_gemini", timeout)
+    assert route.module.transcribe_audio_message(b"PRIVATE_AUDIO") is None
+    output = capsys.readouterr().out
+    assert '"operation": "audio_transcription"' in output
+    assert '"reason": "network_timeout"' in output
+    assert "PRIVATE_PROVIDER_RESPONSE" not in output
+    assert "PRIVATE_AUDIO" not in output

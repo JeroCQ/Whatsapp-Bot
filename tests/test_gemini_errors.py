@@ -4,7 +4,10 @@ from google.genai.errors import ClientError, ServerError
 from rq.timeouts import JobTimeoutException
 
 from gemini_errors import (
+    GeminiResponseError,
     gemini_error_status_code,
+    gemini_failure_category,
+    gemini_handoff_reason,
     is_depleted_prepaid_credits,
     is_transient_gemini_error,
 )
@@ -131,3 +134,23 @@ def test_response_status_is_supported_without_reading_the_response_body():
     error.response = httpx.Response(503)
     assert gemini_error_status_code(error) == 503
     assert is_transient_gemini_error(error)
+
+
+@pytest.mark.parametrize("error, expected", [
+    (ServerError(503, {"error": {"code": 503, "message": "PRIVATE_ERROR_BODY"}}), "provider_unavailable"),
+    (ServerError(504, {"error": {"code": 504}}), "provider_timeout"),
+    (ClientError(429, {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED"}}), "rate_or_quota_limit"),
+    (ClientError(429, {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "message": "Your prepayment credits are depleted."}}), "prepaid_credits_depleted"),
+    (ClientError(401, {"error": {"code": 401}}), "provider_authentication"),
+    (httpx.ReadTimeout("PRIVATE_ERROR_BODY"), "network_timeout"),
+    (httpx.ConnectError("PRIVATE_ERROR_BODY"), "network_error"),
+    (GeminiResponseError("PRIVATE_ERROR_BODY"), "invalid_structured_response"),
+    (RuntimeError("PRIVATE_ERROR_BODY"), "inference_error"),
+])
+def test_terminal_failure_categories_do_not_confuse_outage_with_billing(error, expected):
+    category = gemini_failure_category(error)
+    assert category == expected
+    reason = gemini_handoff_reason(category, gemini_error_status_code(error))
+    assert reason.startswith("Gemini no respondió:")
+    assert "PRIVATE_ERROR_BODY" not in reason
+    assert ("créditos" in reason) == (category == "prepaid_credits_depleted")

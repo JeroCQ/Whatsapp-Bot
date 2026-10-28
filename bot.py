@@ -21,8 +21,14 @@ from file_catalog import (
     merge_managed_catalogs,
 )
 from conversation_summary import compact_order_summary, supplied_customer_data
-from gemini_errors import is_depleted_prepaid_credits
-from gemini_runtime import run_gemini
+from gemini_errors import (
+    GeminiResponseError,
+    gemini_error_status_code,
+    gemini_failure_category,
+    gemini_handoff_reason,
+    is_depleted_prepaid_credits,
+)
+from gemini_runtime import GeminiOperationTimeout, run_gemini
 from webhook_utils import is_simple_greeting
 from commercial_intents import b2b_actions, catalog_may_suppress_handoff, unregistered_presentation_reason
 from follow_up_policy import load_business_policy
@@ -61,6 +67,30 @@ def _call_gemini(operation: str, generate):
         max_seconds=config.GEMINI_RETRY_MAX_SECONDS,
         jitter_seconds=config.GEMINI_RETRY_JITTER_SECONDS,
     )
+
+
+def _record_gemini_failure(error: Exception, operation: str, started_at: float, phone: str = "") -> str:
+    """Keep terminal errors actionable without logging provider bodies or prompts."""
+    category = "operation_timeout" if isinstance(error, GeminiOperationTimeout) else gemini_failure_category(error)
+    status = gemini_error_status_code(error)
+    operational_event(
+        "GEMINI_OPERATION_FAILED", phone=phone, stage="GEMINI", reason=category,
+        result="failed", operation=operation, model="gemini-flash-latest",
+        provider_status=status, error_type=type(error).__name__,
+        duration_ms=max(0, int((time.perf_counter() - started_at) * 1000)),
+    )
+    return gemini_handoff_reason(category, status)
+
+
+def _parse_gemini_response(text):
+    try:
+        data = json.loads(text)
+    except (ValueError, TypeError):
+        raise GeminiResponseError("invalid_json_response") from None
+    if not isinstance(data, dict):
+        raise GeminiResponseError("json_response_is_not_an_object")
+    return data
+
 
 # 2. Definir el esquema estricto
 class BotResponse(BaseModel):
@@ -148,10 +178,9 @@ def transcribe_audio_message(audio_bytes: bytes, mime_type: str = "audio/ogg") -
         print(f"[METRIC] gemini_audio_transcription duration_ms={duration_ms}")
         transcript = (response.text or "").strip()
         return transcript or None
-    except Exception:
-        import traceback
+    except Exception as error:
         print("[ERROR GEMINI] Falló la transcripción de audio:")
-        traceback.print_exc()
+        _record_gemini_failure(error, "audio_transcription", started_at)
         return None
 
 
@@ -261,7 +290,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
         duration_ms = int((time.perf_counter() - started_at) * 1000)
         print(f"[METRIC] gemini_message_logic phone={phone} duration_ms={duration_ms}")
         
-        ai_data = json.loads(response.text)
+        ai_data = _parse_gemini_response(response.text)
         
         response_text = ai_data.get("response", "")
         trigger_handoff = ai_data.get("trigger_handoff", False)
@@ -344,9 +373,8 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
         )
 
     except Exception as e:
-        import traceback
         print(f"[ERROR GEMINI] Falló la inferencia con Gemini:")
-        traceback.print_exc()
+        handoff_reason = _record_gemini_failure(e, "message_logic", started_at, phone)
 
         if is_depleted_prepaid_credits(e):
             print("[CRITICAL GEMINI] Créditos prepagados agotados; revisa facturación en AI Studio.")
@@ -357,7 +385,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
                 [],
             )
 
-        pause_bot_for_handoff(phone, "Gemini no respondió: error de inferencia")
+        pause_bot_for_handoff(phone, handoff_reason)
         return BotTurn(
             "No pude procesar tu solicitud automáticamente. "
             "Ya la remití a un asesor para que pueda ayudarte.",

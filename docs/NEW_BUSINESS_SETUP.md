@@ -194,7 +194,8 @@ lectura/edición de la instrucción, historial y carga del catálogo al objeto
 | `CHATWOOT_ASSIGNEE_ID` | **Omitir** | Solo es obligatorio si deliberadamente se usa `fixed`. |
 | `CHATWOOT_API_INBOX_WEBHOOK_SECRET` | **Obligatoria para respuestas de agentes** | Campo `secret` del API inbox, no `hmac_token`. |
 | `CHATWOOT_WEBHOOK_SECRET` | Opcional | Secreto independiente del account webhook opcional. |
-| `CHATWOOT_MAX_ATTACHMENT_BYTES` | Opcional | Entero; default `26214400` (25 MiB). |
+| `CHATWOOT_MAX_ATTACHMENT_BYTES` | Opcional | Entero; default `26214400` (25 MiB). Archivos entrantes y adjuntos salientes distintos de PDF. |
+| `CHATWOOT_MAX_DOCUMENT_BYTES` | Opcional | Entero positivo; default y máximo `104857600` (100 MiB), exclusivamente PDF asesor → WhatsApp. Se puede reducir por despliegue. Descarga y subida por bloques con archivo temporal; se necesita espacio temporal suficiente para cada transferencia concurrente. |
 
 Si no habrá Chatwoot, omite el bloque completo; una configuración parcial impide
 arrancar. Para el flujo de producción esperado por este repositorio, configura el
