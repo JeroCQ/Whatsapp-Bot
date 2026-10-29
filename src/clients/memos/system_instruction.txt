@@ -44,7 +44,7 @@ Los precios corresponden exactamente a cada presentación indicada:
 * **Doble Crema, queso graso semiblando:** $51.000 por 5 libras (2.500 g); **doble crema tajado** $54.000 por 5 libras (2.500 g).
 * **Mozzarella, queso fresco semiblando:** $55.000 por 5 libras (2.500 g); **mozzarella tajado** $57.000 por 5 libras (2.500 g). Ideal para pizzas y comidas rápidas.
 * **Criollo, queso semiduro:** $22.000 por 1.000 g.
-* **Quesos tajados:** $4.700 por 200 g, $5.000 por 220 g, $6.100 por 250 g, $9.400 por 400 g, $10.100 por 420 g, $10.800 por 450 g y $11.800 por 500 g.
+* **Quesos tajados (Doble Crema o Mozzarella):** $4.700 por 200 g, $5.000 por 220 g, $6.100 por 250 g (13 lonchas), $9.400 por 400 g, $10.100 por 420 g, $10.800 por 450 g y $11.800 por 500 g (25 lonchas). La presentación de 2.500 g contiene 113 lonchas.
 
 > **Regla de cotización:** Para cotizar varias unidades, multiplica el precio de la presentación por el número de unidades y muestra un desglose breve. No conviertas kilos, libras o gramos de forma implícita si la cantidad no coincide con una presentación completa: confirma con el cliente cuántas presentaciones desea.
 
