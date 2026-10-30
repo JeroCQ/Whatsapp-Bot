@@ -56,7 +56,7 @@ def downloader(monkeypatch):
     origin_responses = [Response()]
     storage_responses = []
     uploaded = Response()
-    calls = {"origin": [], "storage": [], "post": []}
+    calls = {"origin": [], "storage": [], "post": [], "payloads": []}
 
     def origin(url, **kwargs):
         assert url.startswith("https://chatwoot.example/")
@@ -69,6 +69,10 @@ def downloader(monkeypatch):
 
     def post(url, **kwargs):
         calls["post"].append((url, kwargs))
+        filename, handle, mime = kwargs["data"].fields["file"]
+        data = handle.read()
+        calls["payloads"].append((filename, data, mime))
+        handle.seek(0)
         return uploaded
 
     monkeypatch.setattr(main, "get", origin)
@@ -114,10 +118,16 @@ def pdf_files(monkeypatch, downloader):
 
 
 @pytest.mark.parametrize("business", ["tanaka", "memos", "velvet", "future_brand"])
-def test_pdf_above_old_limit_streams_once_to_own_meta_number(monkeypatch, downloader, pdf_files, capsys, business):
+@pytest.mark.parametrize("mime, filename", [
+    ("application/pdf", "portfolio.pdf"),
+    ("application/vnd.openxmlformats-officedocument.wordprocessingml.document", "portfolio.docx"),
+    ("application/vnd.ms-excel", "prices.xls"),
+    ("application/octet-stream", "opaque.custom"),
+])
+def test_large_documents_share_streaming_path_to_own_meta_number(monkeypatch, downloader, pdf_files, capsys, business, mime, filename):
     f = downloader
     size = 26 * 1024 * 1024
-    source = PdfResponse(size, declared=size)
+    source = PdfResponse(size, declared=size, mime=mime)
     f.origin[:] = [source]
     monkeypatch.setattr(f.main.config, "BUSINESS_ID", business)
     monkeypatch.setattr(f.main.config, "WA_PHONE_NUMBER_ID", business + "-number")
@@ -129,7 +139,8 @@ def test_pdf_above_old_limit_streams_once_to_own_meta_number(monkeypatch, downlo
         encoder = kwargs["data"]
         assert isinstance(encoder, f.main.MultipartEncoder)
         file_name, handle, mime = encoder.fields["file"]
-        assert (file_name, mime) == ("portfolio.pdf", "application/pdf")
+        assert file_name == filename
+        assert mime == source.headers["Content-Type"]
         assert not handle.closed
         expected_hash = hashlib.sha256()
         for chunk in source.iter_content(64 * 1024):
@@ -158,7 +169,7 @@ def test_pdf_above_old_limit_streams_once_to_own_meta_number(monkeypatch, downlo
         return f.uploaded
 
     monkeypatch.setattr(f.main, "post", post)
-    assert f.main.upload_chatwoot_attachment_to_meta("/portfolio.pdf", filename="portfolio.pdf") == "media-test"
+    assert f.main.upload_chatwoot_attachment_to_meta("/portfolio", filename=filename) == "media-test"
     event = diagnostics(capsys)
     assert event["maximum_bytes"] == 100 * 1024 * 1024
     assert event["declared_bytes"] == event["downloaded_bytes"] == size
@@ -207,21 +218,23 @@ def test_pdf_type_can_use_metadata_or_generic_mime_extension(downloader, pdf_fil
     assert pdf_files[0].closed
 
 
-@pytest.mark.parametrize("mime, filename", [("image/jpeg", "misleading.pdf"), ("application/msword", "portfolio.doc")])
-def test_non_pdf_retains_original_attachment_limit(downloader, pdf_files, mime, filename):
+@pytest.mark.parametrize("mime, filename", [("image/jpeg", "misleading.pdf"), ("audio/mpeg", "portfolio.mp3")])
+def test_non_document_retains_configured_input_limit(downloader, pdf_files, mime, filename):
     f = downloader
     f.origin[:] = [PdfResponse(2048, declared=2048, mime=mime)]
     assert f.main.upload_chatwoot_attachment_to_meta("/file", filename=filename) is None
     assert f.calls["post"] == pdf_files == []
 
 
-def test_pdf_extension_cannot_disguise_non_pdf_content(downloader, pdf_files, capsys):
+def test_provider_decides_document_validity_instead_of_a_local_magic_header_gate(downloader, pdf_files, capsys):
     f = downloader
     source = Response(data=b"not a PDF", headers={"Content-Type": "application/octet-stream"})
     f.origin[:] = [source]
+    f.uploaded.status_code = 400
     assert f.main.upload_chatwoot_attachment_to_meta("/portfolio.pdf", filename="portfolio.pdf") is None
-    assert diagnostics(capsys)["reason"] == "attachment_pdf_signature_mismatch"
-    assert source.closed and pdf_files[0].closed and f.calls["post"] == []
+    assert diagnostics(capsys)["reason"] == "attachment_meta_upload_http_error"
+    assert source.closed and pdf_files[0].closed and len(f.calls["post"]) == 1
+    assert f.calls["payloads"] == [("portfolio.pdf", b"not a PDF", "application/pdf")]
 
 
 @pytest.mark.parametrize("failure", ["storage", "meta_transport", "meta_rejected", "expired_window"])
@@ -367,7 +380,7 @@ def test_fourth_storage_redirect_is_not_followed(downloader, capsys):
 def test_oversized_download_is_closed_before_any_meta_upload(downloader, capsys, declared):
     f = downloader
     f.main.config.CHATWOOT_MAX_ATTACHMENT_BYTES = 2
-    large = Response(data=b"abc", headers={"Content-Length": "3"} if declared else {})
+    large = Response(data=b"abc", headers={"Content-Type": "image/png", **({"Content-Length": "3"} if declared else {})})
     f.origin[:] = [large]
     assert f.main.upload_chatwoot_attachment_to_meta("/file") is None
     assert diagnostics(capsys)["reason"] == "attachment_too_large"
@@ -411,7 +424,7 @@ def test_oversized_image_is_prepared_before_the_only_meta_upload(downloader, mon
     monkeypatch.setattr(f.main, "prepare_image_for_whatsapp", prepare)
     assert f.main.upload_chatwoot_attachment_to_meta("/photo.png", filename="photo.png") == "media-test"
     assert prepared == [(original, "image/png")]
-    assert f.calls["post"][0][1]["files"]["file"] == ("photo.jpg", b"small-jpeg", "image/jpeg")
+    assert f.calls["payloads"] == [("photo.jpg", b"small-jpeg", "image/jpeg")]
     assert len(f.calls["post"]) == 1
 
 
@@ -431,7 +444,77 @@ def test_generic_http_mime_uses_attachment_metadata(downloader):
     f = downloader
     f.origin[:] = [Response(headers={"Content-Type": "application/octet-stream"})]
     assert f.main.upload_chatwoot_attachment_to_meta("/video", "video/mp4", "video.mp4") == "media-test"
-    assert f.calls["post"][0][1]["files"]["file"][2] == "video/mp4"
+    assert f.calls["payloads"][0][2] == "video/mp4"
+
+
+def webp_container(size, *, animated):
+    # The relay preserves provider-owned WebP bytes. Container metadata is
+    # sufficient to choose WhatsApp's static/animated size cap, not a decoder.
+    flags = b"\x02" if animated else b"\x00"
+    header = b"RIFF" + (size - 8).to_bytes(4, "little") + b"WEBPVP8X" + (10).to_bytes(4, "little")
+    header += flags + b"\x00" * 9
+    return header + b"\x00" * (size - len(header))
+
+
+@pytest.mark.parametrize("animated,size", [(False, 1024), (True, 125032)])
+def test_sticker_bytes_bypass_photo_conversion_and_keep_sticker_route(
+        downloader, pdf_files, monkeypatch, animated, size):
+    f = downloader
+    sticker = webp_container(size, animated=animated)
+    f.main.config.CHATWOOT_MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024
+    f.origin[:] = [Response(data=sticker, headers={"Content-Type": "image/webp"})]
+    monkeypatch.setattr(f.main, "prepare_image_for_whatsapp", lambda *args: pytest.fail("sticker must not use JPEG/PNG decoder"))
+
+    assert f.main.upload_chatwoot_attachment_to_meta("/sticker.webp", filename="sticker.webp") == "media-test"
+
+    assert f.calls["payloads"] == [("sticker.webp", sticker, "image/webp")]
+    assert f.main.current_trace()["chatwoot_uploaded_media_type"] == "sticker"
+    assert f.main.current_trace()["chatwoot_uploaded_filename"] == "sticker.webp"
+    assert len(f.calls["post"]) == 1 and pdf_files[0].closed
+
+
+@pytest.mark.parametrize("animated,size,cap", [
+    (False, 100 * 1024 + 1, 100 * 1024),
+    (True, 500 * 1024 + 1, 500 * 1024),
+])
+def test_sticker_provider_limit_is_distinct_from_source_limit(downloader, pdf_files, capsys, animated, size, cap):
+    f = downloader
+    f.main.config.CHATWOOT_MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024
+    f.origin[:] = [Response(data=webp_container(size, animated=animated), headers={"Content-Type": "image/webp"})]
+
+    assert f.main.upload_chatwoot_attachment_to_meta("/sticker.webp", filename="sticker.webp") is None
+
+    event = diagnostics(capsys)
+    assert event["reason"] == "attachment_provider_size_exceeded"
+    assert event["media_kind"] == "sticker"
+    assert event["maximum_bytes"] == cap
+    assert f.main.current_trace()["chatwoot_attachment_limit_bytes"] == cap
+    assert f.main.current_trace()["chatwoot_uploaded_media_type"] == ""
+    assert f.calls["post"] == [] and pdf_files[0].closed
+
+
+def test_unsupported_document_type_is_left_to_provider_without_local_allowlist(downloader, capsys):
+    f = downloader
+    raw = b"opaque custom document bytes"
+    f.origin[:] = [Response(data=raw, headers={"Content-Type": "application/x-custom-type"})]
+    f.uploaded.status_code = 400
+    assert f.main.upload_chatwoot_attachment_to_meta("/asset", filename="archive.custom") is None
+    assert f.calls["payloads"] == [("archive.custom", raw, "application/x-custom-type")]
+    assert diagnostics(capsys)["reason"] == "attachment_meta_upload_http_error"
+    assert len(f.calls["post"]) == 1
+
+
+def test_video_provider_limit_is_reported_after_bounded_source_download(downloader, pdf_files, capsys):
+    f = downloader
+    f.main.config.CHATWOOT_MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024
+    size = 16 * 1024 * 1024 + 1
+    f.origin[:] = [PdfResponse(size, declared=size, mime="video/mp4")]
+    assert f.main.upload_chatwoot_attachment_to_meta("/movie.mp4", filename="movie.mp4") is None
+    event = diagnostics(capsys)
+    assert event["reason"] == "attachment_provider_size_exceeded"
+    assert event["maximum_bytes"] == 16 * 1024 * 1024
+    assert event["download_limit_bytes"] == 100 * 1024 * 1024
+    assert f.calls["post"] == [] and pdf_files[0].closed
 
 
 @pytest.fixture

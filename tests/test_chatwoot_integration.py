@@ -498,6 +498,32 @@ def test_human_image_delivery_requires_verified_attachment_and_never_blindly_res
         assert seen["marked"][-1][1] == {"status": "failed", "error": "attachment_not_verified"}
 
 
+@pytest.mark.parametrize("business_id", ["memos", "tanaka", "velvet", "future_brand"])
+@pytest.mark.parametrize("verified", [False, True])
+def test_human_sticker_relay_identifies_type_and_keeps_failures_private(
+        monkeypatch, human_media_delivery, business_id, verified):
+    state, seen = human_media_delivery
+    monkeypatch.setattr(main.config, "BUSINESS_ID", business_id)
+    monkeypatch.setattr(chatwoot_api, "download_meta_media", lambda *a: (b"synthetic-webp", "image/webp"))
+    monkeypatch.setattr(chatwoot_api, "send_media_to_chatwoot",
+        lambda *args, **kwargs: seen["uploads"].append((args, kwargs)) or (Response(200) if verified else None))
+    main.process_whatsapp_message("573001234567", "Cliente sintético", "",
+        media_id="synthetic-sticker", media_type="sticker", mime_type="image/webp",
+        event_id="synthetic-sticker-event", customer_message_received_at=main.datetime.now(main.timezone.utc))
+    assert len(seen["uploads"]) == 1
+    assert "sticker" in seen["uploads"][0][0][1]
+    assert seen["uploads"][0][1]["is_private"] is False
+    assert state["is_paused"] and state["chatwoot_conversation_id"] == 44
+    if verified:
+        assert seen["notes"] == []
+    else:
+        assert len(seen["notes"]) == 1 and seen["notes"][0][1] == {"is_private": True}
+        note = seen["notes"][0][0][1]
+        assert "entrega del sticker" in note
+        assert "entrega del archivo" not in note
+        assert "por escrito" in note
+
+
 def test_human_image_download_failure_preserves_caption_and_reports_missing_attachment(monkeypatch, human_media_delivery):
     state, seen = human_media_delivery
     monkeypatch.setattr(chatwoot_api, "download_meta_media", lambda *args: (None, None))
@@ -854,6 +880,48 @@ def test_public_outgoing_batch_forwards_all_nine_images_in_order_once(
     assert observed["notes"] == []
 
 
+@pytest.mark.parametrize("business_id", ["tanaka", "velvet", "memos", "future_brand"])
+def test_outgoing_webp_uses_sticker_payload_and_preserves_accompanying_text_once(
+        monkeypatch, outgoing_attachment_batch, business_id):
+    event, observed = outgoing_attachment_batch
+    monkeypatch.setattr(main.config, "BUSINESS_ID", business_id)
+    monkeypatch.setattr(main, "get_phone_by_chatwoot_id", lambda *a: "573001234567")
+    event["content"] = "Texto del asesor"
+    event["attachments"] = [
+        {"data_url": f"/rails/sticker-{n}.webp", "content_type": "image/webp", "file_type": "image"}
+        for n in (1, 2)]
+    posts, texts = [], []
+    def upload(*args, **kwargs):
+        main.update_trace(chatwoot_uploaded_media_type="sticker", chatwoot_uploaded_filename="sticker.webp")
+        return "sticker-media"
+    monkeypatch.setattr(main, "upload_chatwoot_attachment_to_meta", upload)
+    monkeypatch.setattr(main, "post", lambda *a, **k: posts.append(k["json"]) or Response(200, {"messages": [{"id": "accepted"}]}))
+    monkeypatch.setattr(main, "send_whatsapp_message", lambda phone, text: texts.append((phone, text)))
+    main.process_chatwoot_event(event, event_id="message_created:91")
+    assert len(posts) == 2
+    assert all(row["type"] == "sticker" and row["sticker"] == {"id": "sticker-media"} for row in posts)
+    assert texts == [("573001234567", "Texto del asesor")]
+    assert observed["statuses"] == [(44, 91, "sent")]
+
+
+def test_outgoing_sticker_failure_note_names_sticker_and_actual_provider_limit(
+        monkeypatch, outgoing_attachment_batch):
+    event, observed = outgoing_attachment_batch
+    event["attachments"] = [{"data_url": "/rails/sticker.webp", "content_type": "image/webp", "file_type": "image"}]
+    def failed_upload(*args, **kwargs):
+        main.update_trace(chatwoot_attachment_error="attachment_provider_size_exceeded",
+                          chatwoot_attachment_limit_bytes=100 * 1024)
+        return None
+    monkeypatch.setattr(main, "upload_chatwoot_attachment_to_meta", failed_upload)
+    with pytest.raises(ProviderError):
+        main.process_chatwoot_event(event, event_id="message_created:91")
+    assert observed["statuses"] == [(44, 91, "failed", "No se pudo entregar el mensaje a WhatsApp")]
+    note = observed["notes"][0]
+    assert note[1] == {"is_private": True}
+    assert "envío a WhatsApp del sticker" in note[0][1]
+    assert "límite de WhatsApp" in note[0][1] and "100 MiB" not in note[0][1]
+
+
 @pytest.mark.parametrize("failure_stage", ["upload", "send"])
 def test_partial_attachment_batch_stays_failed_without_replaying_accepted_image(
         monkeypatch, outgoing_attachment_batch, capsys, failure_stage):
@@ -997,14 +1065,16 @@ def test_chatwoot_wav_is_converted_before_meta_upload(monkeypatch):
     )
 
     def fake_post(url, **kwargs):
-        uploaded.update(files=kwargs["files"], data=kwargs["data"])
+        encoder = kwargs["data"]
+        filename, media_file, mime = encoder.fields["file"]
+        uploaded.update(file=(filename, media_file.read(), mime), product=encoder.fields["messaging_product"])
         return Response(200, {"id": "media-audio"})
 
     monkeypatch.setattr(main, "post", fake_post)
 
     assert main.upload_chatwoot_attachment_to_meta("/voice.wav", filename="voice.wav") == "media-audio"
-    assert uploaded["files"]["file"] == ("voice.mp3", b"mp3", "audio/mpeg")
-    assert uploaded["data"] == {"messaging_product": "whatsapp"}
+    assert uploaded["file"] == ("voice.mp3", b"mp3", "audio/mpeg")
+    assert uploaded["product"] == "whatsapp"
 
 
 def test_attachment_forwarding_failure_is_retriable(monkeypatch):

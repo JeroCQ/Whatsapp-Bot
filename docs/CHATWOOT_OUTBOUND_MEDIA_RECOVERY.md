@@ -1,5 +1,8 @@
 # Adjuntos de asesor: archivo pendiente en Storage y fotos grandes
 
+Actualización vigente del 30 de octubre: [relay genérico de archivos](GENERIC_MEDIA_RELAY.md).
+La ampliación a 100 MiB ahora cubre documentos en general, no solo PDF.
+
 Actualización del 28 de octubre: [PDF de hasta 100 MiB y diagnóstico de Gemini](HEALTHCHECK_2026_10_28.md).
 El registro siguiente describe el cambio del 26 de octubre; la actualización
 posterior añade una dependencia y una configuración opcional para PDF salientes.

@@ -40,6 +40,14 @@ def note_api(monkeypatch):
         iter_content=lambda _size: iter([PNG_BYTES]), close=lambda: None)
 
     def post(url, **kwargs):
+        if isinstance(kwargs.get("data"), module.MultipartEncoder):
+            fields = kwargs["data"].fields
+            name, source, mime = fields["attachments[]"]
+            # Snapshot the bytes while the synchronous HTTP request owns its
+            # stream; production closes that temporary buffer after POST.
+            kwargs["multipart_snapshot"] = {
+                **fields, "attachments[]": (name, source.getvalue(), mime),
+            }
         calls.append((url, kwargs))
         return response
 
@@ -86,14 +94,19 @@ def test_chatwoot_media_distinguishes_customer_attachments_from_private_notes(no
     assert len(calls) == 1
     url, request = calls[0]
     assert url == "https://chatwoot.example/api/v1/accounts/10/conversations/44/messages"
-    assert request["data"] == {
+    assert request["multipart_snapshot"] == {
         "content": "Adjunto de prueba",
         "message_type": "outgoing" if private else "incoming",
         "private": "true" if private else "false",
+        "attachments[]": ("test.png", PNG_BYTES, "image/png"),
     }
-    assert request["files"] == {"attachments[]": ("test.png", PNG_BYTES, "image/png")}
+    assert "files" not in request
+    assert request["data"].fields["attachments[]"][1].closed
     assert request["allow_redirects"] is False
-    assert request["headers"] == {"api_access_token": "test-chatwoot-token"}
+    assert request["headers"] == {
+        "api_access_token": "test-chatwoot-token", "Content-Type": request["data"].content_type,
+        "Content-Length": str(request["data"].len),
+    }
     assert request["timeout"] == api.MEDIA_TIMEOUT
 
 
@@ -111,6 +124,8 @@ def test_delayed_internal_note_does_not_reopen_a_closed_ticket_but_customer_acti
         # excluding private messages. This fake models only that API callback.
         # https://github.com/chatwoot/chatwoot/blob/v4.16.2/app/models/message.rb#L403
         message = kwargs.get("json", kwargs.get("data"))
+        if isinstance(message, api.MultipartEncoder):
+            message = message.fields
         if message["message_type"] == "incoming" and conversation["status"] in {"resolved", "snoozed"}:
             conversation["status"] = "open"
         return original_post(url, **kwargs)

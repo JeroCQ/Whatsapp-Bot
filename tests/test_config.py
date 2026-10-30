@@ -148,7 +148,7 @@ class ChatwootAssignmentConfigTests(TestCase):
             ):
                 config = load_config()
                 self.assertEqual(config.CHATWOOT_MAX_DOCUMENT_BYTES, 100 * 1024 * 1024)
-                self.assertEqual(config.CHATWOOT_MAX_ATTACHMENT_BYTES, 25 * 1024 * 1024)
+                self.assertEqual(config.CHATWOOT_MAX_ATTACHMENT_BYTES, 100 * 1024 * 1024)
 
     def test_pdf_limit_does_not_override_existing_other_media_guard(self):
         env = {**self.CHATWOOT_ENV, "CHATWOOT_MAX_DOCUMENT_BYTES": "52428800",

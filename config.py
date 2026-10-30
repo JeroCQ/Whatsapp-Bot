@@ -67,9 +67,10 @@ class Settings:
     # distinct from an optional account webhook secret. Accept both at the shared
     # callback while keeping each deployment scoped to one account/inbox.
     CHATWOOT_API_INBOX_WEBHOOK_SECRET = os.getenv("CHATWOOT_API_INBOX_WEBHOOK_SECRET")
-    CHATWOOT_MAX_ATTACHMENT_BYTES = int(os.getenv("CHATWOOT_MAX_ATTACHMENT_BYTES", str(25 * 1024 * 1024)))
-    # Outgoing PDF documents have a separate limit; the legacy media/download
-    # guard remains in force for other files and incoming customer attachments.
+    # Bound transport resources without a local decoder/format gate. Explicit
+    # operator limits remain honored; the general default covers large media.
+    CHATWOOT_MAX_ATTACHMENT_BYTES = int(os.getenv("CHATWOOT_MAX_ATTACHMENT_BYTES", str(100 * 1024 * 1024)))
+    # All outgoing documents share this cap, rather than only PDFs.
     CHATWOOT_MAX_DOCUMENT_BYTES = int(os.getenv("CHATWOOT_MAX_DOCUMENT_BYTES", str(100 * 1024 * 1024)))
     APP_ENV = os.getenv("APP_ENV", "production").strip().lower()
 

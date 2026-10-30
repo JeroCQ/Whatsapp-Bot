@@ -88,8 +88,25 @@ def send_image(context):
     return context.api.send_media_to_chatwoot(44, "Imagen de prueba", context.image, "image/png", "test.png")
 
 
+def test_audio_conversion_cannot_wait_forever_or_expose_raw_decoder_errors(media_api, monkeypatch):
+    f = media_api
+    def stalled(command, **kwargs):
+        assert kwargs["timeout"] == 15
+        raise subprocess.TimeoutExpired(command, 15, stderr=b"PRIVATE_DECODER_OUTPUT")
+    monkeypatch.setattr(f.api.subprocess, "run", stalled)
+    with pytest.raises(f.api.MediaValidationError, match="attachment_audio_prepare_timeout") as caught:
+        f.api.prepare_audio_for_delivery(b"synthetic-wav", "audio/wav")
+    assert "PRIVATE_DECODER_OUTPUT" not in str(caught.value)
+
+
+def test_m4a_alias_preserves_bytes_without_conversion_and_uses_meta_mime(media_api, monkeypatch):
+    monkeypatch.setattr(media_api.api.subprocess, "run", lambda *a, **k: pytest.fail("compatible M4A needs no conversion"))
+    original = b"synthetic-m4a"
+    assert media_api.api.prepare_audio_for_delivery(original, "audio/x-m4a") == (original, "audio/mp4", ".m4a")
+
+
 @pytest.mark.parametrize("status", [200, 201])
-def test_valid_image_requires_decodable_source_and_identical_readable_storage_object(media_api, status):
+def test_valid_image_requires_identical_readable_storage_object(media_api, status):
     f = media_api
     f.uploaded.status_code = status
 
@@ -102,7 +119,7 @@ def test_valid_image_requires_decodable_source_and_identical_readable_storage_ob
     assert f.asset.closed
 
 
-def test_valid_jpeg_uses_the_actual_decoder_and_readback_contract(media_api):
+def test_jpeg_is_relayed_unchanged_and_verified_by_readback(media_api):
     f = media_api
     jpeg = subprocess.run(
         [imageio_ffmpeg.get_ffmpeg_exe(), "-hide_banner", "-loglevel", "error", "-i", "pipe:0",
@@ -115,6 +132,154 @@ def test_valid_jpeg_uses_the_actual_decoder_and_readback_contract(media_api):
 
     assert f.api.send_media_to_chatwoot(44, "Imagen de prueba", jpeg, "image/jpeg", "test.jpg") is f.uploaded
     assert f.asset.closed
+
+
+def webp_image(*, animated=False):
+    """Generate valid WebP bytes locally; relay tests must never decode them."""
+    frames = png_image() + (png_image(b"\x00\xff\x00") if animated else b"")
+    return subprocess.run(
+        [imageio_ffmpeg.get_ffmpeg_exe(), "-hide_banner", "-loglevel", "error",
+         "-f", "image2pipe", "-framerate", "2", "-c:v", "png", "-i", "pipe:0",
+         "-frames:v", "2" if animated else "1", "-c:v", "libwebp_anim" if animated else "libwebp",
+         "-f", "webp", "pipe:1"],
+        input=frames, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, timeout=10,
+    ).stdout
+
+
+@pytest.mark.parametrize("business,account", [("tanaka", 10), ("memos", 20), ("velvet", 30), ("future-brand", 40)])
+@pytest.mark.parametrize("kind", ["static_webp", "animated_webp", "pdf", "office", "unknown_image", "binary"])
+def test_meta_media_relay_preserves_every_payload_without_a_decoder_or_format_allowlist(
+        media_api, monkeypatch, business, account, kind):
+    f = media_api
+    fixtures = {
+        "pdf": (b"%PDF-1.7\nSynthetic customer document\n%%EOF", "application/pdf", "portfolio.pdf"),
+        "office": (b"PK\x03\x04Synthetic workbook bytes", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "order.xlsx"),
+        "unknown_image": (b"Synthetic future image format", "image/future-format", "future.img"),
+        "binary": (b"\x00\x01\xffSynthetic arbitrary bytes", "application/octet-stream", "original.bin"),
+    }
+    if kind.endswith("webp"):
+        source = webp_image(animated=kind == "animated_webp")
+        if kind == "animated_webp":
+            assert b"ANIM" in source
+        mime, filename = "image/webp", "sticker.webp"
+    else:
+        source, mime, filename = fixtures[kind]
+    f.api.config.BUSINESS_ID = business
+    f.api.config.CHATWOOT_ACCOUNT_ID = str(account)
+    # Chatwoot is permitted to classify an image as a generic downloadable file.
+    f.attachment.update(account_id=account, content_type=mime, file_type="file", file_size=len(source))
+    f.asset.data = source
+    f.asset.headers = {"Content-Type": "application/octet-stream", "Content-Length": str(len(source))}
+    posted = []
+
+    def post(url, **kwargs):
+        posted.append(kwargs)
+        assert f"/accounts/{account}/" in url
+        assert "files" not in kwargs
+        encoder = kwargs["data"]
+        assert isinstance(encoder, f.api.MultipartEncoder)
+        assert encoder.fields["message_type"] == "incoming"
+        assert encoder.fields["private"] == "false"
+        name, handle, sent_mime = encoder.fields["attachments[]"]
+        assert (name, sent_mime) == (filename, mime)
+        assert not handle.closed
+        assert source in encoder.to_string()
+        return f.uploaded
+
+    monkeypatch.setattr(f.api, "post", post)
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: pytest.fail("incoming relay must not decode or transform media"))
+    assert f.api.send_media_to_chatwoot(44, "Archivo de prueba", source, mime, filename) is f.uploaded
+    assert len(posted) == 1
+    assert posted[0]["data"].fields["attachments[]"][1].closed
+    assert f.asset.closed and f.asset.read
+
+
+def test_large_incoming_document_streams_multipart_without_building_a_second_complete_body(media_api, monkeypatch):
+    import hashlib
+
+    f = media_api
+    source = b"%PDF-1.7\n" + b"0" * (26 * 1024 * 1024)
+    f.api.config.CHATWOOT_MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024
+    f.attachment.update(content_type="application/pdf", file_type="file", file_size=len(source))
+    f.asset.data = source
+    f.asset.headers = {"Content-Type": "application/pdf", "Content-Length": str(len(source))}
+    posted = []
+
+    def post(url, **kwargs):
+        posted.append(kwargs)
+        assert "files" not in kwargs
+        encoder = kwargs["data"]
+        handle = encoder.fields["attachments[]"][1]
+        actual = hashlib.sha256()
+        while chunk := handle.read(64 * 1024):
+            actual.update(chunk)
+        assert actual.digest() == hashlib.sha256(source).digest()
+        handle.seek(0)
+        prepared = requests.Request("POST", url, headers=kwargs["headers"], data=encoder).prepare()
+        assert prepared.body is encoder
+        count = 0
+        while chunk := encoder.read(64 * 1024):
+            assert len(chunk) <= 64 * 1024
+            count += len(chunk)
+        assert count == encoder.len == int(kwargs["headers"]["Content-Length"])
+        return f.uploaded
+
+    monkeypatch.setattr(f.api, "post", post)
+    assert f.api.send_media_to_chatwoot(44, "PDF de prueba", source, "application/pdf", "portfolio.pdf") is f.uploaded
+    assert len(posted) == 1 and posted[0]["data"].fields["attachments[]"][1].closed
+
+
+@pytest.mark.parametrize("field,value,diagnostic", [
+    ("file_type", "file", "metadata_kind_mismatch"),
+    ("content_type", "application/octet-stream", "metadata_mime_mismatch"),
+    ("file_size", 1, "metadata_size_mismatch"),
+    ("file_size", None, "metadata_size_mismatch"),
+])
+def test_classification_mismatch_is_diagnostic_when_original_bytes_are_verified(media_api, capsys, field, value, diagnostic):
+    f = media_api
+    f.attachment[field] = value
+    assert send_image(f) is f.uploaded
+    assert f.asset.read and f.asset.closed
+    assert f'"{diagnostic}": true' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("reported_size", [None, 1])
+def test_missing_or_wrong_metadata_size_never_bypasses_actual_byte_verification(media_api, capsys, reported_size):
+    f = media_api
+    f.attachment["file_size"] = reported_size
+    f.asset.data = b"not the customer's uploaded bytes"
+    assert send_image(f) is None
+    assert f.asset.read and f.asset.closed
+    assert "asset_bytes_mismatch" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("failure", ["transport", "provider_rejection"])
+def test_streamed_incoming_payload_is_closed_on_upload_failure_without_retries(media_api, monkeypatch, failure):
+    f = media_api
+    payloads = []
+    def post(url, **kwargs):
+        payloads.append(kwargs["data"])
+        if failure == "transport":
+            raise requests.ReadTimeout("private signed-url must not be logged")
+        f.uploaded.status_code = 422
+        return f.uploaded
+    monkeypatch.setattr(f.api, "post", post)
+    assert send_image(f) is None
+    assert len(payloads) == 1
+    assert payloads[0].fields["attachments[]"][1].closed
+    assert f.calls["get"] == []
+
+
+@pytest.mark.parametrize("received_mime", [None, "application/octet-stream", "text/html"])
+def test_exact_readback_bytes_are_authoritative_when_storage_mime_differs(media_api, capsys, received_mime):
+    f = media_api
+    if received_mime:
+        f.asset.headers["Content-Type"] = received_mime
+    else:
+        f.asset.headers.pop("Content-Type")
+    assert send_image(f) is f.uploaded
+    assert f.asset.read and f.asset.closed
+    assert '"asset_mime_mismatch": true' in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("business,account", [("tanaka", 10), ("memos", 20), ("velvet", 30), ("future-brand", 40)])
@@ -138,14 +303,10 @@ def test_legacy_metadata_keeps_account_isolation(media_api):
     assert not f.calls["get"]
 
 
-@pytest.mark.parametrize("failure", ["mime", "bytes"])
-def test_legacy_metadata_never_bypasses_actual_content_verification(media_api, failure):
+def test_legacy_metadata_never_bypasses_actual_bytes_verification(media_api):
     f = media_api
     f.attachment.pop("content_type")
-    if failure == "mime":
-        f.asset.headers["Content-Type"] = "text/html"
-    else:
-        f.asset.data = b"<html>not the uploaded object</html>"
+    f.asset.data = b"<html>not the uploaded object</html>"
     assert send_image(f) is None
     assert len(f.calls["post"]) == 1
     assert f.asset.closed
@@ -212,8 +373,8 @@ def test_storage_error_diagnostic_bounds_stream_and_never_echoes_unknown_error()
     assert storage_error_code(LargeError()) == ""
 
 
-@pytest.mark.parametrize("invalid_image", [b"<html>not an image</html>", b"\x89PNG\r\n\x1a\ntruncated", b""])
-def test_invalid_image_is_not_uploaded_even_if_its_mime_claims_png(media_api, invalid_image):
+@pytest.mark.parametrize("invalid_image", [b"", None, "not bytes"])
+def test_empty_or_non_byte_source_is_not_uploaded(media_api, invalid_image):
     f = media_api
     f.image = invalid_image
     assert send_image(f) is None
@@ -256,9 +417,6 @@ def test_failed_message_status_is_not_a_verified_upload(media_api, capsys):
 @pytest.mark.parametrize("field,value,reason", [
     ("message_id", 99, "upload_message_id_mismatch"),
     ("account_id", 11, "upload_account_id_mismatch"),
-    ("file_type", "file", "upload_media_kind_mismatch"),
-    ("content_type", "text/html", "upload_content_type_mismatch"),
-    ("file_size", 1, "upload_size_mismatch"),
 ])
 def test_unexpected_attachment_metadata_is_not_read_or_reuploaded(media_api, capsys, field, value, reason):
     f = media_api
@@ -271,7 +429,6 @@ def test_unexpected_attachment_metadata_is_not_read_or_reuploaded(media_api, cap
 
 @pytest.mark.parametrize("failure,reason", [
     ("404", "asset_http_error"),
-    ("html_type", "asset_content_type_mismatch"),
     ("html_bytes", "asset_bytes_mismatch"),
     ("different_image", "asset_bytes_mismatch"),
     ("large_header", "asset_too_large"),
@@ -281,8 +438,6 @@ def test_unreadable_or_changed_stored_image_fails_without_another_upload(media_a
     f = media_api
     if failure == "404":
         f.asset.status_code = 404
-    elif failure == "html_type":
-        f.asset.headers["Content-Type"] = "text/html"
     elif failure == "html_bytes":
         f.asset.data = b"<html>bad storage response</html>"
     elif failure == "different_image":
