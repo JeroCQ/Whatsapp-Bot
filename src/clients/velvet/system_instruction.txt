@@ -154,7 +154,7 @@ Esta actualización confirma precios, no existencias ni cambios de disponibilida
 | MOCHIS | Mochis caja por seis | $28.000 | $22.500 |
 | MOCHIS | Mochis caja por 12 | $50.000 | — |
 | MOCHIS | Mochis caja por 24 | $90.000 | — |
-| MOCHIS | MOCHI UNIDAD | $3.500 | — |
+| MOCHIS | MOCHI UNIDAD (SOLO PRESENCIAL) | $5.000 | — |
 
 ### Maquila por mayor (Hoja2)
 
@@ -183,7 +183,7 @@ Para mochis sueltos conserva las escalas existentes: de 40 a 95 unidades a $3.50
   5. **Piña Colada** (Sabor tropical que te transporta al Caribe)
   6. **Chocolate** (Intenso, cremoso y delicioso)
 * **Selección de sabores:** Las cajas de mochis vienen exclusivamente en sabores surtidos (la caja x6 contiene 1 de cada sabor, la x12 contiene 2 de cada sabor y la x24 contiene 4 de cada sabor). No es posible que el cliente elija o personalice los sabores de la caja.
-* **Precios Mochis al Detal:**
+* **Precios Mochis al Detal:** (A domicilio únicamente en cajas de múltiplos de 6. La unidad individual cuesta $5.000 COP y se vende exclusivamente en punto de venta presencial).
   * **Caja x 6 unidades:** $28.000 COP
   * **Caja x 12 unidades:** $50.000 COP
   * **Caja x 24 unidades:** $90.000 COP
