@@ -71,16 +71,17 @@ red, de modo que el presupuesto no es una garantía absoluta de tiempo de una
 petición ya en vuelo. Mantener web y RQ del negocio en el mismo SHA; no aumentar
 el timeout RQ ni reabrir automáticamente conversaciones en atención humana.
 
-La corrección de PDF salientes del 28 de octubre añade
-`CHATWOOT_MAX_DOCUMENT_BYTES`: default y máximo 104857600 bytes (100 MiB).
-Aplica a PDF asesor → WhatsApp y tiene precedencia sobre el límite genérico de
-25 MiB para ese tipo de archivo y dirección. Se puede reducir por despliegue;
-el valor existente de `CHATWOOT_MAX_ATTACHMENT_BYTES` sigue aplicando a los
-demás adjuntos y a archivos entrantes. La nueva dependencia fijada
-`requests-toolbelt==1.0.0` transmite multipart por bloques desde un archivo
-temporal; se necesita espacio temporal para cada PDF en curso (hasta 100 MiB
-por operación), pero no un volumen persistente. No modifica documentos ni
-requiere SQL. Es el mismo comportamiento en bootstrap nuevo y base existente.
+La corrección de PDF del 28 de octubre se amplía al
+[relay genérico de archivos](GENERIC_MEDIA_RELAY.md) del 30 de octubre.
+`CHATWOOT_MAX_DOCUMENT_BYTES` conserva default y máximo de 104857600 bytes
+(100 MiB), ahora para todos los documentos salientes. El default genérico de
+`CHATWOOT_MAX_ATTACHMENT_BYTES` pasa de 25 a 100 MiB; si un Railway tiene un valor
+explícito menor, se sigue respetando. No se exige una variable nueva. Los archivos
+salientes usan multipart por bloques y archivo temporal (hasta 100 MiB por
+operación); no hace falta volumen persistente. Se elimina la dependencia de un
+decodificador local para archivos entrantes y se conservan comprobaciones de
+integridad, origen, cuenta e inbox. No modifica documentos ni requiere SQL; es
+el mismo comportamiento en bootstrap nuevo y base existente.
 Consultar [el informe y la verificación del 28 de octubre](HEALTHCHECK_2026_10_28.md)
 antes del despliegue. Los diagnósticos de Gemini ahora distinguen indisponibilidad
 de Google, límites de cuota, tiempo de espera y respuesta con formato inválido.

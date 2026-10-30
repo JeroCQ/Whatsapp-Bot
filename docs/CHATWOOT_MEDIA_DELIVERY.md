@@ -141,9 +141,12 @@ publicado. No se modificó producción.
   para solicitar el contenido por escrito; no se inventa ni se pierde silenciosamente.
 - El helper de conversión deja de adjuntar el Ogg original si falla ffmpeg. El
   conversor usado para audio del asesor hacia WhatsApp sigue disponible.
-- Una imagen debe tener firma y decodificación válidas antes de subirla. La subida
-  exige una respuesta de mensaje/adjunto consistente y la lectura posterior de
-  `data_url` debe devolver el tipo y **los mismos bytes**. La verificación usa HTTPS,
+- Desde la [corrección de relay del 30 de octubre](GENERIC_MEDIA_RELAY.md), un
+  archivo entrante no requiere firma/decodificación de una imagen local. La subida
+  exige una respuesta con IDs de mensaje/adjunto y cuenta consistentes; la lectura
+  posterior de `data_url` debe devolver **los mismos bytes**. Metadatos de MIME,
+  clasificación o tamaño distintos quedan como diagnóstico si el contenido es
+  idéntico. La verificación usa HTTPS,
   límites de tamaño, timeout y redirecciones acotadas, sin enviar credenciales API
   de Chatwoot a los objetos almacenados.
 - Si falla la descarga, subida o lectura del objeto, se registra

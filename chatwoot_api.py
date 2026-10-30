@@ -1,4 +1,5 @@
 import hashlib
+import io
 import json
 import mimetypes
 import re
@@ -6,6 +7,7 @@ import subprocess
 
 import imageio_ffmpeg
 import requests
+from requests_toolbelt.multipart.encoder import MultipartEncoder
 from config import config
 from http_client import MEDIA_TIMEOUT, get, post, put
 from provider_errors import ProviderError, provider_error
@@ -177,27 +179,54 @@ def update_message_status(conversation_id: int, message_id: int, status: str, ex
 
 
 def download_meta_media(media_id: str):
-    """Obtiene un archivo temporal de Meta y devuelve sus bytes y MIME type."""
+    """Download bounded original Meta bytes, preserving their MIME and content."""
     url = f"https://graph.facebook.com/v20.0/{media_id}"
     headers = {"Authorization": f"Bearer {config.WA_TOKEN}"}
-    
+    res = media_res = None
+    maximum = min(getattr(config, "CHATWOOT_MAX_ATTACHMENT_BYTES", 100 * 1024 * 1024), 100 * 1024 * 1024)
     try:
-        # 1. Obtener la URL temporal del archivo
         res = get(url, headers=headers)
         res.raise_for_status()
-        media_url = res.json().get("url")
-        mime_type = res.json().get("mime_type")
+        metadata = res.json()
+        if not isinstance(metadata, dict):
+            raise MediaValidationError("meta_media_metadata_invalid")
+        media_url = metadata.get("url")
+        mime_type = metadata.get("mime_type")
         if not media_url:
-            print(f"[META DEBUG] Meta no devolvió URL para media_id {media_id}")
-            return None, None
+            raise MediaValidationError("meta_media_url_missing")
 
-        # 2. Descargar los bytes (Meta exige Authorization también en esta URL)
-        media_res = get(media_url, headers=headers, timeout=MEDIA_TIMEOUT)
+        # Meta requires Authorization on its temporary media URL as well. Stream
+        # it so a missing or misleading Content-Length cannot allocate an
+        # unbounded eager response before the local size guard is evaluated.
+        media_res = get(media_url, headers=headers, timeout=MEDIA_TIMEOUT, stream=True)
         media_res.raise_for_status()
-        return media_res.content, mime_type or media_res.headers.get("Content-Type")
+        try:
+            declared_size = int(media_res.headers.get("Content-Length", "0") or 0)
+        except (TypeError, ValueError) as error:
+            raise MediaValidationError("meta_media_invalid_length") from error
+        if declared_size < 0 or declared_size > maximum:
+            raise MediaValidationError("meta_media_too_large")
+        with io.BytesIO() as payload:
+            size = 0
+            for chunk in media_res.iter_content(64 * 1024):
+                if not isinstance(chunk, bytes):
+                    raise MediaValidationError("meta_media_invalid_bytes")
+                size += len(chunk)
+                if size > maximum:
+                    raise MediaValidationError("meta_media_too_large")
+                payload.write(chunk)
+            if not size:
+                raise MediaValidationError("meta_media_empty")
+            return payload.getvalue(), mime_type or media_res.headers.get("Content-Type")
     except Exception as e:
         # Request exception text can contain Meta's signed download URL.
-        print(f"[META MEDIA] result=failed reason={type(e).__name__} status={getattr(getattr(e, 'response', None), 'status_code', None)}", flush=True)
+        reason = e.reason if isinstance(e, MediaValidationError) else type(e).__name__
+        print(f"[META MEDIA] result=failed reason={reason} status={getattr(getattr(e, 'response', None), 'status_code', None)}", flush=True)
+    finally:
+        if media_res is not None:
+            media_res.close()
+        if res is not None:
+            res.close()
     return None, None
 
 
@@ -211,14 +240,11 @@ def download_meta_image(media_id: str):
 def send_media_to_chatwoot(conversation_id: int, content: str, media_bytes: bytes, mime_type: str = "application/octet-stream", filename: str = "archivo", is_private: bool = False):
     """Forward customer media as incoming, and internal attachments as private notes."""
     mime_type = content_type(mime_type) or "application/octet-stream"
-    maximum = getattr(config, "CHATWOOT_MAX_ATTACHMENT_BYTES", 25 * 1024 * 1024)
+    maximum = getattr(config, "CHATWOOT_MAX_ATTACHMENT_BYTES", 100 * 1024 * 1024)
     details = {"conversation_id": conversation_id, "media_kind": media_kind(mime_type),
                "byte_size": len(media_bytes) if isinstance(media_bytes, bytes) else 0,
                "verification_phase": "source"}
     url = f"{get_base_url()}/conversations/{conversation_id}/messages"
-    files = {
-        "attachments[]": (filename, media_bytes, mime_type or "application/octet-stream")
-    }
     data = {
         "content": content or "📎 Archivo del cliente",
         "message_type": "outgoing" if is_private else "incoming",
@@ -228,7 +254,16 @@ def send_media_to_chatwoot(conversation_id: int, content: str, media_bytes: byte
     try:
         validate_source_media(media_bytes, mime_type, maximum)
         details["verification_phase"] = "upload"
-        response = post(url, headers=get_multipart_headers(), files=files, data=data, timeout=MEDIA_TIMEOUT, allow_redirects=False)
+        # The source bytes already exist from Meta's download. Stream multipart
+        # from a bounded file-like buffer instead of requests(files=...), which
+        # constructs another complete multipart body in memory.
+        with io.BytesIO(media_bytes) as source:
+            multipart = MultipartEncoder(fields={
+                **data, "attachments[]": (filename, source, mime_type),
+            })
+            headers = {**get_multipart_headers(), "Content-Type": multipart.content_type,
+                       "Content-Length": str(multipart.len)}
+            response = post(url, headers=headers, data=multipart, timeout=MEDIA_TIMEOUT, allow_redirects=False)
         details["provider_status"] = response.status_code
         request_id = response.headers.get("X-Request-Id") or response.headers.get("x-request-id") or ""
         if re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", request_id):
@@ -282,18 +317,22 @@ def prepare_audio_for_delivery(audio_bytes: bytes, mime_type: str) -> tuple[byte
         "audio/aac": ".aac",
     }
     if source_mime in compatible:
-        normalized_mime = "audio/mpeg" if source_mime == "audio/mp3" else source_mime
+        normalized_mime = {"audio/mp3": "audio/mpeg", "audio/x-m4a": "audio/mp4"}.get(source_mime, source_mime)
         return audio_bytes, normalized_mime, compatible[source_mime]
 
     ffmpeg_executable = imageio_ffmpeg.get_ffmpeg_exe()
-    converted = subprocess.run(
-        [ffmpeg_executable, "-hide_banner", "-loglevel", "error", "-i", "pipe:0",
-         "-vn", "-codec:a", "libmp3lame", "-f", "mp3", "pipe:1"],
-        input=audio_bytes,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=True,
-    ).stdout
+    try:
+        converted = subprocess.run(
+            [ffmpeg_executable, "-nostdin", "-hide_banner", "-loglevel", "error", "-i", "pipe:0",
+             "-vn", "-codec:a", "libmp3lame", "-f", "mp3", "pipe:1"],
+            input=audio_bytes,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=15,
+            check=True,
+        ).stdout
+    except subprocess.TimeoutExpired as error:
+        raise MediaValidationError("attachment_audio_prepare_timeout") from error
     if not converted:
         raise ValueError("ffmpeg produced empty audio")
     return converted, "audio/mpeg", ".mp3"

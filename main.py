@@ -73,7 +73,7 @@ from webhook_utils import (
     whatsapp_recipient_fields,
 )
 from chatwoot_security import chatwoot_scope, verify_chatwoot_signature, chatwoot_event_diagnostics
-from chatwoot_media import MediaValidationError, _safe_asset_url, get_media_asset, storage_error_code, prepare_image_for_whatsapp
+from chatwoot_media import MediaValidationError, _safe_asset_url, get_media_asset, storage_error_code, prepare_image_for_whatsapp, whatsapp_media_spec
 from provider_errors import ProviderError, provider_error, provider_transport_error, sanitize_text
 from outage_recovery import find_recoveries
 from catalog_delivery_recovery import find_catalog_recoveries
@@ -199,6 +199,8 @@ def normalize_media_type(file_type: str = None, mime_type: str = None, url: str 
     mime_type = (mime_type or "").lower().split(";")[0]
     url = (url or "").lower()
 
+    if mime_type == "image/webp" or (mime_type in {"", "application/octet-stream"} and urlsplit(url).path.endswith(".webp")):
+        return "sticker"
     if file_type in WHATSAPP_MEDIA_TYPES:
         return file_type
     if mime_type.startswith("audio/") or url.endswith((".ogg", ".oga", ".opus", ".mp3", ".m4a", ".aac", ".wav", ".webm")):
@@ -646,8 +648,10 @@ def upload_chatwoot_attachment_to_meta(attachment_url: str, fallback_mime_type: 
     """Download a Chatwoot attachment and upload it to Meta's temporary media store."""
     diagnostic = {"phase": "chatwoot_download", "host": "", "http_status": None,
                   "storage_error_code": ""}
-    pdf_file = None
-    update_trace(chatwoot_attachment_error="", chatwoot_attachment_limit_bytes=None)
+    media_file = None
+    update_trace(chatwoot_attachment_error="", chatwoot_attachment_limit_bytes=None,
+                 chatwoot_uploaded_media_type="", chatwoot_uploaded_filename="",
+                 chatwoot_attachment_media_type=normalize_media_type(mime_type=fallback_mime_type, url=filename))
     try:
         attachment_url = urljoin(config.CHATWOOT_BASE_URL + "/", attachment_url)
         configured = urlsplit(config.CHATWOOT_BASE_URL)
@@ -698,14 +702,17 @@ def upload_chatwoot_attachment_to_meta(attachment_url: str, fallback_mime_type: 
                         mime_type = (res.headers.get("Content-Type") or fallback_mime_type or "application/octet-stream").split(";")[0].strip().lower()
                         if mime_type == "application/octet-stream" and fallback_mime_type:
                             mime_type = fallback_mime_type.split(";")[0].strip().lower()
-                        if mime_type == "application/octet-stream" and filename.lower().endswith(".pdf"):
-                            mime_type = "application/pdf"
-                        is_pdf = mime_type == "application/pdf"
-                        maximum = (min(config.CHATWOOT_MAX_DOCUMENT_BYTES, 100 * 1024 * 1024)
-                                   if is_pdf else config.CHATWOOT_MAX_ATTACHMENT_BYTES)
-                        update_trace(chatwoot_attachment_limit_bytes=maximum)
-                        diagnostic.update(media_kind="document" if is_pdf else normalize_media_type(mime_type=mime_type, url=filename),
-                                          maximum_bytes=maximum)
+                        source_spec = whatsapp_media_spec(mime_type, filename, 0)
+                        mime_type = source_spec["mime_type"]
+                        source_kind = source_spec["media_type"]
+                        maximum = min(
+                            config.CHATWOOT_MAX_DOCUMENT_BYTES if source_kind == "document"
+                            else config.CHATWOOT_MAX_ATTACHMENT_BYTES,
+                            100 * 1024 * 1024,
+                        )
+                        update_trace(chatwoot_attachment_limit_bytes=maximum, chatwoot_attachment_media_type=source_kind)
+                        diagnostic.update(media_kind=source_kind, maximum_bytes=maximum,
+                                          download_limit_bytes=maximum)
                         try:
                             declared_size = int(res.headers.get("Content-Length", "0") or 0)
                         except (TypeError, ValueError) as error:
@@ -713,35 +720,25 @@ def upload_chatwoot_attachment_to_meta(attachment_url: str, fallback_mime_type: 
                         diagnostic["declared_bytes"] = declared_size
                         if declared_size < 0 or declared_size > maximum:
                             raise MediaValidationError("attachment_too_large")
-                        # PDFs may be larger than photo/audio inputs. Keep their
-                        # bytes on disk throughout download and multipart upload;
-                        # requests(files=...) would rebuild the entire PDF in RAM.
-                        if is_pdf:
-                            pdf_file = tempfile.TemporaryFile(mode="w+b")
+                        # Relay every format using the same bounded disk-backed
+                        # transport. No PDF/image decoder is required to forward
+                        # an original document or sticker unchanged.
+                        media_file = tempfile.TemporaryFile(mode="w+b")
                         download_started = time.monotonic()
-                        chunks = []
                         size = 0
                         for chunk in res.iter_content(64 * 1024):
                             if pending_retries and time.monotonic() >= pending_deadline:
                                 raise MediaValidationError("attachment_pending_upload_timeout")
-                            if is_pdf and time.monotonic() - download_started >= 60:
+                            if time.monotonic() - download_started >= 60:
                                 raise MediaValidationError("attachment_download_timeout")
                             size += len(chunk)
                             diagnostic["downloaded_bytes"] = size
                             if size > maximum:
                                 raise MediaValidationError("attachment_too_large")
-                            if is_pdf:
-                                pdf_file.write(chunk)
-                            else:
-                                chunks.append(chunk)
+                            media_file.write(chunk)
                         if not size:
                             raise MediaValidationError("attachment_empty")
-                        if is_pdf:
-                            pdf_file.seek(0)
-                            if pdf_file.read(5) != b"%PDF-":
-                                raise MediaValidationError("attachment_pdf_signature_mismatch")
-                            pdf_file.seek(0)
-                        media_bytes = b"".join(chunks)
+                        media_file.seek(0)
                         break
                     finally:
                         res.close()
@@ -770,31 +767,51 @@ def upload_chatwoot_attachment_to_meta(attachment_url: str, fallback_mime_type: 
 
         _check_customer_window()
 
-        if not is_pdf and normalize_media_type(mime_type=mime_type, url=filename) == "image":
+        if source_kind == "image" and mime_type in {"image/jpeg", "image/png"}:
             diagnostic["phase"] = "image_prepare"
+            media_bytes = media_file.read()
             media_bytes, mime_type, extension = prepare_image_for_whatsapp(media_bytes, mime_type)
             filename = f"{os.path.splitext(filename)[0] or 'imagen'}{extension}"
             diagnostic["prepared_bytes"] = len(media_bytes)
+            media_file.seek(0)
+            media_file.write(media_bytes)
+            media_file.truncate()
+            size = len(media_bytes)
+            del media_bytes
 
         # Meta rejects some containers produced by Chatwoot, including WAV.
-        if not is_pdf and normalize_media_type(mime_type=mime_type, url=filename) == "audio":
+        if source_kind == "audio":
+            media_bytes = media_file.read()
             media_bytes, mime_type, extension = chatwoot_api.prepare_audio_for_delivery(media_bytes, mime_type)
             filename = f"{os.path.splitext(filename)[0] or 'audio'}{extension}"
+            media_file.seek(0)
+            media_file.write(media_bytes)
+            media_file.truncate()
+            size = len(media_bytes)
+            diagnostic["prepared_bytes"] = size
+            del media_bytes
+
+        media_file.seek(0)
+        prefix = media_file.read(64 * 1024)
+        media_file.seek(0)
+        # Record the actual provider cap before checking size so the private
+        # advisor message cannot confuse a sticker limit with a document limit.
+        final_spec = whatsapp_media_spec(mime_type, filename, 0, prefix=prefix)
+        diagnostic.update(media_kind=final_spec["media_type"], maximum_bytes=final_spec["maximum_bytes"])
+        update_trace(chatwoot_attachment_limit_bytes=final_spec["maximum_bytes"],
+                     chatwoot_attachment_media_type=final_spec["media_type"])
+        whatsapp_media_spec(mime_type, filename, size, prefix=prefix)
+        mime_type = final_spec["mime_type"]
 
         diagnostic.update(phase="meta_upload", host="graph.facebook.com", http_status=None)
         _check_customer_window()
         url = f"https://graph.facebook.com/v20.0/{config.WA_PHONE_NUMBER_ID}/media"
         headers = {"Authorization": f"Bearer {config.WA_TOKEN}"}
-        if is_pdf:
-            multipart = MultipartEncoder(fields={
-                "messaging_product": "whatsapp", "file": (filename, pdf_file, mime_type),
-            })
-            headers.update({"Content-Type": multipart.content_type, "Content-Length": str(multipart.len)})
-            response = post(url, headers=headers, data=multipart, timeout=MEDIA_TIMEOUT, allow_redirects=False)
-        else:
-            files = {"file": (filename, media_bytes, mime_type)}
-            data = {"messaging_product": "whatsapp"}
-            response = post(url, headers=headers, files=files, data=data, timeout=MEDIA_TIMEOUT, allow_redirects=False)
+        multipart = MultipartEncoder(fields={
+            "messaging_product": "whatsapp", "file": (filename, media_file, mime_type),
+        })
+        headers.update({"Content-Type": multipart.content_type, "Content-Length": str(multipart.len)})
+        response = post(url, headers=headers, data=multipart, timeout=MEDIA_TIMEOUT, allow_redirects=False)
         try:
             diagnostic["http_status"] = response.status_code
             if response.status_code not in {200, 201}:
@@ -808,6 +825,7 @@ def upload_chatwoot_attachment_to_meta(attachment_url: str, fallback_mime_type: 
                 raise MediaValidationError("attachment_meta_upload_missing_id")
         finally:
             response.close()
+        update_trace(chatwoot_uploaded_media_type=final_spec["media_type"], chatwoot_uploaded_filename=filename)
         print(f"[CHATWOOT ATTACHMENT] {json.dumps({**diagnostic, 'result': 'uploaded', 'reason': 'meta_media_created'}, sort_keys=True)}", flush=True)
         return media_id
     except MediaValidationError as error:
@@ -818,8 +836,8 @@ def upload_chatwoot_attachment_to_meta(attachment_url: str, fallback_mime_type: 
         diagnostic["error_type"] = type(error).__name__
         reason = "attachment_processing_error"
     finally:
-        if pdf_file is not None:
-            pdf_file.close()
+        if media_file is not None:
+            media_file.close()
     update_trace(chatwoot_attachment_error=reason)
     print(f"[CHATWOOT ATTACHMENT] {json.dumps({**diagnostic, 'result': 'failed', 'reason': reason}, sort_keys=True)}", flush=True)
     return None
@@ -831,10 +849,15 @@ def _report_chatwoot_media_failure(phone, conversation_id, media_type, reason):
                       reason=reason, result="manual_review", conversation_id=conversation_id,
                       media_type=media_type)
     save_message_log(phone, "system", f"ERROR entregando adjunto a Chatwoot: tipo={media_type}; motivo={reason}.")
-    label = {"image": "la imagen", "audio": "la transcripción de la nota de voz"}.get(media_type, "el archivo")
+    label = {"sticker": "del sticker", "image": "de la imagen", "video": "del video",
+             "audio": "de la transcripción de la nota de voz", "document": "del documento"}.get(media_type, "del archivo")
+    next_step = ("El chat continúa en atención humana. Si el sticker era necesario para entender el mensaje, "
+                 "pide al cliente que te explique su contenido por escrito."
+                 if media_type == "sticker" else
+                 "Este contenido sigue pendiente de revisión; solicita al cliente que lo envíe de nuevo si no puedes abrirlo.")
     chatwoot_api.send_message_to_chatwoot(conversation_id,
-        f"⚠️ No se pudo confirmar la entrega de {label} que envió el cliente. "
-        "Este contenido sigue pendiente de revisión; solicita al cliente que lo envíe de nuevo si no puedes abrirlo.",
+        f"⚠️ No se pudo confirmar la entrega {label} que envió el cliente. "
+        + next_step,
         is_private=True)
     return {"status": "delivery_failed", "reason": reason}
 
@@ -1352,6 +1375,8 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
                 label = "🎙️ El usuario envió una nota de voz"
             elif effective_media_type == "video":
                 label = "🎥 El usuario envió un video"
+            elif effective_media_type == "sticker":
+                label = "🙂 El usuario envió un sticker"
             texto_chatwoot = f"{label}: {message_body}" if message_body else label
             if file_bytes:
                 delivered = chatwoot_api.send_media_to_chatwoot(conv_id, texto_chatwoot, file_bytes, final_mime_type, final_filename, is_private=False)
@@ -1532,17 +1557,23 @@ def _notify_advisor_attachment_failure(conversation_id, message_id, error):
         "attachment_pending_upload_timeout": "El archivo no terminó de estar disponible en el almacenamiento dentro del tiempo de espera.",
         "attachment_meta_upload_http_error": "WhatsApp rechazó la subida del archivo; revisa su tamaño y formato.",
         "attachment_image_format_unsupported": "La imagen debe estar en formato JPEG o PNG.",
-        "attachment_too_large": "El archivo supera el tamaño admitido por esta integración.",
-        "attachment_pdf_signature_mismatch": "El contenido del archivo no se reconoce como PDF; exporta el documento nuevamente.",
-        "attachment_download_timeout": "La descarga del PDF agotó el tiempo de espera.",
+        "attachment_too_large": "El archivo supera el tamaño configurado para la transferencia.",
+        "attachment_provider_size_exceeded": "El archivo supera el límite de WhatsApp para este tipo de adjunto.",
+        "attachment_download_timeout": "La descarga del archivo agotó el tiempo de espera.",
+        "attachment_audio_prepare_timeout": "La preparación del audio para WhatsApp agotó el tiempo de espera.",
     }
     detail = explanations.get(reason, "El envío necesita revisión; no hay confirmación de entrega.")
     maximum = current_trace().get("chatwoot_attachment_limit_bytes")
-    if reason == "attachment_too_large" and isinstance(maximum, int) and maximum > 0:
-        detail = f"El archivo supera el límite configurado de {maximum / (1024 * 1024):g} MiB para este tipo de adjunto."
+    if reason in {"attachment_too_large", "attachment_provider_size_exceeded"} and isinstance(maximum, int) and maximum > 0:
+        boundary = "de WhatsApp" if reason == "attachment_provider_size_exceeded" else "configurado para la transferencia"
+        size_label = f"{maximum / 1024:g} KiB" if maximum < 1024 * 1024 else f"{maximum / (1024 * 1024):g} MiB"
+        detail = f"El archivo supera el límite {boundary} de {size_label} para este tipo de adjunto."
+    label = {"sticker": "del sticker", "image": "de la imagen", "video": "del video",
+             "audio": "del audio", "document": "del documento"}.get(
+                 current_trace().get("chatwoot_attachment_media_type"), "del adjunto")
     chatwoot_api.send_message_to_chatwoot(
         conversation_id,
-        f"⚠️ No se confirmó el envío a WhatsApp del adjunto del mensaje #{message_id}. {detail}\n"
+        f"⚠️ No se confirmó el envío a WhatsApp {label} del mensaje #{message_id}. {detail}\n"
         "El botón Reintentar de Chatwoot no confirma un nuevo envío por esta integración. "
         "Revisa el fallo antes de volver a enviarlo como un mensaje nuevo para evitar duplicados.",
         is_private=True,
@@ -1550,7 +1581,8 @@ def _notify_advisor_attachment_failure(conversation_id, message_id, error):
 
 
 def process_chatwoot_event(data: dict, event_id: str = None):
-    with message_trace(source="human", source_event_id=event_id or "", job_id=_current_job_id(), inbound_message_ids=[]):
+    with message_trace(source="human", source_event_id=event_id or "", job_id=_current_job_id(),
+                       inbound_message_ids=[], chatwoot_attachment_media_type=""):
         return _process_chatwoot_event_untraced(data, event_id)
 
 
@@ -1614,11 +1646,14 @@ def _process_chatwoot_event_untraced(data: dict, event_id: str = None):
                     ):
                         raise ProviderError("chatwoot", "forward_attachment", None,
                                             message="attachment_original_url_missing", confirmed_not_sent=True)
+                    caption_forwarded = False
                     for attachment in attachments:
                         data_url = _attachment_url(attachment)
                         attachment_mime = attachment.get("content_type") or attachment.get("mime_type") or "application/octet-stream"
                         attachment_filename = _attachment_filename(attachment)
                         whatsapp_media_type = normalize_media_type(attachment.get("file_type"), attachment_mime, data_url)
+                        update_trace(chatwoot_uploaded_media_type=None, chatwoot_uploaded_filename=None,
+                                     chatwoot_attachment_media_type=whatsapp_media_type)
                         meta_media_id = upload_chatwoot_attachment_to_meta(
                             data_url, attachment_mime, attachment_filename,
                             attachment_created_at=data.get("created_at"),
@@ -1626,7 +1661,15 @@ def _process_chatwoot_event_untraced(data: dict, event_id: str = None):
                         if not meta_media_id:
                             raise ProviderError("chatwoot", "forward_attachment", None,
                                                 message=current_trace().get("chatwoot_attachment_error") or "attachment upload failed")
+                        uploaded = current_trace()
+                        whatsapp_media_type = uploaded.get("chatwoot_uploaded_media_type") or whatsapp_media_type
+                        attachment_filename = uploaded.get("chatwoot_uploaded_filename") or attachment_filename
                         send_whatsapp_media(phone, meta_media_id, whatsapp_media_type, content, attachment_filename)
+                        caption_forwarded = caption_forwarded or whatsapp_media_type in {"document", "image", "video"}
+                    # WhatsApp has no caption field for audio or stickers. Keep
+                    # the advisor's accompanying text once for those batches.
+                    if content and not caption_forwarded:
+                        send_whatsapp_message(phone, content)
                 if content and not attachments and not catalog_command:
                     send_whatsapp_message(phone, content)
                 if not catalog_command:
