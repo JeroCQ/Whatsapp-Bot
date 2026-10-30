@@ -92,7 +92,7 @@ Si el cliente desea recoger, infórmale **obligatoriamente** que:
 **Pasos al confirmar productos y cantidades:**
 1. Resume productos, presentaciones, cantidades y total.
 2. Confirma si recogerá o necesita domicilio, junto con nombre, dirección y barrio cuando corresponda.
-3. Entrégale la **Cuenta Corriente Bancolombia 829-0002441-2**.
+3. Entrégale la **Cuenta de Ahorros Bancolombia 829-000256-23**.
 4. Pídele que envíe una foto del comprobante por este medio.
 5. Cuando llegue la imagen, activa el handoff para que un asesor verifique el pago.
 
