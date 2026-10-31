@@ -974,6 +974,34 @@ def _create_handoff_ticket_if_needed(sender_phone: str, sender_name: str, new_st
     return {"status": "created", "conversation_id": conv_id}
 
 
+def _sync_handoff_reply_context(handoff, reply):
+    """Add the post-creation reply to the advisor's private handoff context."""
+    if (not isinstance(handoff, dict) or handoff.get("status") != "created"
+            or not handoff.get("conversation_id") or not reply):
+        return
+    conversation_id = handoff["conversation_id"]
+    note = (
+        "**Continuación del resumen de handoff**\n"
+        "**Último mensaje del bot al cliente:**\n"
+        f"{reply}\n\n"
+        "WhatsApp aceptó el envío de este mensaje; todavía no se confirma su recepción en el dispositivo del cliente."
+    )
+    result = "not_confirmed"
+    try:
+        response = chatwoot_api.send_message_to_chatwoot(conversation_id, note, is_private=True)
+        if response is not None:
+            result = "context_added"
+    except Exception:
+        # A context-only failure must not replay the accepted Meta message or
+        # produce a second customer-facing fallback through recovery.
+        result = "context_error"
+    try:
+        operational_event("HANDOFF_REPLY_CONTEXT", phone="", stage="HANDOFF",
+                          reason="last_bot_reply", result=result, conversation_id=conversation_id)
+    except Exception:
+        pass
+
+
 def _schedule_handoff_retry(phone, request):
     if request and request.get("status") == "pending" and queue_enabled():
         try:
@@ -1430,6 +1458,7 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
     if ai_turn:
         # Creating the case precedes any assertion to the customer that an
         # advisor was notified. A catalog never overrides this paused state.
+        handoff = None
         initial_state = get_or_create_customer_state(sender_phone)
         if initial_state and initial_state.get("is_paused"):
             handoff = _create_handoff_ticket_if_needed(sender_phone, sender_name, initial_state,
@@ -1451,6 +1480,7 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
         if ai_turn.response:
             send_whatsapp_message(sender_phone, ai_turn.response)
             save_message_log(sender_phone, "model", ai_turn.response)
+            _sync_handoff_reply_context(handoff, ai_turn.response)
             primary_delivered = True
         if not ai_turn.send_files_before_response:
             for file_id in ai_turn.requested_files:
@@ -1475,16 +1505,11 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
                 f"Archivos afectados: {', '.join(failed_files)}. Un asesor debe enviarlo manualmente."
             )
             pause_bot_for_handoff(sender_phone, reason)
+            file_failure_reply = "Perdón, no pude adjuntar el catálogo. Se necesita revisión del equipo para enviártelo manualmente."
             try:
-                send_whatsapp_message(
-                    sender_phone,
-                    "Perdón, no pude adjuntar el catálogo. Se necesita revisión del equipo para enviártelo manualmente.",
-                )
-                save_message_log(
-                    sender_phone,
-                    "model",
-                    "Perdón, no pude adjuntar el catálogo. Se necesita revisión del equipo para enviártelo manualmente.",
-                )
+                send_whatsapp_message(sender_phone, file_failure_reply)
+                save_message_log(sender_phone, "model", file_failure_reply)
+                _sync_handoff_reply_context(handoff, file_failure_reply)
             except Exception as exc:
                 print(f"[FILE DELIVERY ERROR] Could not send customer fallback: {sanitize_text(exc, (config.WA_TOKEN,))}")
         new_state = get_or_create_customer_state(sender_phone)

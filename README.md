@@ -7,6 +7,10 @@ en una **nota privada** y copia el comando del archivo elegido. Funciona igual
 para cada negocio y evita volver a cargar el PDF desde el celular. Consulta
 [la guía de comandos del asesor](docs/CHATWOOT_ADVISOR_FILES.md).
 
+El [contexto del handoff](docs/HANDOFF_CONVERSATION_CONTEXT.md) incluye una nota
+privada de continuidad con la última respuesta del bot aceptada por WhatsApp,
+para que el asesor vea cómo quedó la conversación.
+
 Future planning: [Gemini → OpenAI fallback activation plan](docs/MODEL_FALLBACK_ACTIVATION_PLAN.md).
 This is documentation only: merging it does not activate OpenAI or require a new API key,
 environment variable, database migration, or manual setup.
