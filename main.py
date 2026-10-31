@@ -77,7 +77,7 @@ from chatwoot_media import MediaValidationError, _safe_asset_url, get_media_asse
 from provider_errors import ProviderError, provider_error, provider_transport_error, sanitize_text
 from outage_recovery import find_recoveries
 from catalog_delivery_recovery import find_catalog_recoveries
-from file_catalog import advisor_catalog_command
+from file_catalog import advisor_file_command, advisor_file_notes
 from dashboard_api import admin_auth, router as dashboard_router, validate_deployment_client
 
 app = FastAPI()
@@ -1580,6 +1580,92 @@ def _notify_advisor_attachment_failure(conversation_id, message_id, error):
     )
 
 
+def _handle_advisor_file_command(data: dict, conversation_id) -> bool:
+    """Handle explicit file controls without leaking commands into WhatsApp."""
+    command = advisor_file_command(data.get("content"))
+    if command is None:
+        return False
+    is_private = _chatwoot_flag(data.get("private"), default=False)
+    sender = data.get("sender") if isinstance(data.get("sender"), dict) else {}
+    if is_private and str(sender.get("type") or "").lower() != "user":
+        return False
+    action, catalog_id = command
+    accepted = False
+    result = "failed"
+    explanation = "No se pudo consultar los archivos. Intenta /archivos de nuevo en un momento."
+    notes = []
+    try:
+        if action == "help" or data.get("attachments"):
+            notes = ["Usa /archivos para ver la lista y copia /catalogo ID_DEL_ARCHIVO en una nueva nota privada, sin adjuntos."]
+            result = "usage"
+        else:
+            from bot import refresh_managed_catalogs
+
+            catalog = dict(refresh_managed_catalogs(strict=True))
+            if action == "list":
+                notes = advisor_file_notes(catalog)
+                result = "listed"
+            elif catalog_id not in catalog:
+                notes = ["Ese archivo no está disponible en este negocio. Escribe /archivos para consultar la lista actual."]
+                result = "unavailable"
+            else:
+                explanation = "No se pudo identificar al cliente de esta conversación. El archivo no se envió."
+                phone = get_phone_by_chatwoot_id(conversation_id) if conversation_id else None
+                if not phone:
+                    notes = [explanation]
+                    result = "conversation_not_mapped"
+                else:
+                    inbound = next((row for row in reversed(get_message_logs(phone, limit=50))
+                                    if row.get("role") == "user"), {})
+                    original = parse_timestamp((inbound.get("metadata") or {}).get("received_at"))
+                    expiry = (original + timedelta(hours=24)).isoformat() if original else ""
+                    update_trace(meta_window_expires_at=expiry)
+                    if not meta_window_is_open(expiry):
+                        notes = ["No se envió el archivo: no hay una ventana de WhatsApp vigente y verificable. "
+                                 "El cliente debe volver a escribir para poder enviarlo."]
+                        result = "window_closed"
+                    else:
+                        explanation = ("No se confirmó el envío del archivo a WhatsApp. Revisa el fallo antes de "
+                                       "crear otro comando para evitar duplicados. El chat sigue con atención humana.")
+                        invalidate_follow_up(phone)
+                        pause_bot_for_human_activity(phone, conversation_id)
+                        _check_customer_window()
+                        delivered, technical_error = deliver_presaved_file(phone, catalog_id)
+                        if not delivered:
+                            raise ProviderError("meta", "advisor_catalog_command", None,
+                                                message=technical_error or "catalog_delivery_not_confirmed")
+                        # Set this before local logging/feedback: those failures
+                        # must never trigger another customer-facing media POST.
+                        accepted = True
+                        result = "provider_accepted"
+                        name = " ".join((catalog[catalog_id].default_caption or catalog[catalog_id].filename
+                                         or catalog_id).split())[:160]
+                        notes = [f"📎 WhatsApp aceptó el archivo «{name}». Esto no confirma aún su recepción en el dispositivo del cliente."]
+                        save_message_log(phone, "asesor", f"Catálogo enviado por asesor: {catalog_id}")
+    except Exception as exc:
+        if not accepted:
+            notes = [explanation]
+        print(f"[ADVISOR FILE COMMAND] action={action} result={result} error={type(exc).__name__}")
+
+    # Feedback is best-effort and independent of delivery. A lost note must not
+    # replay an already accepted send or mark it as failed.
+    for note in notes:
+        try:
+            chatwoot_api.send_message_to_chatwoot(conversation_id, note, is_private=True)
+        except Exception as exc:
+            print(f"[ADVISOR FILE COMMAND] feedback_failed error={type(exc).__name__}")
+    if not is_private:
+        status = "sent" if result in {"listed", "usage", "provider_accepted"} else "failed"
+        if status == "sent":
+            chatwoot_api.update_message_status(conversation_id, data.get("id"), status)
+        else:
+            chatwoot_api.update_message_status(conversation_id, data.get("id"), status,
+                                              "Revisa la nota privada del comando")
+    operational_event("ADVISOR_FILE_COMMAND", phone="", stage="CHATWOOT_COMMAND",
+                      reason=action, result=result, conversation_id=conversation_id, catalog_id=catalog_id or "")
+    return True
+
+
 def process_chatwoot_event(data: dict, event_id: str = None):
     with message_trace(source="human", source_event_id=event_id or "", job_id=_current_job_id(),
                        inbound_message_ids=[], chatwoot_attachment_media_type=""):
@@ -1612,7 +1698,10 @@ def _process_chatwoot_event_untraced(data: dict, event_id: str = None):
         is_private = _chatwoot_flag(data.get("private"), default=False)
         message_id = data.get("id") if event == "message_created" else None
         is_public_outgoing = event == "message_created" and message_type == "outgoing" and not is_private
-        if is_public_outgoing:
+        if (event == "message_created" and message_type == "outgoing"
+                and _handle_advisor_file_command(data, event_conv_id)):
+            pass
+        elif is_public_outgoing:
             conv_id = event_conv_id
             content = data.get("content")
             attachments = data.get("attachments")
@@ -1625,19 +1714,7 @@ def _process_chatwoot_event_untraced(data: dict, event_id: str = None):
                 update_trace(meta_window_expires_at=(original + timedelta(hours=24)).isoformat() if original else "")
                 operational_event("FOLLOW_UP_CANCELLED", phone=phone, stage="ACTIVE",
                                   reason="advisor_intervened", result="invalidated")
-                catalog_command = advisor_catalog_command(content) if not attachments else None
-                if catalog_command:
-                    from bot import refresh_managed_catalogs
-
-                    refresh_managed_catalogs()
-                    delivered, technical_error = deliver_presaved_file(phone, catalog_command)
-                    if not delivered:
-                        raise ProviderError(
-                            "whatsapp", "advisor_catalog_command", None,
-                            message=technical_error or f"catalog unavailable: {catalog_command}",
-                        )
-                    save_message_log(phone, "asesor", f"Catálogo enviado por asesor: {catalog_command}")
-                elif attachments:
+                if attachments:
                     # Validate all original links before contacting Meta, so a
                     # missing later file cannot silently complete a partial send.
                     if not isinstance(attachments, list) or any(
@@ -1670,10 +1747,9 @@ def _process_chatwoot_event_untraced(data: dict, event_id: str = None):
                     # the advisor's accompanying text once for those batches.
                     if content and not caption_forwarded:
                         send_whatsapp_message(phone, content)
-                if content and not attachments and not catalog_command:
+                if content and not attachments:
                     send_whatsapp_message(phone, content)
-                if not catalog_command:
-                    save_message_log(phone, "asesor", content or "[Adjunto enviado por asesor]")
+                save_message_log(phone, "asesor", content or "[Adjunto enviado por asesor]")
                 # Meta's synchronous response acknowledges acceptance. It does
                 # not prove that the customer's device received the message.
                 chatwoot_api.update_message_status(conv_id, message_id, "sent")

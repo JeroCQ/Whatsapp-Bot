@@ -8,7 +8,7 @@ from observability import message_metadata, message_event_key
 supabase: Client = create_client(config.SUPABASE_URL, config.SUPABASE_KEY)
 
 
-def get_catalog_assets():
+def get_catalog_assets(*, raise_on_error=False):
     """Return this isolated deployment's active dashboard-managed catalogs."""
     try:
         return (
@@ -21,6 +21,8 @@ def get_catalog_assets():
             or []
         )
     except Exception:
+        if raise_on_error:
+            raise
         # Rolling upgrades keep the legacy Railway catalog working until the
         # canonical existing-brand SQL has been applied.
         return []

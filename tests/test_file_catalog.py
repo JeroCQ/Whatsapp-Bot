@@ -3,6 +3,7 @@ import unittest
 from file_catalog import (
     PresavedFile,
     advisor_catalog_command,
+    advisor_file_notes,
     catalog_prompt,
     catalogs_for_customer_request,
     extend_system_instruction,
@@ -18,6 +19,28 @@ def test_advisor_catalog_command_accepts_only_exact_catalog_ids():
     assert advisor_catalog_command(" /CATALOGO catalogo_ingredientes ") == "catalogo_ingredientes"
     assert advisor_catalog_command("envía catalogo_portafolio") is None
     assert advisor_catalog_command("/catalogo https://example.com/file.pdf") is None
+
+
+def test_advisor_list_keeps_all_managed_files_in_bounded_private_notes():
+    catalog = {
+        f"catalogo_producto_{index}": PresavedFile(
+            f"catalogo_producto_{index}", "Descripción", "document",
+            link="https://private-storage.example/file?signature=must-not-appear",
+            media_id="must-not-appear", default_caption=f"Producto {index}",
+        )
+        for index in range(45)
+    }
+    catalog["unsupported-command-id"] = PresavedFile("unsupported-command-id", "Oculto", "document")
+
+    notes = advisor_file_notes(catalog)
+
+    assert len(notes) == 3
+    assert all(len(note) < 7000 for note in notes)
+    for file_id in catalog:
+        if file_id.startswith("catalogo_"):
+            assert sum(f"/catalogo {file_id}\n" in note for note in notes) == 1
+    assert "must-not-appear" not in "\n".join(notes)
+    assert "unsupported-command-id" not in "\n".join(notes)
 
 
 def test_managed_catalog_without_file_is_not_exposed_to_ai():

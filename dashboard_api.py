@@ -1384,9 +1384,14 @@ def enrich_catalog_row(row: dict, client_name: str, storage: CatalogStorageAdapt
             size_bytes=None,
             has_file=False,
             file_status="pending_upload",
+            chatwoot_command=None,
         )
         return result
-    result.update(has_file=True, file_status="ready")
+    result.update(
+        has_file=True,
+        file_status="ready",
+        chatwoot_command=f"/catalogo {result['catalog_id']}",
+    )
     try:
         stored = storage.metadata(client_name, result["catalog_id"])
     except HTTPException as exc:
@@ -1454,7 +1459,7 @@ def create_catalog(metadata: CatalogMetadata, client_name: str = Query(min_lengt
             "Catalog metadata created; file upload still required: client=%s catalog_id=%s",
             client_name, metadata.catalog_id,
         )
-        return {**created, "has_file": False, "file_status": "pending_upload"}
+        return {**created, "has_file": False, "file_status": "pending_upload", "chatwoot_command": None}
     except Exception as exc:
         raise HTTPException(409, "El nombre de backend ya existe para este negocio") from exc
 
