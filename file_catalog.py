@@ -31,6 +31,42 @@ def advisor_catalog_command(text: str | None) -> str | None:
     return match.group(1).lower() if match else None
 
 
+def advisor_file_command(text: str | None) -> tuple[str, str | None] | None:
+    """Reserve internal file commands, including typos in their arguments."""
+    if not isinstance(text, str):
+        return None
+    match = re.match(r"^\s*/(archivos|catalogo)(?=\s|$)", text, re.IGNORECASE)
+    if not match:
+        return None
+    catalog_id = advisor_catalog_command(text)
+    if catalog_id:
+        return "send", catalog_id
+    if not text[match.end():].strip():
+        return "list", None
+    return "help", None
+
+
+def advisor_file_notes(catalog: dict[str, "PresavedFile"]) -> list[str]:
+    """Build bounded private lists without exposing storage links or media IDs."""
+    entries = []
+    for file_id, item in catalog.items():
+        if advisor_catalog_command(f"/catalogo {file_id}") != file_id:
+            continue
+        name = " ".join((item.default_caption or item.filename or file_id).split())[:160]
+        entries.append(f"• {name}\n/catalogo {file_id}")
+    if not entries:
+        return ["No hay archivos disponibles para enviar. Completa la carga en Lovable y vuelve a escribir /archivos."]
+    # Keep each Chatwoot note small even when a business adds many files.
+    batches = [entries[index:index + 20] for index in range(0, len(entries), 20)]
+    return [
+        f"Archivos disponibles ({index}/{len(batches)}):\n\n" + "\n\n".join(batch)
+        + "\n\nPara enviar uno, copia su comando en una nueva nota privada. "
+          "El cliente recibe el archivo; los comandos y esta lista quedan internos. "
+          "Escribe /archivos de nuevo después de actualizar Lovable."
+        for index, batch in enumerate(batches, 1)
+    ]
+
+
 def last_delivered_file(history: list[dict], available_ids: set[str]) -> str | None:
     """Find the most recently logged successful file that is still available."""
     marker = "Archivos enviados:"

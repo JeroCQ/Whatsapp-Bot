@@ -748,17 +748,22 @@ def test_agent_text_forwarding_is_scoped(monkeypatch):
 
 
 def test_agent_catalog_command_bypasses_chatwoot_attachment_upload(monkeypatch):
+    from file_catalog import PresavedFile
+
     event = payload()
     event["content"] = "/catalogo catalogo_portafolio"
     delivered = []
     logs = []
     monkeypatch.setattr(main, "get_phone_by_chatwoot_id", lambda _value: "57300")
-    monkeypatch.setattr(fake_bot, "refresh_managed_catalogs", lambda: None, raising=False)
+    monkeypatch.setattr(fake_bot, "refresh_managed_catalogs", lambda **kwargs: {
+        "catalogo_portafolio": PresavedFile("catalogo_portafolio", "Portafolio", "document")
+    }, raising=False)
     monkeypatch.setattr(main, "deliver_presaved_file", lambda *args: delivered.append(args) or (True, None))
     monkeypatch.setattr(main, "send_whatsapp_message", lambda *_args: pytest.fail("command text must stay internal"))
     monkeypatch.setattr(main, "save_message_log", lambda *args: logs.append(args))
     monkeypatch.setattr(main, "mark_webhook_event_processed", lambda *args, **kwargs: None)
     monkeypatch.setattr(chatwoot_api, "update_message_status", lambda *args: None)
+    monkeypatch.setattr(chatwoot_api, "send_message_to_chatwoot", lambda *args, **kwargs: object())
 
     main.process_chatwoot_event(event)
 

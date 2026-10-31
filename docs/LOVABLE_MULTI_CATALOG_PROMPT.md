@@ -158,16 +158,32 @@ El límite de adjuntos de Chatwoot es independiente del límite del bucket de Su
 Chatwoot rechaza un PDF antes de crear el mensaje, el webhook del bot nunca recibe ese archivo y
 aumentar el bucket `catalogos` no lo soluciona.
 
-En una conversación que ya esté en handoff, el asesor puede escribir como mensaje público:
+En una conversación que ya esté en handoff, el asesor puede escribir como **nota privada**:
+
+```text
+/archivos
+```
+
+Recibirá una lista privada con los nombres y los comandos exactos de los archivos disponibles
+de ese negocio, consultados nuevamente en Lovable/Supabase. Copia el comando elegido en otra
+nota privada; por ejemplo, únicamente si ese ID aparece en la lista:
 
 ```text
 /catalogo catalogo_portafolio
 ```
 
-El backend acepta exclusivamente ese comando con un ID seguro, obtiene el archivo ya cargado en
-Supabase y lo entrega mediante la misma ruta de Meta que utiliza el bot. El comando técnico no se
-reenvía al cliente. Si el ID no existe o Meta rechaza el documento, el mensaje queda marcado como
-fallido en Chatwoot y Railway registra la causa. Así no hay que volver a subir el PDF a Chatwoot.
+El backend acepta exclusivamente un ID seguro del catálogo vigente, obtiene el archivo ya cargado
+en Supabase y lo entrega mediante la misma ruta de Meta que utiliza el bot. El comando técnico y
+sus resultados quedan internos. La confirmación significa que Meta aceptó el envío; no prueba
+la recepción en el dispositivo. Los errores generan una nota privada. El comando público anterior
+sigue siendo compatible y refleja su estado, pero se recomienda la nota privada.
+
+No mantengas una lista manual ni un canned response por archivo. `GET /api/catalogs` devuelve
+`chatwoot_command` para cada ficha con archivo y `null` cuando la carga está pendiente.
+Para un botón opcional **Copiar comando para Chatwoot**, copia literalmente ese campo y muestra
+la indicación “Pégalo en una nota privada del chat del cliente”. El repositorio del frontend
+Lovable se actualiza por separado; el comando `/archivos` funciona sin ese botón.
+Consulta [el procedimiento y los límites](CHATWOOT_ADVISOR_FILES.md).
 
 ## Longitud de las descripciones y prompt efectivo
 

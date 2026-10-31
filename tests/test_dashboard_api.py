@@ -313,7 +313,41 @@ def test_catalog_list_is_isolated_and_returns_lovable_card_fields(monkeypatch):
     assert response.json()[0]["size_bytes"] == 123
     assert response.json()[0]["has_file"] is True
     assert response.json()[0]["file_status"] == "ready"
+    assert response.json()[0]["chatwoot_command"] == "/catalogo catalogo_mochis"
     assert client.get("/api/catalogs?client_name=another_brand", headers=headers).status_code == 422
+
+
+def test_catalog_list_does_not_offer_a_chatwoot_command_before_file_upload(monkeypatch):
+    class Query:
+        data = [{
+            "business_id": "client_1",
+            "catalog_id": "catalogo_nuevo",
+            "public_name": "Nuevo portafolio",
+            "description": "Enviar al pedir el portafolio",
+            "filename": None,
+        }]
+
+        def select(self, *_args): return self
+        def eq(self, field, value):
+            assert (field, value) == ("business_id", "client_1")
+            return self
+        def order(self, *_args): return self
+        def execute(self): return self
+
+    class PendingStorage(FakeStorage):
+        def metadata(self, *_args):
+            pytest.fail("a metadata-only card must not contact file storage")
+
+    monkeypatch.setattr(api, "supabase", type("Supabase", (), {"table": staticmethod(lambda _name: Query())})())
+    client, headers = make_client(storage=PendingStorage())
+
+    response = client.get("/api/catalogs?client_name=client_1", headers=headers)
+
+    assert response.status_code == 200
+    card = response.json()[0]
+    assert card["has_file"] is False
+    assert card["file_status"] == "pending_upload"
+    assert card["chatwoot_command"] is None
 
 
 def test_catalog_metadata_body_cannot_override_query_client(monkeypatch):
@@ -362,6 +396,7 @@ def test_catalog_created_without_upload_reports_pending_file(monkeypatch):
     assert response.status_code == 200
     assert response.json()["has_file"] is False
     assert response.json()["file_status"] == "pending_upload"
+    assert response.json()["chatwoot_command"] is None
 
 
 def test_catalog_prompt_preview_matches_runtime_rules_and_hides_empty_catalog(monkeypatch):

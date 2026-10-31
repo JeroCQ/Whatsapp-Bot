@@ -2,6 +2,11 @@
 
 FastAPI WhatsApp sales bot with Chatwoot handoff and Gemini responses.
 
+Para enviar los archivos vigentes de Lovable desde Chatwoot, escribe `/archivos`
+en una **nota privada** y copia el comando del archivo elegido. Funciona igual
+para cada negocio y evita volver a cargar el PDF desde el celular. Consulta
+[la guía de comandos del asesor](docs/CHATWOOT_ADVISOR_FILES.md).
+
 Future planning: [Gemini → OpenAI fallback activation plan](docs/MODEL_FALLBACK_ACTIVATION_PLAN.md).
 This is documentation only: merging it does not activate OpenAI or require a new API key,
 environment variable, database migration, or manual setup.

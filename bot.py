@@ -117,9 +117,9 @@ class BotTurn:
 FILE_CATALOG = load_file_catalog(config.PRESAVED_FILES_JSON, "PRESAVED_FILES_JSON")
 
 
-def refresh_managed_catalogs() -> dict[str, PresavedFile]:
+def refresh_managed_catalogs(*, strict=False) -> dict[str, PresavedFile]:
     """Merge Lovable-managed metadata in place so senders see additions immediately."""
-    rows = get_catalog_assets()
+    rows = get_catalog_assets(raise_on_error=True) if strict else get_catalog_assets()
     refreshed = load_file_catalog(config.PRESAVED_FILES_JSON, "PRESAVED_FILES_JSON")
     if not rows:
         if "catalogo_pdf" in refreshed:
