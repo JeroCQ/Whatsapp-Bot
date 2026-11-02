@@ -22,6 +22,8 @@ def routed_bot(monkeypatch, request):
 
     monkeypatch.setattr(config, "BUSINESS_ID", business)
     monkeypatch.setattr(config, "PRESAVED_FILES_JSON", "[]")
+    # These legacy contracts exercise the configured Chatwoot/handoff mode.
+    monkeypatch.setattr(config, "CHATWOOT_ENABLED", True)
     monkeypatch.setattr(database, "get_catalog_assets", lambda: [])
     client_options = {}
     def client_factory(**kwargs):

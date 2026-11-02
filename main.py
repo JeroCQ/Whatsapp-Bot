@@ -25,6 +25,7 @@ from database import (
     claim_webhook_event,
     get_message_logs,
     get_or_create_customer_state,
+    ensure_bot_only_state,
     get_phone_by_chatwoot_id,
     mark_webhook_event_processed,
     pause_bot_for_handoff,
@@ -136,6 +137,8 @@ async def health_check():
     """Railway/root health endpoint and visible deployment-version check."""
     return {
         "status": "ok",
+        "business_id": config.BUSINESS_ID,
+        "chatwoot_enabled": getattr(config, "CHATWOOT_ENABLED", True),
         "commit": DEPLOYMENT_COMMIT_SHA,
         "queue_enabled": queue_enabled(),
         "queue": get_queue_stats(),
@@ -154,10 +157,11 @@ async def health_alias():
 async def log_deployment_version():
     """Log the Railway commit so deployments can be verified."""
     print(f"[STARTUP] WhatsApp bot running commit: {DEPLOYMENT_COMMIT_SHA}. Queue enabled: {queue_enabled()}")
-    task = asyncio.create_task(_recover_pending_handoffs_loop())
-    _BACKGROUND_TASKS.add(task)
-    task.add_done_callback(_BACKGROUND_TASKS.discard)
-    if config.GEMINI_OUTAGE_RECOVERY_SINCE:
+    if getattr(config, "CHATWOOT_ENABLED", True):
+        task = asyncio.create_task(_recover_pending_handoffs_loop())
+        _BACKGROUND_TASKS.add(task)
+        task.add_done_callback(_BACKGROUND_TASKS.discard)
+    if config.GEMINI_OUTAGE_RECOVERY_SINCE and getattr(config, "CHATWOOT_ENABLED", True):
         OUTAGE_RECOVERY_STATUS.clear()
         OUTAGE_RECOVERY_STATUS.update({"status": "scheduled", "since": config.GEMINI_OUTAGE_RECOVERY_SINCE})
         task = asyncio.create_task(_run_outage_recovery(config.GEMINI_OUTAGE_RECOVERY_SINCE))
@@ -168,6 +172,8 @@ async def log_deployment_version():
 
 async def _run_outage_recovery(since: str):
     """Run locally so the repair cannot remain stuck behind a stale RQ job id."""
+    if not getattr(config, "CHATWOOT_ENABLED", True):
+        return
     OUTAGE_RECOVERY_STATUS.update({"status": "running", "since": since})
     try:
         result = await asyncio.to_thread(recover_gemini_outage_handoffs, since)
@@ -262,6 +268,16 @@ def send_scheduled_follow_up(phone_number: str, token: str, message: str,
         operational_event("FOLLOW_UP_SKIPPED", phone=phone_number, stage=stage,
                           reason="disabled_by_configuration", attempt=attempt, result="not_sent")
         return {"status": "disabled_by_configuration"}
+    if not getattr(config, "CHATWOOT_ENABLED", True) and message and message.strip():
+        # Jobs created before a mode change still carry their original text.
+        # Apply the current customer-text policy before reserving or sending;
+        # never replace an unsolicited reminder with a newly invented message.
+        from bot import _bot_only_customer_response
+
+        if _bot_only_customer_response(message) != message.strip():
+            operational_event("FOLLOW_UP_SKIPPED", phone=phone_number, stage=stage,
+                              reason="human_service_disabled", attempt=attempt, result="not_sent")
+            return {"status": "human_service_disabled"}
     with message_trace(source="follow_up", sequence_token=token, attempt=attempt,
                        follow_up_stage=stage,
                        requires_operation=stage == "DEFERRED_DELIVERY" or message_announces_opening(message),
@@ -870,6 +886,8 @@ def _audio_transcript_note(transcript):
 
 
 def _create_handoff_ticket_if_needed(sender_phone: str, sender_name: str, new_state: dict, effective_media_id: str, message_body: str, mime_type: str, filename: str, effective_media_type: str = None, media_bytes: bytes = None, downloaded_mime_type: str = None, *, audio_transcript: str = None):
+    if not getattr(config, "CHATWOOT_ENABLED", True):
+        return {"status": "disabled"}
     if not new_state or not new_state.get("is_paused"):
         return {"status": "not_requested"}
     if new_state.get("chatwoot_conversation_id"):
@@ -987,6 +1005,8 @@ def _schedule_handoff_retry(phone, request):
 
 
 def retry_pending_handoff(phone, request_id, business_id):
+    if not getattr(config, "CHATWOOT_ENABLED", True):
+        return
     if business_id != config.BUSINESS_ID:
         return
     with phone_lock(phone):
@@ -1003,6 +1023,8 @@ def retry_pending_handoff(phone, request_id, business_id):
 
 
 async def _recover_pending_handoffs_loop():
+    if not getattr(config, "CHATWOOT_ENABLED", True):
+        return
     while True:
         try:
             await asyncio.to_thread(recover_pending_handoffs)
@@ -1012,6 +1034,8 @@ async def _recover_pending_handoffs_loop():
 
 
 def recover_pending_handoffs():
+    if not getattr(config, "CHATWOOT_ENABLED", True):
+        return
     for row in handoff_delivery.pending_requests(actionable_only=True):
         if row["status"] in {"pending", "reserved", "sending"}:
             retry_pending_handoff(row["phone_number"], row["request_id"], config.BUSINESS_ID)
@@ -1023,11 +1047,15 @@ def pending_handoffs(client_name: str = Query(min_length=1)):
         validate_deployment_client(client_name)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
-    return {"client_name": config.BUSINESS_ID, "requests": handoff_delivery.pending_requests()}
+    return {"client_name": config.BUSINESS_ID, "requests": (
+        handoff_delivery.pending_requests() if getattr(config, "CHATWOOT_ENABLED", True) else []
+    )}
 
 
 def escalate_unattended_b2b_handoff(phone_number: str, conversation_id: int, reason: str):
     """Raise one priority reminder when no advisor has logged a public response."""
+    if not getattr(config, "CHATWOOT_ENABLED", True):
+        return
     logs = get_message_logs(phone_number, limit=50)
     handoff_index = max((i for i, row in enumerate(logs) if row.get("role") == "system" and str(row.get("content", "")).startswith("HANDOFF:")), default=-1)
     if any(row.get("role") == "asesor" for row in logs[handoff_index + 1:]):
@@ -1058,6 +1086,8 @@ def manual_handoff(body: ManualHandoffRequest, client_name: str = Query(min_leng
         validate_deployment_client(client_name)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+    if not getattr(config, "CHATWOOT_ENABLED", True):
+        raise HTTPException(409, "La derivación humana está deshabilitada para este negocio")
     state = get_or_create_customer_state(body.phone_number, body.customer_name)
     if not state:
         raise HTTPException(502, "No fue posible recuperar el estado del contacto")
@@ -1117,6 +1147,8 @@ def recover_catalog_delivery(phone_number: str, catalog_id: str):
         if not candidate:
             return {"status": "already_resolved"}
         if not candidate.within_service_window:
+            if not getattr(config, "CHATWOOT_ENABLED", True):
+                return {"status": "window_closed", "catalog_id": catalog_id}
             reason = f"Recuperar manualmente catálogo no entregado: {catalog_id}. Fuera de ventana automática."
             pause_bot_for_handoff(phone_number, reason)
             state = get_or_create_customer_state(phone_number, "Cliente")
@@ -1138,13 +1170,16 @@ def recover_catalog_delivery(phone_number: str, catalog_id: str):
         try:
             send_whatsapp_message(
                 phone_number,
-                "El adjunto volvió a fallar. Se necesita revisión del equipo para ayudarte personalmente.",
+                ("El adjunto volvió a fallar. Se necesita revisión del equipo para ayudarte personalmente."
+                 if getattr(config, "CHATWOOT_ENABLED", True) else
+                 "No pude adjuntar el archivo en este momento. Puedes pedírmelo de nuevo más adelante."),
             )
         except Exception:
             print("[CATALOG RECOVERY] No fue posible enviar el aviso final al cliente")
         state = get_or_create_customer_state(phone_number, "Cliente")
         _create_handoff_ticket_if_needed(phone_number, "Cliente", state, None, reason, None, None)
-        return {"status": "manual_handoff", "catalog_id": catalog_id}
+        return {"status": "manual_handoff" if getattr(config, "CHATWOOT_ENABLED", True) else "delivery_failed",
+                "catalog_id": catalog_id}
 
 
 @app.post("/api/catalog-delivery-recoveries/resend", dependencies=[Depends(admin_auth)])
@@ -1173,6 +1208,8 @@ def enqueue_catalog_delivery_recoveries(body: BulkCatalogRecoveryRequest, client
 
 def recover_gemini_outage_handoffs(since: str):
     """Create missing Chatwoot tickets for unanswered turns from an old outage."""
+    if not getattr(config, "CHATWOOT_ENABLED", True):
+        return {"candidates": 0, "tickets_created": 0, "skipped": 0, "failed": 0, "status": "disabled"}
     rows = (
         supabase.table("message_logs")
         .select("phone_number,role,content,created_at,id")
@@ -1242,6 +1279,15 @@ def _recover_whatsapp_processing_error(sender_phone, sender_name, message_body, 
             print(f"[PROCESSING ERROR] {technical}")
             save_message_log(sender_phone, "system", f"ERROR NO MANEJADO: {technical}")
             reason = "El bot encontró un error técnico y no pudo completar la solicitud. Requiere revisión humana."
+        if not getattr(config, "CHATWOOT_ENABLED", True):
+            operational_event("BOT_PROCESSING_FAILED", phone=sender_phone, stage="DIRECT_RESPONSE",
+                              reason="delivery_failed" if text_delivery_failed else "processing_failed",
+                              result="bot_kept_active")
+            # Meta may already have accepted a failed text POST. Preserve the
+            # existing no-replay policy even in a deployment without Chatwoot.
+            if not text_delivery_failed and meta_window_is_open(expiry):
+                send_whatsapp_message(sender_phone, "No pude completar la solicitud en este momento. ¿Puedes intentarlo de nuevo?")
+            return technical
         pause_bot_for_handoff(sender_phone, reason)
         state = get_or_create_customer_state(sender_phone, sender_name or "Cliente")
         _create_handoff_ticket_if_needed(sender_phone, sender_name or "Cliente", state, None,
@@ -1312,6 +1358,8 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
         return
 
     state_record = get_or_create_customer_state(sender_phone, sender_name or "Cliente")
+    if state_record and not getattr(config, "CHATWOOT_ENABLED", True):
+        state_record = ensure_bot_only_state(sender_phone, state_record)
     if not state_record:
         print("[DEBUG] 3. ERROR: No se pudo obtener ni crear el state_record")
         raise RuntimeError("customer_state_unavailable")
@@ -1340,6 +1388,10 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
         return
 
     if human_control_active(state_record):
+        if not getattr(config, "CHATWOOT_ENABLED", True):
+            # A remaining bare pause is an explicit operator/safety pause,
+            # rather than a disabled Chatwoot handoff. Do not override it.
+            return
         print("[DEBUG] 4. Bot pausado, derivando mensaje al asesor humano en Chatwoot")
         conv_id = state_record.get("chatwoot_conversation_id")
         if is_audio:
@@ -1403,7 +1455,9 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
             pause_bot_for_handoff(sender_phone, reason)
             send_whatsapp_message(
                 sender_phone,
-                "Perdón, no pude procesar bien tu nota de voz. Tu solicitud necesita revisión del equipo.",
+                ("Perdón, no pude procesar bien tu nota de voz. Tu solicitud necesita revisión del equipo."
+                 if getattr(config, "CHATWOOT_ENABLED", True) else
+                 "No pude entender la nota de voz. ¿Puedes escribirme tu mensaje o enviar otro audio?"),
             )
             state = get_or_create_customer_state(sender_phone, sender_name or "Cliente")
             _create_handoff_ticket_if_needed(
@@ -1431,7 +1485,7 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
         # Creating the case precedes any assertion to the customer that an
         # advisor was notified. A catalog never overrides this paused state.
         initial_state = get_or_create_customer_state(sender_phone)
-        if initial_state and initial_state.get("is_paused"):
+        if getattr(config, "CHATWOOT_ENABLED", True) and initial_state and initial_state.get("is_paused"):
             handoff = _create_handoff_ticket_if_needed(sender_phone, sender_name, initial_state,
                 effective_media_id, message_body, mime_type, filename, effective_media_type, audio_bytes, downloaded_mime_type,
                 **({"audio_transcript": transcript} if is_audio else {}))
@@ -1478,12 +1532,16 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
             try:
                 send_whatsapp_message(
                     sender_phone,
-                    "Perdón, no pude adjuntar el catálogo. Se necesita revisión del equipo para enviártelo manualmente.",
+                    ("Perdón, no pude adjuntar el catálogo. Se necesita revisión del equipo para enviártelo manualmente."
+                     if getattr(config, "CHATWOOT_ENABLED", True) else
+                     "No pude adjuntar el archivo en este momento. Puedes pedírmelo de nuevo más adelante."),
                 )
                 save_message_log(
                     sender_phone,
                     "model",
-                    "Perdón, no pude adjuntar el catálogo. Se necesita revisión del equipo para enviártelo manualmente.",
+                    ("Perdón, no pude adjuntar el catálogo. Se necesita revisión del equipo para enviártelo manualmente."
+                     if getattr(config, "CHATWOOT_ENABLED", True) else
+                     "No pude adjuntar el archivo en este momento. Puedes pedírmelo de nuevo más adelante."),
                 )
             except Exception as exc:
                 print(f"[FILE DELIVERY ERROR] Could not send customer fallback: {sanitize_text(exc, (config.WA_TOKEN,))}")
@@ -1674,6 +1732,9 @@ def process_chatwoot_event(data: dict, event_id: str = None):
 
 def _process_chatwoot_event_untraced(data: dict, event_id: str = None):
     """Process a Chatwoot webhook event from the queue/worker."""
+    if not getattr(config, "CHATWOOT_ENABLED", True):
+        mark_webhook_event_processed("chatwoot", event_id)
+        return {"status": "disabled"}
     started_at = time.perf_counter()
     event_conv_id = None
     message_id = None
@@ -1862,6 +1923,8 @@ def process_claimed_whatsapp_event(
 
 def process_claimed_chatwoot_event(data: dict, event_id: str = None):
     """Claim a Chatwoot event off the request path before processing it."""
+    if not getattr(config, "CHATWOOT_ENABLED", True):
+        return {"status": "disabled"}
     conv_id = data.get("conversation", {}).get("id") or data.get("id")
     if not claim_webhook_event("chatwoot", event_id, str(conv_id) if conv_id else None):
         print(f"[WEBHOOK DEBUG] Chatwoot duplicado ignorado: {event_id}")
@@ -1973,6 +2036,8 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
 @app.post("/chatwoot-webhook")
 @app.post("/chatwoo-webhook", include_in_schema=False)
 async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
+    if not getattr(config, "CHATWOOT_ENABLED", True):
+        raise HTTPException(404, "Chatwoot está deshabilitado para este negocio")
     raw_body = await request.body()
     timestamp = request.headers.get("X-Chatwoot-Timestamp", "")
     signature = request.headers.get("X-Chatwoot-Signature", "")
