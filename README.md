@@ -1,6 +1,6 @@
 # Whatsapp-Bot
 
-FastAPI WhatsApp sales bot with Chatwoot handoff and Gemini responses.
+FastAPI WhatsApp sales bot with Gemini responses and optional Chatwoot handoff.
 
 Para enviar los archivos vigentes de Lovable desde Chatwoot, escribe `/archivos`
 en una **nota privada** y copia el comando del archivo elegido. Funciona igual
@@ -15,12 +15,12 @@ environment variable, database migration, or manual setup.
 
 Para cualquier negocio nuevo, comienza por el runbook canónico
 [`docs/NEW_BUSINESS_SETUP.md`](docs/NEW_BUSINESS_SETUP.md). Define el orden completo
-GitHub → Supabase → Meta → Chatwoot → Railway → dashboard, las fuentes de variables
-y las pruebas extremo a extremo.
+GitHub → Supabase → Meta → Chatwoot opcional → Railway → dashboard, las fuentes de
+variables y las pruebas extremo a extremo.
 
 El código es multi-despliegue, no multi-negocio: cada Railway debe definir un único
-`BUSINESS_ID`, usar su propio Supabase/WhatsApp/Redis/Chatwoot inbox y cargar los
-archivos permitidos desde `PRESAVED_FILES_JSON`. El backend administrativo rechaza
+`BUSINESS_ID`, usar su propio Supabase/WhatsApp/Redis y, si se habilita, Chatwoot
+inbox, y cargar los archivos permitidos desde `PRESAVED_FILES_JSON`. El backend administrativo rechaza
 un `client_name` que no coincida con ese identificador, evitando cruces entre marcas.
 
 Para crear Quesos Memo's sin modificar el bot live de Tanaka, sigue el checklist
@@ -32,6 +32,14 @@ incluye el orden de creación, la lista exacta de variables y las pruebas de cor
 
 Para desplegar Velvet con Camila, un número, Supabase, Railway, Redis y API inbox
 de Chatwoot nuevos, sigue el orden seguro de [`SETUP_VELVET.md`](SETUP_VELVET.md).
+
+Para Briosos sin asesores, sigue [`SETUP_BRIOSOS.md`](SETUP_BRIOSOS.md) y el
+[prompt para Railway Agent](docs/BRIOSOS_RAILWAY_AGENT_PROMPT.md). Usa
+`CHATWOOT_ENABLED=false`: poner las variables Chatwoot a `0` no desactiva handoffs
+en código anterior. La instrucción inicial es genérica y los seguimientos quedan
+desactivados hasta confirmar sus reglas. El preflight común
+`python scripts/check_business_setup.py` revisa la configuración offline sin
+mostrar secretos; las conexiones y el procesamiento real se verifican aparte.
 
 ## Arquitectura repetible para marcas actuales y futuras
 

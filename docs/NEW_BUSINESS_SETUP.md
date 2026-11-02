@@ -17,16 +17,22 @@ estable, en minúsculas y sin espacios (por ejemplo `acme`) y fija
 * proyecto Supabase y `service_role` propios;
 * número, Phone Number ID, token y verify token de Meta propios;
 * Redis limpio y `QUEUE_NAME` propios;
-* cuenta, API inbox, token y secretos Chatwoot propios (la instalación raíz sí
-  puede ser compartida conscientemente);
+* si habrá handoffs, cuenta, API inbox, token y secretos Chatwoot propios (la
+  instalación raíz sí puede ser compartida conscientemente);
 * secretos del dashboard propios.
 
 No clones variables de Tanaka, Memo's o Velvet. Gemini y GitHub solo pueden
 compartirse por una decisión explícita sobre cuota y acceso; nunca reutilices IDs,
 colas, números, bases, inboxes ni secretos. Antes de abrir el número, verifica que
-una conversación de prueba solo aparece en Supabase, Redis y Chatwoot de la marca.
+una conversación de prueba solo aparece en los recursos de esa marca.
 
-## Orden obligatorio: GitHub → Supabase → Meta → Chatwoot → Railway → dashboard
+El modo de atención automática usa `CHATWOOT_ENABLED=false` y no necesita
+Chatwoot. Para un proyecto creado desde una plantilla, revisa y retira las
+credenciales heredadas: ponerlas a `0` no es un interruptor de handoffs en versiones
+anteriores. La [puesta en marcha de Briosos](../SETUP_BRIOSOS.md) muestra este modo
+con instrucción genérica y seguimientos inicialmente desactivados.
+
+## Orden: GitHub → Supabase → Meta → Chatwoot opcional → Railway → dashboard
 
 ### 1. GitHub
 
@@ -81,7 +87,16 @@ manualmente una identidad opaca a un teléfono ni copies datos de otra marca.
    `https://<dominio-del-bot>/webhook`, usa el mismo verify token y suscribe
    `messages`. No apuntes el número al bot de otra marca.
 
-### 4. Chatwoot
+### 4. Chatwoot (opcional)
+
+Para un alta sin asesores, fija `CHATWOOT_ENABLED=false` y omite el resto del
+bloque Chatwoot. Comprueba que el commit seleccionado soporte ese flag: añadirlo
+a código antiguo no cambia su comportamiento. El runtime nuevo evita handoffs,
+promesas de transferencia y pausas por derivación; conserva las pausas operativas
+ajenas a Chatwoot. La instrucción comercial también debe describir la atención
+automática disponible.
+
+Para un alta con asesores, fija `CHATWOOT_ENABLED=true` y completa lo siguiente:
 
 1. Crea una cuenta/workspace, colaboradores y un **API inbox** exclusivos. Meta
    entrega al bot; no uses un inbox nativo de WhatsApp para este flujo.
@@ -121,6 +136,11 @@ manualmente una identidad opaca a un teléfono ni copies datos de otra marca.
    Redis y el log `[LAUNCHER] REDIS_URL detected; starting embedded RQ worker
    subprocess.`
 
+Renombrar un servicio no renombra automáticamente su dominio Railway. Si la URL
+conserva el nombre de una plantilla, verifica su propietario en Networking y el
+`business_id` de `/health`; el texto de la URL no demuestra un cruce de marcas.
+Si cambias el dominio, actualiza el callback Meta y el proxy del dashboard propios.
+
 Si Railway muestra **“Waiting for dependencies”**, no cambies el código ni el
 start command: abre el grafo del proyecto, identifica la referencia rota, confirma
 que Redis tiene un deployment sano y que su nombre coincide con Add Reference.
@@ -144,6 +164,23 @@ copies variables, secretos, IDs, volúmenes ni recursos de ninguna otra marca. S
 aparece “Waiting for dependencies”, diagnostica primero el deployment de Redis y
 la referencia REDIS_URL; no modifiques código, SQL ni railway.json.
 ```
+
+Para un proyecto ya creado desde la plantilla de Velvet, usa el
+[prompt específico de Briosos](BRIOSOS_RAILWAY_AGENT_PROMPT.md): conserva recursos
+sanos y limita la reparación al proyecto nuevo, sin borrados ni cambios en otras
+marcas.
+
+Antes del deployment, ejecuta en el entorno del web:
+
+```bash
+python scripts/check_business_setup.py
+```
+
+El preflight genérico es offline y solo devuelve nombres de checks y resultados,
+sin imprimir secretos. Requiere `CHATWOOT_ENABLED` explícito y una cola
+`whatsapp-events-<business_id>`; revisa instrucción y política de la marca.
+No confirma permisos, conectividad ni pertenencia de recursos. Debe ejecutarse
+con las variables ya cargadas; no recibe claves por argumentos ni carga `.env`.
 
 ### 6. Dashboard
 
@@ -186,6 +223,7 @@ lectura/edición de la instrucción, historial y carga del catálogo al objeto
 
 | Variable | Obligación para un alta con handoff | Fuente / valor |
 | --- | --- | --- |
+| `CHATWOOT_ENABLED` | **Explícita en altas nuevas** | `true` con asesores; `false` para atención automática sin Chatwoot. |
 | `CHATWOOT_BASE_URL` | **Obligatoria** | Raíz HTTPS de la instalación. |
 | `CHATWOOT_ACCOUNT_ID` | **Obligatoria** | ID numérico de la cuenta exclusiva. |
 | `CHATWOOT_INBOX_ID` | **Obligatoria** | ID numérico del API inbox exclusivo. |
@@ -201,9 +239,17 @@ El [relay genérico de archivos](GENERIC_MEDIA_RELAY.md) conserva la integridad 
 los adjuntos y deja los formatos al proveedor. Los límites reales de WhatsApp por
 tipo siguen vigentes. No se necesita configurar una extensión por separado.
 
-Si no habrá Chatwoot, omite el bloque completo; una configuración parcial impide
-arrancar. Para el flujo de producción esperado por este repositorio, configura el
-bloque completo anterior.
+Con `CHATWOOT_ENABLED=false`, las variables Chatwoot restantes no se utilizan:
+elimínalas del alta nueva. Con `true`, una configuración incompleta impide arrancar.
+Por compatibilidad, un despliegue existente sin el flag conserva Chatwoot si tiene
+alguno de sus cuatro campos base configurados; un bloque totalmente ausente
+selecciona atención automática. Una configuración parcial sin flag también falla
+la validación. No se exige cambiar las variables de marcas operativas para
+desplegar este soporte.
+
+Al habilitar Chatwoot después de una etapa automática, completa el bloque y revisa
+el system instruction provisional: debe permitir las derivaciones que se van a
+activar. No se necesita SQL nuevo para alternar este modo.
 
 ### Dashboard, GitHub y ajustes opcionales
 
@@ -246,8 +292,11 @@ El proxy externo añade, con nombres propios de su plataforma,
 
 ## Validación extremo a extremo (un 200 no basta)
 
-1. `GET /` confirma estado, cola habilitada y worker; los logs muestran marca,
-   cola y commit correctos.
+1. `GET /health` confirma `business_id`, `chatwoot_enabled`, `queue_enabled=true`,
+   `queue.enabled=true`, `queue.queue=whatsapp-events-<business_id>` y ausencia de
+   `queue.error`. Debe haber al menos un `queue.workers_seen`; todos los valores de
+   `queue.worker_commits` deben coincidir con el `commit` real del web, sin
+   `unknown`. Los logs y referencias Railway confirman el aislamiento de recursos.
 2. Valida el challenge de Meta y envía un mensaje real. **`POST /webhook 200` solo
    confirma el ACK rápido**: no demuestra que el mensaje haya sido procesado.
 3. Verifica por separado: log de **enqueue** en la cola correcta; consumo del job
@@ -255,9 +304,11 @@ El proxy externo añade, con nombres propios de su plataforma,
    por **Meta**; y métrica `[METRIC] whatsapp_message_processed`.
 4. Comprueba persistencia en el Supabase de esta marca, no en el de otra. Prueba
    duplicado/reintento, catálogo, pedido y comprobante.
-5. Fuerza un handoff: debe crearse en el account/inbox correcto, asignarse según
+5. Con Chatwoot habilitado, fuerza un handoff: debe crearse en el account/inbox correcto, asignarse según
    `automatic`, aceptar una respuesta pública del agente sin “Failed to send” y
-   volver a IA al resolver. Confirma las firmas del API inbox.
+   volver a IA al resolver. Confirma las firmas del API inbox. Con Chatwoot
+   desactivado, pedir un asesor debe conservar la atención automática sin crear
+   tickets ni prometer una transferencia; `/chatwoot-webhook` devuelve 404.
 6. Desde el dashboard prueba instrucción, historial y catálogo. Después ejecuta
    una prueba negativa con otro `client_name`: debe rechazarse y no leer ni escribir
    datos ajenos.
@@ -281,7 +332,8 @@ El proxy externo añade, con nombres propios de su plataforma,
 * Se confundieron `secret` y `hmac_token` de Chatwoot y el account webhook con el
   callback del API inbox: son credenciales y funciones diferentes.
 * Se copió configuración de otra marca para avanzar rápido: un alta no está lista
-  hasta que número, Supabase, Redis/cola, account/inbox y secretos sean propios.
+  hasta que número, Supabase, Redis/cola, secretos y, si se habilita, account/inbox
+  sean propios.
 
 
 ## Catálogos múltiples (proyectos nuevos y existentes)

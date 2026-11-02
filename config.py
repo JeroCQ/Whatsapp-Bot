@@ -33,6 +33,18 @@ def parse_gemini_model_list(raw_models: str | None, primary_model: str) -> list[
     return unique
 
 
+def parse_boolean_env(name: str, *, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"true", "1", "yes", "on"}:
+        return True
+    if normalized in {"false", "0", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be true/false, 1/0, yes/no, or on/off")
+
+
 class Settings:
     # One deployment serves exactly one business. Use the same code in separate
     # Railway projects and select the business only through this identifier.
@@ -52,6 +64,11 @@ class Settings:
     CHATWOOT_API_TOKEN = os.getenv("CHATWOOT_API_TOKEN")
     CHATWOOT_ACCOUNT_ID = os.getenv("CHATWOOT_ACCOUNT_ID")
     CHATWOOT_INBOX_ID = os.getenv("CHATWOOT_INBOX_ID")
+    # Configured brands retain their handoffs. An omitted Chatwoot block runs
+    # bot-only; explicit false also ignores copied, unused Chatwoot placeholders.
+    CHATWOOT_ENABLED = parse_boolean_env("CHATWOOT_ENABLED", default=any((
+        CHATWOOT_BASE_URL, CHATWOOT_API_TOKEN, CHATWOOT_ACCOUNT_ID, CHATWOOT_INBOX_ID,
+    )))
     # Retained in automatic mode only as an immediate rollback value. It is
     # included in creation requests exclusively when the mode is fixed.
     CHATWOOT_ASSIGNEE_ID = os.getenv("CHATWOOT_ASSIGNEE_ID")
@@ -165,7 +182,7 @@ class Settings:
             if not math.isfinite(value) or value < 0.001:
                 raise ValueError(f"{name} must be a finite positive timeout of at least 0.001 seconds")
         chatwoot_values = [cls.CHATWOOT_BASE_URL, cls.CHATWOOT_API_TOKEN, cls.CHATWOOT_ACCOUNT_ID, cls.CHATWOOT_INBOX_ID]
-        if any(chatwoot_values):
+        if cls.CHATWOOT_ENABLED:
             if not all(chatwoot_values) or not (
                 cls.CHATWOOT_WEBHOOK_SECRET or cls.CHATWOOT_API_INBOX_WEBHOOK_SECRET
             ):

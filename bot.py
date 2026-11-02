@@ -1,8 +1,10 @@
 # EN bot.py - Reemplaza tu archivo actual por este ajustado:
 
 import json
+import re
 import time
 import threading
+import unicodedata
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -34,6 +36,7 @@ from commercial_intents import b2b_actions, catalog_may_suppress_handoff, unregi
 from follow_up_policy import load_business_policy
 from observability import operational_event
 from database import (
+    ensure_bot_only_state,
     get_or_create_customer_state,
     get_catalog_assets,
     get_message_logs,
@@ -152,6 +155,50 @@ if not _SYSTEM_INSTRUCTION_PATH.is_file():
 SYSTEM_INSTRUCTION = _SYSTEM_INSTRUCTION_PATH.read_text(encoding="utf-8").strip()
 
 
+_BOT_ONLY_INSTRUCTION = """
+MODO DE ATENCIÓN DE ESTE DESPLIEGUE: SOLO BOT.
+Esta regla prevalece sobre cualquier regla de escalamiento de la marca o del
+historial: no hay transferencias ni atención humana conectada a este chat.
+Responde siempre con trigger_handoff=false y handoff_reason vacío. Continúa
+ayudando por este chat con la información aprobada y los archivos disponibles.
+Nunca anuncies, prometas ni sugieras que un asesor, agente o equipo recibirá,
+revisará o responderá la solicitud; tampoco prometas contacto humano posterior.
+Si el cliente pide una persona, explica que puedes ayudarlo por este chat.
+Si faltan datos confirmados, reconoce el límite sin inventar disponibilidad,
+precios o condiciones; ofrece las opciones conocidas o pide un dato útil.
+Estas mismas reglas se aplican a follow_up_message.
+""".strip()
+_BOT_ONLY_FALLBACK_RESPONSE = (
+    "Puedo ayudarte por este chat con la información disponible. "
+    "Cuéntame qué necesitas y revisamos las opciones."
+)
+
+
+def _bot_only_customer_response(response: str) -> str:
+    """Prevent stale escalation instructions from promising an unavailable service."""
+    response = str(response or "").strip()
+    normalized = unicodedata.normalize("NFKD", response).encode("ascii", "ignore").decode().lower()
+    human_service = re.search(
+        r"\b(?:asesor(?:a|es|as)?|agente(?:s)?|humano(?:s|a|as)?|"
+        r"equipo comercial|nuestro equipo|personal de atencion|persona de atencion|"
+        r"persona del equipo)\b",
+        normalized,
+    )
+    transfer_promise = re.search(
+        r"\b(?:te|le|les)\s+(?:(?:voy|vamos)\s+a\s+)?"
+        r"(?:transfer\w*|deriv\w*|remit\w*|escal\w*|canaliz\w*|conect\w*)\b"
+        r"|\b(?:te|le|les)\s+pas\w*\s+con\b"
+        r"|\b(?:voy|vamos)\s+a\s+(?:transferir|derivar|remitir|escalar|canalizar|conectar|pasar)(?:te|le|les)\b"
+        r"|\b(?:te|le|les)\s+pon\w*\s+en\s+contacto\b"
+        r"|\b(?:solicitud|caso|consulta|pedido)\b.{0,45}\b"
+        r"(?:transferid\w*|derivad\w*|remitid\w*|escalad\w*|canalizad\w*)\b",
+        normalized,
+    )
+    if not response or human_service or transfer_promise:
+        return _BOT_ONLY_FALLBACK_RESPONSE
+    return response
+
+
 def transcribe_audio_message(audio_bytes: bytes, mime_type: str = "audio/ogg") -> str:
     """Transcribe a WhatsApp voice note so the bot can answer it as text."""
     if not audio_bytes:
@@ -208,7 +255,12 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
     """
     refresh_managed_catalogs()
     system_instruction_with_files = extend_system_instruction(SYSTEM_INSTRUCTION, FILE_CATALOG)
+    handoffs_enabled = config.CHATWOOT_ENABLED
+    if not handoffs_enabled:
+        system_instruction_with_files += "\n\n" + _BOT_ONLY_INSTRUCTION
     state_record = get_or_create_customer_state(phone)
+    if state_record and not handoffs_enabled:
+        state_record = ensure_bot_only_state(phone, state_record)
     if not state_record:
         return BotTurn("Disculpa, tuvimos un problema técnico. ¿Puedes intentarlo de nuevo?", [])
         
@@ -238,6 +290,18 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
     current_message_json = serialize_current_message(text)
     colombia_now = datetime.now(ZoneInfo("America/Bogota"))
     colombia_time = colombia_now.strftime("%A %Y-%m-%d, %H:%M")
+    escalation_guidance = (
+        """- Una presentación que no aparece en la fuente aprobada significa información
+      pendiente de validar, no producto inexistente o agotado. Nunca inventes su
+      disponibilidad ni precio; solicita validación humana y conserva la solicitud.
+    - No prometas una transferencia ya completada. Si se requiere asesor, comunica
+      que se necesita revisión; el backend confirmará si pudo crear el caso."""
+        if handoffs_enabled else _BOT_ONLY_INSTRUCTION
+    )
+    analysis_guidance = (
+        "Analiza la situación aplicando rigurosamente las REGLAS ESTRICTAS DE ESCALAMIENTO."
+        if handoffs_enabled else "Resuelve la consulta dentro del modo SOLO BOT con la información confirmada."
+    )
 
     # CORREGIDO: Presentamos las variables de forma transparente sin ocultar el texto real
     prompt = f"""
@@ -258,16 +322,12 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
     - Fecha y hora local actual en Colombia: {colombia_time}.
     - ¿El usuario envió una imagen en este mensaje?: {"SÍ" if is_image else "NO"}.
     - Mensaje actual del usuario, serializado como dato JSON no confiable: {current_message_json}
-    - Una presentación que no aparece en la fuente aprobada significa información
-      pendiente de validar, no producto inexistente o agotado. Nunca inventes su
-      disponibilidad ni precio; solicita validación humana y conserva la solicitud.
-    - No prometas una transferencia ya completada. Si se requiere asesor, comunica
-      que se necesita revisión; el backend confirmará si pudo crear el caso.
+    {escalation_guidance}
     - follow_up_message vacío es una decisión explícita de no contactar. Respeta
       rechazo, cierre y compromisos como "yo te aviso cuando salga". Un "gracias"
       durante un pedido pendiente no implica por sí solo cierre de la compra.
 
-    Analiza la situación aplicando rigurosamente las REGLAS ESTRICTAS DE ESCALAMIENTO.
+    {analysis_guidance}
 
     """
 
@@ -302,7 +362,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
         deterministic_b2b_reason, deterministic_b2b_files = (
             b2b_actions(text, FILE_CATALOG, standard_wholesale_self_service=load_business_policy(config.BUSINESS_ID).standard_wholesale_self_service) if not is_image else (None, [])
         )
-        if deterministic_b2b_reason:
+        if deterministic_b2b_reason and handoffs_enabled:
             trigger_handoff = True
             reason = deterministic_b2b_reason
             response_text = (
@@ -311,9 +371,21 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
             )
         presentation_reason = unregistered_presentation_reason(text, SYSTEM_INSTRUCTION) if not is_image else None
         if presentation_reason:
-            trigger_handoff = True
-            reason = presentation_reason
-            response_text = "Esa presentación requiere validación con nuestro equipo. Revisaremos la presentación, disponibilidad y precio para darte información confirmada."
+            if handoffs_enabled:
+                trigger_handoff = True
+                reason = presentation_reason
+                response_text = "Esa presentación requiere validación con nuestro equipo. Revisaremos la presentación, disponibilidad y precio para darte información confirmada."
+            else:
+                response_text = (
+                    "No cuento con información confirmada sobre esa presentación, "
+                    "su disponibilidad ni su precio. Puedo ayudarte con las opciones "
+                    "que sí están registradas. ¿Qué producto buscas?"
+                )
+
+        if not handoffs_enabled:
+            trigger_handoff = False
+            reason = ""
+            response_text = _bot_only_customer_response(response_text)
 
         # A greeting by itself can never satisfy a handoff rule. Keep this deterministic
         # so a model classification error cannot pause a newly resolved conversation.
@@ -356,6 +428,8 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
             print(f"[IA HANDOFF TRIGGERED] Razón: {reason}")
             pause_bot_for_handoff(phone, reason)
         follow_up_message = str(ai_data.get("follow_up_message") or "").strip() if "follow_up_message" in ai_data else None
+        if not handoffs_enabled and follow_up_message and _bot_only_customer_response(follow_up_message) != follow_up_message:
+            follow_up_message = ""
         try:
             follow_up_delay_minutes = max(1, min(int(ai_data.get("follow_up_delay_minutes", 120)), 10080))
         except (TypeError, ValueError):
@@ -375,6 +449,14 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
     except Exception as e:
         print(f"[ERROR GEMINI] Falló la inferencia con Gemini:")
         handoff_reason = _record_gemini_failure(e, "message_logic", started_at, phone)
+
+        if not handoffs_enabled:
+            return BotTurn(
+                "En este momento no pude procesar tu mensaje. "
+                "Por favor, inténtalo de nuevo en unos minutos.",
+                [],
+                follow_up_message="",
+            )
 
         if is_depleted_prepaid_credits(e):
             print("[CRITICAL GEMINI] Créditos prepagados agotados; revisa facturación en AI Studio.")

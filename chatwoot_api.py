@@ -183,7 +183,9 @@ def download_meta_media(media_id: str):
     url = f"https://graph.facebook.com/v20.0/{media_id}"
     headers = {"Authorization": f"Bearer {config.WA_TOKEN}"}
     res = media_res = None
-    maximum = min(getattr(config, "CHATWOOT_MAX_ATTACHMENT_BYTES", 100 * 1024 * 1024), 100 * 1024 * 1024)
+    maximum = 100 * 1024 * 1024
+    if getattr(config, "CHATWOOT_ENABLED", True):
+        maximum = min(getattr(config, "CHATWOOT_MAX_ATTACHMENT_BYTES", maximum), maximum)
     try:
         res = get(url, headers=headers)
         res.raise_for_status()

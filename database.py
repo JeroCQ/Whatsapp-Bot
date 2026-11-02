@@ -61,11 +61,41 @@ def update_bot_state(phone_number: str, new_state: str):
 
 
 def pause_bot_for_handoff(phone_number: str, reason: str):
+    if not getattr(config, "CHATWOOT_ENABLED", True):
+        return
     supabase.table("conversation_states").update({
         "current_state": "HUMAN_HANDOFF",
         "is_paused": True,
         "handoff_reason": reason,
     }).eq("phone_number", phone_number).execute()
+
+
+def ensure_bot_only_state(phone_number: str, state: dict | None):
+    """Release this deployment's stale Chatwoot handoff after disabling it.
+
+    Bot-only mode deliberately returns local Chatwoot cases to the bot. A bare
+    pause without a handoff state or linked case is preserved, as are history,
+    checkout memory, and every unrelated state/preference. The observed fields
+    form a conditional update so a concurrent state change is never overwritten.
+    """
+    if getattr(config, "CHATWOOT_ENABLED", True) or not state:
+        return state
+    if state.get("current_state") != "HUMAN_HANDOFF" and not state.get("chatwoot_conversation_id"):
+        return state
+    values = {"is_paused": False, "chatwoot_conversation_id": None, "handoff_reason": None}
+    if state.get("current_state") == "HUMAN_HANDOFF":
+        # GREETING is the existing active enum value in fresh and upgraded DBs.
+        values["current_state"] = "GREETING"
+    query = supabase.table("conversation_states").update(values).eq("phone_number", phone_number)
+    for key in ("current_state", "is_paused", "chatwoot_conversation_id", "handoff_reason"):
+        observed = state.get(key)
+        query = query.is_(key, "null") if observed is None else query.eq(key, observed)
+    result = query.execute()
+    if result.data:
+        return {**state, **values, **result.data[0]}
+    # A concurrent change won the conditional update; use its actual state.
+    latest = supabase.table("conversation_states").select("*").eq("phone_number", phone_number).execute()
+    return _first(latest.data) or state
 
 
 def pause_bot_for_human_activity(phone_number: str, conversation_id: int):

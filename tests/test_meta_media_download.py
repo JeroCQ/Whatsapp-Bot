@@ -91,6 +91,17 @@ def test_download_uses_response_mime_when_metadata_omits_it(download_api):
     assert f.metadata.closed and f.asset.closed
 
 
+def test_bot_only_audio_download_ignores_disabled_chatwoot_zero_placeholder(download_api):
+    f = download_api
+    f.api.config.CHATWOOT_ENABLED = False
+    f.api.config.CHATWOOT_MAX_ATTACHMENT_BYTES = 0
+    f.metadata.body["mime_type"] = "audio/ogg"
+    expected = b"RIFForiginal webp bytes"
+
+    assert f.api.download_meta_media("synthetic-audio-id") == (expected, "audio/ogg")
+    assert f.metadata.closed and f.asset.closed and f.asset.read
+
+
 @pytest.mark.parametrize("declared", [None, "1", "1025"])
 def test_lower_operator_limit_is_enforced_by_header_and_counted_bytes(download_api, capsys, declared):
     f = download_api
