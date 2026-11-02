@@ -4,9 +4,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 COPY pyproject.toml ./
 COPY crm_service ./crm_service
-RUN --mount=type=secret,id=proxy_ca \
-    if [ -f /run/secrets/proxy_ca ]; then export PIP_CERT=/run/secrets/proxy_ca; fi; \
-    pip install --no-cache-dir . && useradd --uid 10001 --create-home crm
+RUN pip install --no-cache-dir . && useradd --uid 10001 --create-home crm
 COPY alembic.ini ./
 COPY alembic ./alembic
 RUN chmod -R a+rX /app
