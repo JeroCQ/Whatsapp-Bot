@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, text
+from sqlalchemy.engine import make_url
 
 from alembic import command
 from alembic.config import Config
@@ -15,7 +16,13 @@ from crm_service.settings import Business, Settings
 @pytest.fixture(scope="session")
 def database_url():
     url = os.environ["CRM_TEST_DATABASE_URL"]
-    if not url.rsplit("/", 1)[-1].startswith("crm_test"):
+    parsed = make_url(url)
+    if (
+        not (parsed.database or "").startswith("crm_test")
+        or parsed.host not in {"localhost", "127.0.0.1", "::1"}
+        or parsed.query
+        or parsed.drivername != "postgresql+psycopg"
+    ):
         raise RuntimeError("Tests require a disposable database named crm_test*")
     old = os.environ.get("CRM_DATABASE_URL")
     os.environ["CRM_DATABASE_URL"] = url

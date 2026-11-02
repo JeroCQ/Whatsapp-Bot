@@ -56,19 +56,26 @@ def classify(
         started = timestamp(delivery.get("created_at"))
         boundary = (delivery_time if closed_at and started <= closed_at[0] else started, -1)
     humans = [m for m in cycle if m.get("role") == "asesor" and (boundary is None or order(m) > boundary)]
+    # Index responses once instead of comparing every inbound with every human message.
+    covered: set[str] = set()
+    legacy_latest = None
+    all_latest = max((order(m) for m in humans), default=None)
+    for human in humans:
+        refs = (human.get("metadata") or {}).get("inbound_message_ids")
+        if isinstance(refs, list) and refs:
+            covered.update(ref for ref in refs if isinstance(ref, str))
+        else:
+            current = order(human)
+            legacy_latest = max(legacy_latest, current) if legacy_latest else current
     unanswered = []
     for customer in incoming:
         event = (customer.get("metadata") or {}).get("source_event_id")
-        answered = False
-        for human in humans:
-            refs = (human.get("metadata") or {}).get("inbound_message_ids")
-            if event and isinstance(refs, list) and refs:
-                answered = event in refs
-            else:
-                quality.add("legacy_response_order_fallback")
-                answered = order(human) > order(customer)
-            if answered:
-                break
+        response_latest = legacy_latest if event else all_latest
+        if response_latest:
+            quality.add("legacy_response_order_fallback")
+        answered = (isinstance(event, str) and event in covered) or bool(
+            response_latest and response_latest > order(customer)
+        )
         if not answered:
             unanswered.append(customer)
     paused = state.get("is_paused")

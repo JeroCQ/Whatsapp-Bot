@@ -38,6 +38,7 @@ class SourceConversation(Base):
     state: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     handoff: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     warnings: Mapped[list[str]] = mapped_column(JSON, default=list)
+    dirty: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
 
 
 class SourceMessage(Base):
@@ -76,6 +77,22 @@ class SyncStatus(Base):
     last_attempt: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     warnings: Mapped[list[str]] = mapped_column(JSON, default=list)
+    run_state: Mapped[str] = mapped_column(String(30), default="pending")
+    failures: Mapped[int] = mapped_column(Integer, default=0)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class SyncRequest(Base):
+    __tablename__ = "sync_requests"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    business_id: Mapped[str] = mapped_column(String(63), index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(100))
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    result: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    __table_args__ = (Index("uq_sync_request_key", "business_id", "idempotency_key", unique=True),)
 
 
 class CRMConversation(Base):

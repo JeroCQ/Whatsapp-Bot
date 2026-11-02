@@ -23,6 +23,7 @@ from crm_service.models import (
     ReadState,
     SourceConversation,
     SourceMessage,
+    SyncRequest,
     SyncStatus,
     Task,
     now,
@@ -35,12 +36,14 @@ from crm_service.schemas import (
     PreferencesInput,
     PushInput,
     ReadInput,
+    SyncInput,
     TaskInput,
     TaskUpdate,
 )
 from crm_service.security import Actor, authenticate, decode_cursor, encode_cursor
 from crm_service.settings import Settings
-from crm_service.sync import Synchronizer, lock_id
+from crm_service.sync import lock_id
+from crm_service.sync_jobs import job_response
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -146,7 +149,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             with engine.connect() as conn:
                 version = conn.scalar(text("SELECT version_num FROM alembic_version"))
-                if version != "0001_crm":
+                if version != "0002_sync_controls":
                     raise HTTPException(503, "CRM migrations required")
         except SQLAlchemyError:
             raise HTTPException(503, "CRM database unavailable or migrations required") from None
@@ -155,7 +158,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/v1/capabilities")
     def capabilities(principal: Auth) -> dict[str, Any]:
         return {
-            "source_read_only": True,
+            "source_read_only": False,
+            "source_methods_read_only": True,
+            "source_credentials_verified": False,
+            "production_sources_enabled": False,
+            "source_access_mode": settings.source_mode,
+            "sync_execution": "worker",
             "crm_updates": True,
             "manual_handoff_enabled": False,
             "manual_handoff_contract": {
@@ -635,6 +643,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "last_success": row.last_success if row else None,
                     "last_error": row.last_error if row else None,
                     "data_quality_warnings": row.warnings if row else [],
+                    "run_state": row.run_state if row else "pending",
+                    "next_retry_at": row.next_retry_at if row else None,
+                    "metrics": row.metrics if row else {},
                     "stale": not row
                     or not row.last_success
                     or row.last_success < now() - timedelta(minutes=5),
@@ -642,12 +653,41 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         return {"items": items}
 
-    @app.post("/internal/sync")
-    def run_sync(request: Request) -> dict[str, str]:
-        if request.headers.get("origin") or not hmac.compare_digest(
-            request.headers.get("x-crm-sync-secret", ""), settings.sync_secret
+    def internal_auth(request: Request) -> None:
+        if (
+            request.headers.get("origin")
+            or request.headers.get("sec-fetch-site")
+            or not hmac.compare_digest(request.headers.get("x-crm-sync-secret", ""), settings.sync_secret)
         ):
             raise HTTPException(401, "Internal authentication required")
-        return Synchronizer(settings, sessions).run()
+
+    @app.post("/internal/sync", status_code=202, dependencies=[Depends(internal_auth)])
+    def run_sync(request: Request, body: SyncInput, session: DB) -> dict[str, Any]:
+        internal_auth(request)
+        if body.business_id not in settings.businesses:
+            raise HTTPException(422, "Unknown business")
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": lock_id("job:" + body.business_id + ":" + body.idempotency_key)},
+        )
+        row = session.scalar(
+            select(SyncRequest).where(
+                SyncRequest.business_id == body.business_id,
+                SyncRequest.idempotency_key == body.idempotency_key,
+            )
+        )
+        if row is None:
+            row = SyncRequest(business_id=body.business_id, idempotency_key=body.idempotency_key)
+            session.add(row)
+            session.flush()
+        return job_response(row)
+
+    @app.get("/internal/sync/{request_id}", dependencies=[Depends(internal_auth)])
+    def get_sync(request_id: str, request: Request, session: DB) -> dict[str, Any]:
+        internal_auth(request)
+        row = session.get(SyncRequest, request_id)
+        if row is None:
+            raise HTTPException(404, "Sync request not found")
+        return job_response(row)
 
     return app

@@ -8,9 +8,10 @@ def database(settings: Settings) -> tuple[Engine, sessionmaker[Session]]:
     engine = create_engine(
         settings.database_url,
         pool_pre_ping=True,
-        pool_size=5,
-        max_overflow=5,
+        pool_size=2,
+        max_overflow=0,
+        pool_timeout=5,
         hide_parameters=True,
-        connect_args={"connect_timeout": 10},
+        connect_args={"connect_timeout": 5},
     )
     return engine, sessionmaker(engine, expire_on_commit=False)
