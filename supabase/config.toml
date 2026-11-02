@@ -1,0 +1,4 @@
+[functions.dashboard-api]
+# This dashboard intentionally uses per-client passwords instead of Supabase Auth.
+# The function itself authenticates every request before proxying it to Railway.
+verify_jwt = false

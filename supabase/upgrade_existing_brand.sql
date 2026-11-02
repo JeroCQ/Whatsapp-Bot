@@ -1,0 +1,187 @@
+-- Idempotent upgrade for an EXISTING bot Supabase (Tanaka, Memo's, Velvet, or
+-- another BUSINESS_ID). Back up the project first. Do not use this to initialize
+-- an empty project; new projects must run supabase/bootstrap.sql instead.
+
+-- PRECHECK: this must return zero rows before continuing. Resolve stale duplicate
+-- Chatwoot IDs first or the unique index below cannot be created.
+SELECT chatwoot_conversation_id, count(*) AS duplicate_count
+FROM public.conversation_states
+WHERE chatwoot_conversation_id IS NOT NULL
+GROUP BY chatwoot_conversation_id
+HAVING count(*) > 1;
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM public.conversation_states
+    WHERE chatwoot_conversation_id IS NOT NULL
+    GROUP BY chatwoot_conversation_id
+    HAVING count(*) > 1
+  ) THEN
+    RAISE EXCEPTION 'Duplicate chatwoot_conversation_id values must be resolved before upgrading';
+  END IF;
+END $$;
+
+-- Keep the legacy column name for runtime/dashboard compatibility. Its value is
+-- the WhatsApp recipient identity, which can be a phone number or a longer
+-- business-scoped user ID. PostgreSQL preserves the existing values and all
+-- primary/unique/foreign keys when widening these compatible string types.
+-- One DO statement makes the three-column change atomic and safe to rerun.
+DO $$ BEGIN
+  ALTER TABLE public.customers ALTER COLUMN phone_number TYPE text;
+  ALTER TABLE public.conversation_states ALTER COLUMN phone_number TYPE text;
+  ALTER TABLE public.message_logs ALTER COLUMN phone_number TYPE text;
+END $$;
+
+-- Current conversation, Chatwoot, follow-up, and durable-memory fields.
+ALTER TABLE public.conversation_states
+  ADD COLUMN IF NOT EXISTS chatwoot_conversation_id integer,
+  ADD COLUMN IF NOT EXISTS follow_up_token varchar,
+  ADD COLUMN IF NOT EXISTS customer_data jsonb NOT NULL DEFAULT '{}'::jsonb,
+  ADD COLUMN IF NOT EXISTS order_summary text;
+
+-- Queue/webhook idempotency used by every deployment.
+CREATE TABLE IF NOT EXISTS public.processed_webhook_events (
+  source varchar NOT NULL,
+  event_id varchar NOT NULL,
+  phone_number varchar,
+  status varchar NOT NULL DEFAULT 'received',
+  received_at timestamptz DEFAULT now(),
+  processed_at timestamptz,
+  error text,
+  PRIMARY KEY (source, event_id)
+);
+ALTER TABLE public.processed_webhook_events
+  ADD COLUMN IF NOT EXISTS phone_number varchar,
+  ADD COLUMN IF NOT EXISTS status varchar NOT NULL DEFAULT 'received',
+  ADD COLUMN IF NOT EXISTS received_at timestamptz DEFAULT now(),
+  ADD COLUMN IF NOT EXISTS processed_at timestamptz,
+  ADD COLUMN IF NOT EXISTS error text;
+
+-- Delivery markers use `system`; human Chatwoot history uses `asesor`.
+ALTER TABLE public.message_logs DROP CONSTRAINT IF EXISTS message_logs_role_check;
+ALTER TABLE public.message_logs
+  ADD CONSTRAINT message_logs_role_check
+  CHECK (role IN ('user', 'model', 'system', 'asesor'));
+
+-- Correlated message metrics and durable, bounded human-handoff delivery.
+ALTER TABLE public.conversation_states
+  ADD COLUMN IF NOT EXISTS follow_up_not_before timestamptz,
+  ADD COLUMN IF NOT EXISTS follow_up_suppressed boolean NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS follow_up_suppression_reason text;
+ALTER TABLE public.message_logs
+  ADD COLUMN IF NOT EXISTS metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  ADD COLUMN IF NOT EXISTS event_key text;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_message_logs_event_key ON public.message_logs(event_key);
+CREATE TABLE IF NOT EXISTS public.handoff_deliveries (
+  business_id text NOT NULL,
+  phone_number text NOT NULL REFERENCES public.customers(phone_number),
+  request_id text NOT NULL,
+  status text NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'reserved', 'sending', 'created', 'unknown', 'exhausted', 'cancelled')),
+  attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  retry_at timestamptz NOT NULL DEFAULT now(),
+  conversation_id bigint,
+  last_error text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (business_id, phone_number)
+);
+CREATE INDEX IF NOT EXISTS idx_handoff_deliveries_pending
+  ON public.handoff_deliveries(business_id, status, retry_at);
+ALTER TABLE public.handoff_deliveries ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.handoff_deliveries FROM anon, authenticated;
+
+CREATE INDEX IF NOT EXISTS idx_message_logs_phone_created_at
+  ON public.message_logs(phone_number, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_conversation_states_chatwoot_conversation_id
+  ON public.conversation_states(chatwoot_conversation_id)
+  WHERE chatwoot_conversation_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_conversation_states_active_chatwoot_conversation_id
+  ON public.conversation_states(chatwoot_conversation_id)
+  WHERE chatwoot_conversation_id IS NOT NULL;
+
+-- Secured dashboard allow-list. Password-proxy-only deployments may leave it empty.
+CREATE TABLE IF NOT EXISTS public.dashboard_admins (
+  user_id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE public.dashboard_admins ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.dashboard_admins FROM anon, authenticated;
+
+INSERT INTO storage.buckets AS catalog_bucket (id, name, public, file_size_limit)
+VALUES ('catalogos', 'catalogos', true, 209715200)
+ON CONFLICT (id) DO UPDATE SET
+  public = true,
+  file_size_limit = GREATEST(COALESCE(catalog_bucket.file_size_limit, 0), 209715200);
+
+CREATE TABLE IF NOT EXISTS public.catalog_assets (
+  business_id text NOT NULL,
+  catalog_id text NOT NULL CHECK (catalog_id ~ '^catalogo_[a-z0-9_]{1,52}$'),
+  public_name text NOT NULL CHECK (length(trim(public_name)) BETWEEN 1 AND 120),
+  description text NOT NULL CHECK (length(trim(description)) BETWEEN 1 AND 2000),
+  media_type text NOT NULL DEFAULT 'document' CHECK (media_type IN ('document', 'image')),
+  filename text,
+  content_type text CHECK (content_type IN ('application/pdf', 'image/jpeg', 'image/png', 'image/webp')),
+  size_bytes bigint CHECK (size_bytes IS NULL OR size_bytes >= 0),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (business_id, catalog_id)
+);
+ALTER TABLE public.catalog_assets
+  ADD COLUMN IF NOT EXISTS content_type text,
+  ADD COLUMN IF NOT EXISTS size_bytes bigint;
+ALTER TABLE public.catalog_assets
+  DROP CONSTRAINT IF EXISTS catalog_assets_description_check;
+ALTER TABLE public.catalog_assets
+  ADD CONSTRAINT catalog_assets_description_check
+  CHECK (length(trim(description)) BETWEEN 1 AND 2000);
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'catalog_assets_content_type_check') THEN
+    ALTER TABLE public.catalog_assets ADD CONSTRAINT catalog_assets_content_type_check
+      CHECK (content_type IN ('application/pdf', 'image/jpeg', 'image/png', 'image/webp'));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'catalog_assets_size_bytes_check') THEN
+    ALTER TABLE public.catalog_assets ADD CONSTRAINT catalog_assets_size_bytes_check
+      CHECK (size_bytes IS NULL OR size_bytes >= 0);
+  END IF;
+END $$;
+ALTER TABLE public.catalog_assets ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.catalog_assets FROM anon, authenticated;
+
+-- Every result must be true before deploying the new bot commit.
+SELECT
+  to_regclass('public.customers') IS NOT NULL AS has_customers,
+  to_regclass('public.conversation_states') IS NOT NULL AS has_conversation_states,
+  to_regclass('public.message_logs') IS NOT NULL AS has_message_logs,
+  to_regclass('public.processed_webhook_events') IS NOT NULL AS has_webhook_events,
+  to_regclass('public.dashboard_admins') IS NOT NULL AS has_dashboard_admins,
+  to_regclass('public.catalog_assets') IS NOT NULL AS has_catalog_assets,
+  (
+    SELECT count(*) = 3 FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name IN ('customers', 'conversation_states', 'message_logs')
+      AND column_name = 'phone_number' AND data_type = 'text'
+  ) AS has_unbounded_whatsapp_identities,
+  EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'conversation_states'
+      AND column_name = 'follow_up_token'
+  ) AS has_follow_up_token,
+  EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'conversation_states'
+      AND column_name = 'customer_data'
+  ) AS has_customer_data,
+  EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'conversation_states'
+      AND column_name = 'order_summary'
+  ) AS has_order_summary,
+  to_regclass('public.uq_conversation_states_active_chatwoot_conversation_id') IS NOT NULL
+    AS has_unique_chatwoot_index,
+  EXISTS (
+    SELECT 1 FROM storage.buckets WHERE id = 'catalogos' AND public
+  ) AS has_public_catalog_bucket;

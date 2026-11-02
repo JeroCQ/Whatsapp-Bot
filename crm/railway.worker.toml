@@ -1,0 +1,9 @@
+# Select this config file for the NEW sync-worker service (root /crm).
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "python -m crm_service.worker"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10

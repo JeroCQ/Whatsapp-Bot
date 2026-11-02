@@ -1,0 +1,65 @@
+name: Catalog delivery recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment:
+        description: GitHub Environment containing this brand's Railway credentials
+        required: true
+        type: environment
+      mode:
+        description: Audit only, or enqueue reviewed recoveries
+        required: true
+        default: audit
+        type: choice
+        options:
+          - audit
+          - recover
+      phones:
+        description: Comma-separated numbers, or ALL after reviewing an audit
+        required: false
+        type: string
+      confirmation:
+        description: Type REENVIAR when mode is recover
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.deployment }}
+    env:
+      RECOVERY_BACKEND_URL: ${{ secrets.RECOVERY_BACKEND_URL }}
+      DASHBOARD_API_KEY: ${{ secrets.DASHBOARD_API_KEY }}
+      BUSINESS_ID: ${{ vars.BUSINESS_ID }}
+      RECOVERY_MODE: ${{ inputs.mode }}
+      RECOVERY_PHONES: ${{ inputs.phones }}
+      RECOVERY_CONFIRMATION: ${{ inputs.confirmation }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Audit or enqueue catalog recovery
+        run: |
+          python - <<'PY'
+          import os
+          import subprocess
+          import sys
+
+          command = [sys.executable, "scripts/recover_catalog_deliveries.py"]
+          if os.environ["RECOVERY_MODE"] == "recover":
+              if os.environ.get("RECOVERY_CONFIRMATION") != "REENVIAR":
+                  raise SystemExit("Recovery requires confirmation=REENVIAR")
+              phones = os.environ.get("RECOVERY_PHONES", "").strip()
+              if phones.upper() == "ALL":
+                  command.append("--all")
+              else:
+                  selected = [item.strip() for item in phones.split(",") if item.strip()]
+                  if not selected:
+                      raise SystemExit("Recovery requires comma-separated phones or ALL")
+                  for phone in selected:
+                      command.extend(["--phone", phone])
+              command.extend(["--execute", "--confirm", "REENVIAR"])
+          subprocess.run(command, check=True)
+          PY

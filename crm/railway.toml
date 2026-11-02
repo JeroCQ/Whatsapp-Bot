@@ -1,0 +1,12 @@
+# Set Railway Root Directory to /crm for BOTH new services.
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+preDeployCommand = "alembic upgrade head"
+startCommand = "sh -c 'exec uvicorn crm_service.api:create_app --factory --host 0.0.0.0 --port ${PORT:-8080} --no-access-log'"
+healthcheckPath = "/ready"
+healthcheckTimeout = 60
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
