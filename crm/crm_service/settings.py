@@ -81,7 +81,7 @@ class Settings:
             raise ValueError("sync_max_seconds must be finite and between 0.05 and 120")
         if self.backoff_max_seconds < self.backoff_base_seconds:
             raise ValueError("Backoff maximum must be >= base")
-        if self.source_mode not in {"synthetic", "postgres_readonly", "disabled"}:
+        if self.source_mode not in {"synthetic", "postgres_readonly", "disabled", "synthetic_fixture"}:
             raise ValueError("Unsupported CRM_SOURCE_MODE")
         for name, high in (("sync_max_projections", 1000), ("sync_max_history_messages", 100000)):
             if type(getattr(self, name)) is not int or not 1 <= getattr(self, name) <= high:
@@ -134,6 +134,11 @@ class Settings:
                 raise ValueError("Each business needs a distinct source database and dedicated login")
             sources.add(identity)
             readers.add(parsed.username)
+        if os.environ.get("CRM_SOURCE_MODE") == "synthetic_fixture" and (
+            set(businesses) - {"synthetic_one", "synthetic_two"}
+            or any(b.readonly_database_url or b.source_url for b in businesses.values())
+        ):
+            raise ValueError("synthetic_fixture mode allows only the two synthetic businesses and no sources")
         enabled = os.environ.get("NOTIFICATIONS_ENABLED", "false").lower() == "true"
         if enabled:
             raise ValueError("This staging branch requires NOTIFICATIONS_ENABLED=false")

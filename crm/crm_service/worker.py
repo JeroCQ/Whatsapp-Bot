@@ -26,7 +26,14 @@ def main() -> None:
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     signal.signal(signal.SIGINT, lambda *_: stop.set())
-    worker = Synchronizer(settings, sessions)
+    factory = None
+    if settings.source_mode == "synthetic_fixture":
+        from crm_service.fixture_source import FixtureReader
+
+        def factory(business):  # noqa: F811
+            return FixtureReader(business.id)
+
+    worker = Synchronizer(settings, sessions, factory)
     try:
         if args.once:
             result = worker.run(args.business)
