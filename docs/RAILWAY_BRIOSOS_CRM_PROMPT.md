@@ -199,11 +199,13 @@ Pide al usuario un mensaje entrante nuevo desde su WhatsApp de pruebas autorizad
 para abrir la ventana real. No selecciones un cliente histórico ni fabriques un
 callback para declarar recepción física. Comprueba:
 
-cliente → handoff guardado → pausa confirmada → tomar control → una respuesta
-humana enviada por el bot → recepción en el dispositivo y recibo Meta → cerrar
+cliente → handoff guardado (waiting, is_paused=true) → tomar control → pausa
+humana confirmed=true → una respuesta humana enviada por el bot → recepción en el dispositivo y recibo Meta → cerrar
 y devolver IA → siguiente mensaje entrante obtiene respuesta automática.
 
-No habilites el compositor antes de confirmar pausa/propietario/ventana. Un envío
+El handoff en waiting todavía tiene confirmed=false: la confirmación humana
+llega después de tomar control y resolver cualquier envío en curso. No habilites
+el compositor antes de confirmar pausa/propietario/ventana. Un envío
 accepted no es delivered/read. Un resultado unknown se consulta por el mismo
 command_id y nunca se reenvía automáticamente. Los dobles clics conservan clave y
 cuerpo originales. No reviertas a un bot antiguo con casos humanos o envíos inciertos
