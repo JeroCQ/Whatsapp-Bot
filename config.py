@@ -3,6 +3,7 @@ import logging
 import math
 import sys
 from chatwoot_security import normalize_chatwoot_root
+from human_support import human_support_provider
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -59,6 +60,7 @@ class Settings:
     WA_VERIFY_TOKEN = os.getenv("WA_VERIFY_TOKEN")
     WA_TOKEN = os.getenv("WA_TOKEN")
     WA_PHONE_NUMBER_ID = os.getenv("WA_PHONE_NUMBER_ID")
+    WA_APP_SECRET = os.getenv("WA_APP_SECRET", "")
 
     CHATWOOT_BASE_URL = os.getenv("CHATWOOT_BASE_URL")
     CHATWOOT_API_TOKEN = os.getenv("CHATWOOT_API_TOKEN")
@@ -69,6 +71,12 @@ class Settings:
     CHATWOOT_ENABLED = parse_boolean_env("CHATWOOT_ENABLED", default=any((
         CHATWOOT_BASE_URL, CHATWOOT_API_TOKEN, CHATWOOT_ACCOUNT_ID, CHATWOOT_INBOX_ID,
     )))
+    # Omitted means the exact legacy Chatwoot/bot-only decision. CRM is opt-in.
+    HUMAN_SUPPORT_PROVIDER = os.getenv("HUMAN_SUPPORT_PROVIDER", "").strip().lower()
+    CRM_CONTROL_ENABLED = parse_boolean_env("CRM_CONTROL_ENABLED", default=False)
+    CRM_BOT_CONTROL_SECRET = os.getenv("CRM_BOT_CONTROL_SECRET", "")
+    CRM_SOURCE_READ_ENABLED = parse_boolean_env("CRM_SOURCE_READ_ENABLED", default=False)
+    CRM_SOURCE_READ_SECRET = os.getenv("CRM_SOURCE_READ_SECRET", "")
     # Retained in automatic mode only as an immediate rollback value. It is
     # included in creation requests exclusively when the mode is fixed.
     CHATWOOT_ASSIGNEE_ID = os.getenv("CHATWOOT_ASSIGNEE_ID")
@@ -181,6 +189,24 @@ class Settings:
             value = getattr(cls, name)
             if not math.isfinite(value) or value < 0.001:
                 raise ValueError(f"{name} must be a finite positive timeout of at least 0.001 seconds")
+        provider = human_support_provider(cls)
+        if cls.HUMAN_SUPPORT_PROVIDER:
+            # Ignore copied Chatwoot placeholders for an explicitly selected CRM.
+            cls.CHATWOOT_ENABLED = provider == "chatwoot"
+        if provider == "crm" and not cls.CRM_CONTROL_ENABLED:
+            raise ValueError("HUMAN_SUPPORT_PROVIDER=crm requires CRM_CONTROL_ENABLED=true")
+        if cls.CRM_CONTROL_ENABLED:
+            if provider != "crm":
+                raise ValueError("CRM_CONTROL_ENABLED requires HUMAN_SUPPORT_PROVIDER=crm")
+            if len(cls.CRM_BOT_CONTROL_SECRET.strip()) < 32:
+                raise ValueError("CRM_BOT_CONTROL_SECRET must contain at least 32 characters")
+            if len(cls.WA_APP_SECRET.strip()) < 32:
+                raise ValueError("WA_APP_SECRET must contain at least 32 characters in CRM mode")
+        if cls.CRM_SOURCE_READ_ENABLED:
+            if len(cls.CRM_SOURCE_READ_SECRET.strip()) < 32:
+                raise ValueError("CRM_SOURCE_READ_SECRET must contain at least 32 characters")
+            if cls.CRM_SOURCE_READ_SECRET == cls.CRM_BOT_CONTROL_SECRET:
+                raise ValueError("CRM source and control secrets must be different")
         chatwoot_values = [cls.CHATWOOT_BASE_URL, cls.CHATWOOT_API_TOKEN, cls.CHATWOOT_ACCOUNT_ID, cls.CHATWOOT_INBOX_ID]
         if cls.CHATWOOT_ENABLED:
             if not all(chatwoot_values) or not (

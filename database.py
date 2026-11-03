@@ -4,6 +4,7 @@ import uuid
 from supabase import create_client, Client
 from config import config
 from observability import message_metadata, message_event_key
+from human_support import human_handoffs_enabled, human_support_provider, uses_crm
 
 supabase: Client = create_client(config.SUPABASE_URL, config.SUPABASE_KEY)
 
@@ -61,8 +62,19 @@ def update_bot_state(phone_number: str, new_state: str):
 
 
 def pause_bot_for_handoff(phone_number: str, reason: str):
-    if not getattr(config, "CHATWOOT_ENABLED", True):
+    if not human_handoffs_enabled(config):
         return
+    if uses_crm(config):
+        # The bot, not the CRM mirror, owns this atomic state transition.
+        # Lazy imports preserve the existing database/observability dependency graph.
+        from human_control_store import apply_control
+        from observability import current_trace
+
+        source_id = current_trace().get("source_event_id") or uuid.uuid4().hex
+        return apply_control(
+            phone_number, "handoff", command_id=f"handoff:{source_id}", actor="bot",
+            expected_version=None, payload={"reason": reason},
+        )
     supabase.table("conversation_states").update({
         "current_state": "HUMAN_HANDOFF",
         "is_paused": True,
@@ -78,7 +90,10 @@ def ensure_bot_only_state(phone_number: str, state: dict | None):
     checkout memory, and every unrelated state/preference. The observed fields
     form a conditional update so a concurrent state change is never overwritten.
     """
-    if getattr(config, "CHATWOOT_ENABLED", True) or not state:
+    if human_support_provider(config) != "bot_only" or not state:
+        return state
+    if state.get("crm_control_phase") in {"waiting", "pausing", "human"}:
+        # Changing a provider flag is not a substitute for the bot's close command.
         return state
     if state.get("current_state") != "HUMAN_HANDOFF" and not state.get("chatwoot_conversation_id"):
         return state
@@ -324,6 +339,9 @@ def resume_bot_state(conv_id: int):
 def reset_client_history(phone: str):
     """Borra el historial de mensajes y resetea el estado del cliente para pruebas."""
     try:
+        rows = supabase.table("conversation_states").select("*").eq("phone_number", phone).limit(1).execute().data
+        if rows and rows[0].get("crm_control_phase") in {"waiting", "pausing", "human"}:
+            return False
         supabase.table("message_logs").delete().eq("phone_number", phone).execute()
         supabase.table("conversation_states").update({
             "current_state": "GREETING",
@@ -332,5 +350,7 @@ def reset_client_history(phone: str):
             "chatwoot_conversation_id": None,
             "follow_up_not_before": None,
         }).eq("phone_number", phone).execute()
+        return True
     except Exception as e:
         print(f"[DB ERROR] Falló el reset de historial para {phone}: {e}")
+        return False

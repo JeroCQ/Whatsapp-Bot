@@ -34,6 +34,7 @@ from gemini_runtime import GeminiOperationTimeout, run_gemini
 from webhook_utils import is_simple_greeting
 from commercial_intents import b2b_actions, catalog_may_suppress_handoff, unregistered_presentation_reason
 from follow_up_policy import load_business_policy
+from human_support import human_handoffs_enabled
 from observability import operational_event
 from database import (
     ensure_bot_only_state,
@@ -255,7 +256,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
     """
     refresh_managed_catalogs()
     system_instruction_with_files = extend_system_instruction(SYSTEM_INSTRUCTION, FILE_CATALOG)
-    handoffs_enabled = config.CHATWOOT_ENABLED
+    handoffs_enabled = human_handoffs_enabled(config)
     if not handoffs_enabled:
         system_instruction_with_files += "\n\n" + _BOT_ONLY_INSTRUCTION
     state_record = get_or_create_customer_state(phone)
