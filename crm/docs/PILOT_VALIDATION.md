@@ -92,16 +92,20 @@ Los hechos de entrega no reabren casos cerrados ni cambian leído por actor.
 No se ha probado recepción en un dispositivo real ni se han usado credenciales
 productivas, Railway, Supabase remoto o Meta real. La CLI Railway 5.71.0 está instalada; railway whoami respondió Unauthorized y
 no hay secretos piloto inyectados. Se guardó el requisito RAILWAY_TOKEN para entrada
-segura por el usuario, pendiente de guardar/publicar la configuración. No se ha modificado Lovable, desplegado servicios
-ni aplicado SQL en Briosos o los tres negocios activos. Briosos es el único piloto
+segura por el usuario, pendiente de guardar/publicar la configuración. El frontend se integró posteriormente con autorización explícita y se subió
+a main@6060d7828cc7ff58fb2b644911b847404a71302d. Sus 10 pruebas Node, 8 pruebas
+existentes, TypeScript, lint estricto nuevo y build pasan, sin cambiar lockfiles
+ni las pantallas anteriores. No se han desplegado los servicios Railway ni
+aplicado SQL en Briosos o los tres negocios activos. Briosos es el único piloto
 autorizado por el usuario; ejecutar allí los pasos de la guía con acceso seguro.
 
 Un resultado unknown puede mantener el caso bloqueado si nunca llega un recibo.
 Se elige seguridad frente a duplicados; no existe una operación de resolución
 forzada del intento. Las respuestas humanas son texto dentro de ventana, sin
 adjuntos ni plantillas. La frescura del inbox depende del worker, mientras las
-acciones consultan siempre al bot. Falta integrar el proxy/compositor Lovable y
-verificar carga/latencia y recepción física antes del primer piloto real.
+acciones consultan siempre al bot. El proxy/compositor Lovable ya están integrados en Git. Faltan configuración
+privada/activación del hosting, despliegue del piloto, carga/latencia y recepción
+física antes de declarar operativo el piloto real.
 
 NOTIFICATIONS_ENABLED=false se mantiene exigido por configuración. Siguen
 pendientes VAPID público/service worker, identidad individual y revocación;

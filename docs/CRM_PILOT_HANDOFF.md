@@ -7,7 +7,10 @@ migrado ni contactado ningún servicio productivo desde este entorno.
 La rama de trabajo es `crm-staging-safety`. No fusionar ni hacer push a `43-CRM`,
 `42-actualizacion-de-precios` o `crm-railway-dockerfile`. El arreglo existente de
 `crm/Dockerfile` se conserva. El frontend existente y las instrucciones/catálogos
-del bot se conservan; la conexión de los nuevos botones se entrega al frontend.
+del bot se conservan. La integración de botones/compositor ya se aplicó, con
+autorización explícita, en chatty-catalog-compass main@6060d7828cc7ff58fb2b644911b847404a71302d.
+El código está publicado en Git; configuración privada, activación y comprobación
+física del piloto siguen pendientes. No reaplicar el parche archivado sobre main.
 
 Base bot: `c5531d0b53e8e77de5b41bb2f5c86a69a59c5390`; integración CRM:
 `af45254911e38d80434ac6d28ac875a0ca98c626`. Para la entrega conjunta, incluidos
@@ -257,8 +260,14 @@ ejecutado aquí. No crear más ramas ni cambiar la Source de servicios activos.
 
 ## Lovable: botones y compositor
 
-No se ha editado el repositorio frontend. Su IA debe conservar la interfaz actual,
-gestión de instrucciones/catálogos y proxy existente. Implementar lo siguiente:
+La integración ya está implementada y subida al main autorizado del frontend
+(commit indicado arriba), conservando las pantallas, instrucciones/catálogos,
+cuentas y proxy anteriores. Build, TypeScript, 10 pruebas Node y 8 pruebas previas
+pasan. El panel de una persona de pruebas usa /chats?crm_pilot=1. Su servidor
+necesita CRM_BACKEND_URL, CRM_JWT_SECRET, CRM_PILOT_BUSINESS_ID=briosos,
+CRM_PILOT_OPERATOR_ID individual y CRM_PILOT_OPERATOR_SECRET nuevo y privado;
+CRM_PILOT_ENABLED permanece false hasta completar el despliegue Briosos. Ver
+docs/CRM_PILOT.md en el frontend para configuración. El comportamiento es:
 
 1. El servidor autentica al empleado y emite JWT HS256 con `CRM_JWT_SECRET`,
    `iss=chatty-catalog-compass`, `aud=whatsapp-crm`, `profile`,
@@ -328,7 +337,7 @@ del proxy. Las fallas de Meta y carreras se inyectan solo en tests locales, no
 forzando errores externos en un envío real.
 
 Pendiente aquí: acceso Railway/Meta configurado de forma segura, aplicar esquema
-solo al piloto, desplegar sus servicios, integrar Lovable y registrar recepción
+solo al piloto, desplegar sus servicios, configurar/activar el frontend integrado y registrar recepción
 física. La CLI oficial Railway 5.71.0 ya está instalada y probada en este entorno, pero
 su comprobación de acceso respondió Unauthorized: no hay credenciales piloto
 inyectadas. Se guardó el requisito seguro RAILWAY_TOKEN para el proyecto de pruebas;

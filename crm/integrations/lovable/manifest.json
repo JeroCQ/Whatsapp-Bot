@@ -11,5 +11,8 @@
     "src/routeTree.gen.ts"
   ],
   "original_frontend_modified": false,
-  "pilot_enabled_by_default": false
+  "pilot_enabled_by_default": false,
+  "subsequently_applied_with_user_authorization": true,
+  "frontend_main_commit": "6060d7828cc7ff58fb2b644911b847404a71302d",
+  "frontend_main_push_verified": true
 }

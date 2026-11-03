@@ -1,10 +1,15 @@
-# Parche concreto de integración Lovable del piloto
+# Parche archivado de integración Lovable del piloto
+
+**Ya aplicado y subido al frontend main, con autorización del usuario:**
+`6060d7828cc7ff58fb2b644911b847404a71302d`. No reaplicar sobre el main actual.
+El piloto sigue deshabilitado hasta configurar sus servicios y secretos.
+Las instrucciones de revisión siguientes documentan la preparación del artefacto.
 
 Este directorio contiene código ejecutable y un parche unificado para
 `JeroCQ/chatty-catalog-compass`, base exacta
-`1cda4a8069d189834837e082b378ae05629a1f02`. El frontend original permanece **sin
-modificaciones**: la instrucción de solo lectura requiere autorización explícita
-antes de aplicar/publicar este parche. La copia bajo `files/` permite revisar cada
+`1cda4a8069d189834837e082b378ae05629a1f02`. Durante la preparación el frontend original permaneció sin modificaciones.
+El usuario levantó después la restricción de solo lectura y autorizó aplicar y
+subir la integración a main; esa operación ya está verificada remotamente. La copia bajo `files/` permite revisar cada
 archivo completo. No añade dependencias ni modifica manifiestos o lockfiles.
 
 ## Comportamiento implementado
@@ -124,6 +129,7 @@ origen de esas URLs por registry.npmjs.org para descargar las mismas versiones c
 los mismos SHA-512 del lock. Bun verificó integridad. Se restauró el lock original
 byte por byte; no se envía cambio de dependencia/lock en el parche.
 
-Pendiente: aplicar en el frontend autorizado y configurar su servidor/hosting;
+Aplicación y push completados. Pendiente: configurar su servidor/hosting y activar
+únicamente Briosos cuando bot/API/worker estén listos;
 comprobar en navegador el ciclo físico en Briosos. Los tests de gateway y build no
 constituyen demostración de recepción en un dispositivo WhatsApp real.
