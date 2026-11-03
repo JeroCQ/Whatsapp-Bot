@@ -83,11 +83,14 @@ def classify(
         quality.add("missing_is_paused_conservative_attention")
         paused = True
     chatwoot = state.get("chatwoot_conversation_id")
-    status = delivery.get("status")
+    crm = state.get("human_support_provider") == "crm"
+    phase = state.get("crm_control_phase")
+    case_exists = bool(phase == "human" and state.get("crm_control_owner")) if crm else bool(chatwoot)
+    status = None if crm else delivery.get("status")
     if paused:
         bucket = (
             "awaiting_human"
-            if (unanswered or not humans or status in PENDING or not chatwoot)
+            if (unanswered or not humans or status in PENDING or not case_exists)
             else "human_active"
         )
     else:
@@ -97,7 +100,11 @@ def classify(
     if bucket == "awaiting_human":
         if status in {"unknown", "exhausted"}:
             priority, reason = 1, "handoff_delivery_uncertain"
-        elif not chatwoot:
+        elif crm and phase == "pausing":
+            priority, reason = 1, "crm_pause_pending_inflight_send"
+        elif crm and not case_exists:
+            priority, reason = 3, "crm_handoff_unassigned"
+        elif not case_exists:
             priority, reason = 2, "paused_without_chatwoot"
         elif status in {"pending", "reserved", "sending"}:
             priority, reason = 3, "handoff_creation_pending"

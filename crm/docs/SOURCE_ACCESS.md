@@ -2,7 +2,15 @@
 
 ## Estado de esta entrega
 
-**La activación con fuentes productivas está bloqueada.** El worker de staging
+**Supabase directo remoto sigue bloqueado.** El camino real soportado es ahora
+`CRM_SOURCE_MODE=bot_api`: fachada GET del bot con secreto dedicado de lectura,
+sin SERVICE_ROLE_KEY en CRM. Ver [guía piloto](../../docs/CRM_PILOT_HANDOFF.md).
+El token lector no habilita control ni SQL arbitrario; el bot conserva sus
+credenciales actuales para su propia operación. Esto limita la capacidad efectiva
+del consumidor CRM por la API, no cambia roles/RLS del Supabase del bot.
+La guía siguiente aplica exclusivamente a lectores PostgreSQL directos sintéticos.
+
+El worker en modo PostgreSQL de staging
 acepta solamente fuentes PostgreSQL sintéticas en loopback, con base llamada
 `crm_test_source_*` o `crm_staging_source_*` y un login dedicado
 `crm_staging_reader_*`. Rechaza destinos remotos y nombres fuera de ese espacio
@@ -122,7 +130,9 @@ función, tabla o secreto real de los bots se alteró para realizar estas prueba
 
 ## Requisitos antes de una fuente real
 
-Se necesita un diseño aprobado que entregue a cada empresa una fuente con
+Para la fachada bot_api seguir el piloto autorizado y verificar aislamiento y
+rotación por secreto; no aplicar la propuesta SQL de lectores al bot. Para un
+acceso PostgreSQL directo remoto (todavía no habilitado), se necesita un diseño aprobado que entregue a cada empresa una fuente con
 credenciales dedicadas y permisos efectivos demostrablemente limitados. Una
 fachada o réplica aislada debe definir quién la alimenta, qué datos contiene,
 latencia/retención y cómo se evita modificar la base de los bots. No se proporciona

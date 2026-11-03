@@ -17,7 +17,7 @@ def test_migrations_roundtrip_and_metadata_parity(database_url, migrated_engine)
     command.check(config)
     assert set(Base.metadata.tables) <= set(inspect(migrated_engine).get_table_names())
     with migrated_engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0002_sync_controls"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0003_bot_commands"
 
 
 def test_upgrade_preserves_existing_crm_data(database_url, monkeypatch):

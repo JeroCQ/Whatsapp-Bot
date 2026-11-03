@@ -3,12 +3,16 @@
 ## Fronteras
 
 Usar exclusivamente crm-staging-safety, derivada de e451f5c, preservando Dockerfile.
-No hacer push/merge a ramas activas ni desplegar. Todo estado nuevo reside en CRM.
-Migración vigente: 0002_sync_controls; no usar migraciones ni roles de los bots.
+No hacer push/merge a ramas activas. El despliegue posterior autorizado se limita
+al piloto Briosos; aquí no se ha desplegado. Estado de gestión reside en CRM;
+estado de atención y envíos reside en el bot. Migración CRM: 0003_bot_commands.
+El esquema nuevo del bot y las instrucciones Railway/Lovable están en
+[CRM_PILOT_HANDOFF.md](../../docs/CRM_PILOT_HANDOFF.md).
 
-Mantener NOTIFICATIONS_ENABLED=false. Solo fuentes de pruebas loopback marcadas
-con lectores dedicados pueden activarse. Producción permanece bloqueada incluso
-en modo postgres_readonly. No reutilizar SERVICE_ROLE_KEY ni otras claves del bot.
+Mantener NOTIFICATIONS_ENABLED=false. El modo bot_api soporta exportación real
+por un secreto GET dedicado del bot, distinto del de control. Fuentes PostgreSQL
+directas siguen limitadas a loopback marcado, incluso en postgres_readonly.
+No reutilizar SERVICE_ROLE_KEY ni otras claves administrativas del bot.
 
 ## Backfill controlado
 
@@ -56,23 +60,24 @@ registra perfil/empresa/acción/campos sin contenido completo.
 ## Recuperación y rotación de staging
 
 - Backup de CRM antes de migrar; alembic upgrade head. No downgrade base sobre datos
-  que se deban conservar. Ningún SQL del bot se necesita para este cambio.
+  que se deban conservar. La atención operativa sí necesita el esquema del bot,
+  revisado y aplicado solo al piloto según su guía; el modo sintético no.
 - Corregir acceso/configuración y esperar next_retry_at; repetir es idempotente.
   No borrar mensajes/notas/cursores para corregir un error de red.
 - Para rehacer fixtures, usar solo loader contra bases vacías/marcadas; nunca como
   recuperación productiva. El lector dedicado vuelve a auditar permisos.
-- Rollback: detener solo API/worker de staging, volver a código compatible con el
-  esquema o restaurar una copia CRM. Los bots no dependen del CRM.
+- Rollback: detener solo API/worker del piloto; no volver a código bot anterior
+  con casos humanos abiertos o envíos inciertos. Cerrar/drenar con autoridad
+  actual primero. Los bots reciben sin CRM; un caso humano permanece pausado.
 - Rotar JWT y secreto interno de forma coordinada. Son distintos; JWT también
   invalida cursores y no tiene keyring. No revocar credenciales utilizadas por bots.
 
 ## Requisitos antes del primer piloto real
 
-1. Revisión separada con propietario de datos de [la propuesta de acceso](SOURCE_ACCESS.md).
-   PUBLIC/funciones de un Supabase compartido impiden afirmar lectura efectiva con
-   solo un rol nuevo. Hace falta una fuente aislada endurecida o revisión externa
-   demostrable sin alterar ACL de bots. Levantar bloqueo remoto requiere otro cambio
-   revisado; no existe una variable para saltarlo en esta rama.
+1. Para bot_api, revisar y activar solo la fachada Briosos y secretos dedicados
+   según la guía piloto. Para PostgreSQL directo, revisar por separado
+   [la propuesta de acceso](SOURCE_ACCESS.md); PUBLIC/funciones compartidas impiden
+   afirmar lectura efectiva con solo un rol nuevo. Ese acceso remoto sigue bloqueado.
 2. Aprobar infraestructura, credenciales dedicadas y conectividad. No SERVICE_ROLE
    en CRM ni pruebas de escrituras denegadas contra fuentes productivas.
 3. Integrar proxy conforme al [contrato](INTEGRATION.md), resolver permisos servidor,
@@ -83,7 +88,8 @@ registra perfil/empresa/acción/campos sin contenido completo.
 5. Mantener notificaciones apagadas hasta definir clave pública VAPID (sin endpoint
    actual), service worker, suscripciones, revocación y deduplicación. Un crash entre
    aceptación push y commit puede repetir entrega: no hay garantía exactly-once.
-6. Acordar capacidades ausentes: tareas globales, métricas de tiempos/SLA y acciones
-   del bot no existen. No construir UI que dependa de endpoints ficticios.
+6. Acordar capacidades ausentes: tareas globales, métricas de tiempos/SLA, adjuntos
+   humanos y plantillas fuera de ventana. Las acciones del bot implementadas
+   requieren confirmar versión/pausa y tratar unknown sin reenvío automático.
 7. Ensayar restauración, carga y alertas de presupuesto/frescura con datos aprobados.
    La validación local no autoriza promoción ni un despliegue.

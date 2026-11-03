@@ -107,10 +107,17 @@ class Synchronizer:
                     else:
                         if self.settings.source_mode == "disabled":
                             raise SourceFailure("source_access_disabled")
-                        require_disposable_source(business.readonly_database_url)
-                        from crm_service.source_postgres import PostgresSourceAdapter
+                        if self.settings.source_mode == "bot_api":
+                            from crm_service.bot_source import BotSourceAdapter
 
-                        adapter = PostgresSourceAdapter(business, budget=budget)
+                            adapter = BotSourceAdapter(
+                                business, budget=budget, test_mode=self.settings.bot_test_mode
+                            )
+                        else:
+                            require_disposable_source(business.readonly_database_url)
+                            from crm_service.source_postgres import PostgresSourceAdapter
+
+                            adapter = PostgresSourceAdapter(business, budget=budget)
                     stages = ("customers", "conversation_states", "handoff_deliveries", "message_logs")
                     while phase < 4:
                         self.local_timeout(session, budget)

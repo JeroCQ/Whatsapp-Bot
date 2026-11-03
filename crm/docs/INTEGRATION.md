@@ -1,4 +1,10 @@
-# Contrato servidor frontend ↔ CRM para staging
+# Contrato servidor frontend ↔ CRM
+
+La atención operativa del piloto se especifica en
+[CRM_PILOT_HANDOFF.md](../../docs/CRM_PILOT_HANDOFF.md): `GET C/control`,
+`GET C/commands/{command_id}`, `POST C/take`, `POST C/messages`, `POST C/close`,
+cuerpos, respuestas, estados inciertos y conexión de Lovable. Este documento
+conserva el contrato completo de consulta/gestión CRM. OpenAPI incluye ambas partes.
 
 Este documento corresponde al código en `crm_service/api.py`, `schemas.py`,
 `security.py` y `classification.py`, no a capacidades previstas. El inventario
@@ -190,12 +196,16 @@ strings obligatorios. `{item_id}` es el string devuelto al crear el recurso.
 | `GET /v1/agents` | JWT | 200 `[{"profile":"employee-007","businesses":["example_a"]}]`, perfiles registrados que comparten alguna empresa accesible; la lista de empresas de cada perfil se intersecta con el alcance del actor |
 
 Capabilities anuncia métodos de fuente limitados a lectura, no una atestación
-de privilegios Supabase: `source_methods_read_only=true`, `source_read_only=false`,
-`source_credentials_verified=false`, `production_sources_enabled=false`,
-`source_access_mode` indica el modo configurado,
-y `sync_execution="worker"`. `crm_updates=true`; `manual_handoff_enabled=false`;
-`manual_handoff_contract={"version":1,"transport":"authenticated_bot_endpoint_only","implemented":false}`;
-`send_messages`, `resolve_conversations` y `resume_bot` son falsos.
+de privilegios Supabase: `source_methods_read_only=true` y
+`source_credentials_verified=false`. `source_read_only` y
+`production_sources_enabled` son verdaderos con modo bot_api y fuentes habilitadas;
+no certifican que un bot remoto ya esté actualizado. `source_access_mode` indica
+el modo configurado y `sync_execution="worker"`. `crm_updates=true`;
+`human_control_businesses` enumera las empresas autorizadas con control habilitado.
+`manual_handoff_enabled`, `send_messages`, `resolve_conversations` y `resume_bot`
+son verdaderos si esa lista no está vacía; comprobar la pertenencia por negocio.
+`manual_handoff_contract={"version":1,"transport":"authenticated_bot_endpoint_only","implemented":true}`;
+`send_transport="authenticated_bot_endpoint_only"`. La API no envía a Meta.
 `notifications_enabled` refleja la configuración, que en staging permanece falsa.
 
 ### Inbox y detalle
@@ -343,8 +353,9 @@ crea un intento nuevo; una intervención posterior debe usar otra clave.
 - Directorio/autenticación de empleados, invitaciones, alta/baja, roles de empleado,
   logout remoto y revocación de suscripciones por administrador. `/v1/agents` solo
   lista perfiles previamente observados.
-- Composer, envío Meta, resolución, reanudación del bot, handoff manual o escritura
-  al origen. El capability de handoff es un contrato futuro deshabilitado.
+- Adjuntos humanos, plantillas fuera de la ventana de WhatsApp, cambio forzado de
+  propietario o recuperación automática de un envío de resultado incierto.
+  El CRM no tiene emisor Meta ni permite escritura directa a tablas del origen.
 - Catálogo editable de etapas/etiquetas, eliminación de conversaciones, endpoints
   de auditoría, marcar notificaciones como leídas o búsqueda/paginación global de mensajes.
 - Garantía de entrega única de Web Push ante crash después de aceptación del
@@ -352,7 +363,6 @@ crea un intento nuevo; una intervención posterior debe usar otra clave.
   en el service worker, pero no reemplaza esa integración pendiente.
 
 No habilitar pantallas/acciones a partir de esta lista de trabajo futuro. Para el
-primer piloto hacen falta credenciales efectivamente limitadas a lectura y su
-atestación, identidad individual/revocación, aprobación del contrato servidor,
-secretos por servicio y validación de integración aislada. Staging continúa con
-fuentes sintéticas y `NOTIFICATIONS_ENABLED=false`.
+primer piloto seguir la guía Briosos: secreto de exportación GET sin credenciales
+administrativas, control por otro secreto, identidad individual, aprobación del
+proxy y prueba aislada. Sintético sigue disponible y NOTIFICATIONS_ENABLED=false.

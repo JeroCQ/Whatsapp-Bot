@@ -1,10 +1,11 @@
-# CRM independiente: preparación de staging
+# CRM independiente: atención humana mediante el bot
 
 Continuación del backend existente, no una reconstrucción. Rama de pruebas
 `crm-staging-safety`, basada en `crm-railway-dockerfile@e451f5c`; preserva su
-Dockerfile compatible con Railway. Solo cambia `crm/`. No desplegar esta rama ni
-promoverla a `43-CRM`, `42-actualizacion-de-precios` o `crm-railway-dockerfile`:
-`bot-briosos-web` utiliza `43-CRM`.
+Dockerfile compatible con Railway. Ahora incluye operaciones autenticadas del bot,
+sin un segundo emisor Meta. No promover a `43-CRM`, `42-actualizacion-de-precios`
+o `crm-railway-dockerfile`. Solo el piloto Briosos está autorizado para una futura
+activación; no se ha desplegado desde este entorno.
 
 El runtime mantiene Python 3.12, FastAPI, Pydantic v2, SQLAlchemy 2/Alembic,
 PostgreSQL y procesos `api` / `sync-worker`, sin Redis ni imports del bot.
@@ -15,13 +16,16 @@ flowchart LR
   F -->|JWT HS256 corto| A[CRM API]
   A --> D[(PostgreSQL CRM)]
   D -->|solicitudes persistidas| W[Sync worker]
-  S[(Fuentes sintéticas / lectores dedicados)] -->|SELECT y auditoría ACL| W
+  S[Bot: exportación autenticada GET / fuentes sintéticas] --> W
   W --> D
-  A -->|deep link| C[Chatwoot existente]
+  A -->|control autenticado por negocio| B[Bot: autoridad y emisor Meta]
 ```
 
 ## Guías vigentes
 
+- [Entrega operativa del piloto](../docs/CRM_PILOT_HANDOFF.md): contrato de control,
+  configuración por servicio, Railway solo Briosos, botones/compositor Lovable,
+  aceptación local y pasos pendientes para comprobar recepción física.
 - [Contrato completo](docs/INTEGRATION.md): rutas reales, parámetros, cuerpos,
   respuestas, JWT, cabeceras del proxy y carencias. [OpenAPI](docs/openapi.json).
 - [Staging reproducible](docs/STAGING.md): tres bases desechables, dos empresas,
@@ -34,9 +38,10 @@ flowchart LR
 
 ## Fronteras actuales
 
-Las fuentes remotas/productivas están bloqueadas en código. Solo se admiten
-fuentes PostgreSQL sintéticas loopback y lectores dedicados. El modo
-`postgres_readonly` prepara ese camino, pero no activa producción. El worker
+`CRM_SOURCE_MODE=bot_api` permite leer una fuente real mediante la fachada GET
+del bot y un secreto dedicado que no autoriza comandos. API usa otro secreto para
+tomar control, responder y cerrar mediante el bot. Las fuentes PostgreSQL directas
+siguen limitadas a loopback de pruebas; `postgres_readonly` no activa producción. El worker
 rechaza SERVICE_ROLE_KEY administrativas: renombrarlas no reduce privilegios.
 El adaptador HTTP heredado solo admite transportes simulados en pruebas.
 
@@ -50,7 +55,9 @@ NOTIFICATIONS_ENABLED=false es obligatorio al cargar configuración en esta rama
 No hay endpoint de clave pública VAPID, revocación/administración de identidades,
 tareas globales o métricas de tiempos/SLA. Un profile compartido por marca comparte
 leído y preferencias; no identifica individualmente a cada empleado. No hay
-composer, envío Meta, reanudación o resolución. Las capabilities son explícitas.
+envío Meta independiente: el compositor se conecta a comandos del bot mediante
+CRM; tomar control, responder, cerrar y reanudar existen bajo flags por negocio.
+Las capabilities describen esas operaciones; no certifican un despliegue remoto.
 
 ## Arranque y migraciones locales
 
@@ -69,8 +76,9 @@ python3.12 -m venv .venv
 .venv/bin/python -m crm_service.worker
 ```
 
-0002_sync_controls actualiza únicamente PostgreSQL CRM después de 0001_crm.
-No ejecutar SQL de supabase/ del repositorio padre. /ready comprueba migraciones
+0003_bot_commands actualiza únicamente PostgreSQL CRM después de 0002_sync_controls.
+Los comandos del bot necesitan además su propio esquema, según la guía piloto;
+no aplicar ese SQL en los tres negocios activos. /ready comprueba migraciones
 y base CRM; no garantiza baseline. Consultar /v1/sync-status para cada negocio.
 La configuración no carga .env automáticamente.
 
@@ -78,8 +86,8 @@ La configuración no carga .env automáticamente.
 
 | Servicio | Configuración |
 | --- | --- |
-| crm-api | CRM_DATABASE_URL, CRM_JWT_SECRET, CRM_SYNC_SECRET, CRM_BUSINESSES, modo sintético, notificaciones false, Chatwoot base/account opcionales. Sin DSNs/claves de fuentes. |
-| sync-worker | Misma base CRM y registro; BUSINESS_SOURCE_READONLY_DATABASE_URL exclusivo por empresa, con lector dedicado. Nunca claves administrativas del bot. |
+| crm-api | CRM_DATABASE_URL, CRM_JWT_SECRET, CRM_SYNC_SECRET, CRM_BUSINESSES; en piloto bot_api, BUSINESS_BOT_API_URL, BUSINESS_HUMAN_CONTROL_ENABLED y BUSINESS_BOT_CONTROL_SECRET. Notificaciones false. Sin claves de lectura de fuentes. |
+| sync-worker | Misma base CRM y registro; en piloto bot_api, BUSINESS_BOT_API_ENABLED y BUSINESS_BOT_SOURCE_SECRET. Sintético conserva lectores PostgreSQL dedicados. Nunca claves administrativas del bot. |
 | Proxy frontend | URL CRM y CRM_JWT_SECRET solo servidor. Resolver identidad y empresas antes de firmar. Eliminar Origin y Sec-Fetch-Site. No enviar contraseñas Lovable al CRM ni secretos/JWT CRM al navegador. |
 | Loader sintético | ADMIN exclusivo del clúster local desechable para fixtures/roles; nunca en API/worker. Genera api.env/worker.env 0600. |
 

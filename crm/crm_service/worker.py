@@ -12,7 +12,9 @@ from crm_service.sync_jobs import consume_one
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Bounded CRM source synchronization; staging-only sources")
+    parser = argparse.ArgumentParser(
+        description="Bounded CRM sync: synthetic sources or authenticated bot export"
+    )
     parser.add_argument("--once", action="store_true", help="Run one bounded step, not an unbounded backfill")
     parser.add_argument("--business", help="Select exactly one configured business")
     args = parser.parse_args()

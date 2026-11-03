@@ -61,6 +61,18 @@ class SyncInput(Input):
     idempotency_key: str = Field(min_length=1, max_length=100)
 
 
+class ControlInput(Input):
+    command_id: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
+    expected_version: int = Field(ge=0)
+    reason: str = Field(default="Operator action", min_length=1, max_length=255)
+
+
+class HumanMessageInput(Input):
+    command_id: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
+    expected_version: int = Field(ge=0)
+    text: str = Field(min_length=1, max_length=4096)
+
+
 class PushKeys(Input):
     p256dh: str = Field(min_length=80, max_length=200, pattern=r"^[A-Za-z0-9_-]+=*$")
     auth: str = Field(min_length=20, max_length=100, pattern=r"^[A-Za-z0-9_-]+=*$")

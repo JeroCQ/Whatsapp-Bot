@@ -95,6 +95,21 @@ class SyncRequest(Base):
     __table_args__ = (Index("uq_sync_request_key", "business_id", "idempotency_key", unique=True),)
 
 
+class BotCommand(Base):
+    __tablename__ = "bot_commands"
+    business_id: Mapped[str] = mapped_column(String(63), primary_key=True)
+    command_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    phone_number: Mapped[str] = mapped_column(String(200), index=True)
+    profile: Mapped[str] = mapped_column(String(200))
+    operation: Mapped[str] = mapped_column(String(20))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(30), default="checking")
+    response: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    http_status: Mapped[int] = mapped_column(Integer, default=202)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
 class CRMConversation(Base):
     __tablename__ = "crm_conversations"
     business_id: Mapped[str] = mapped_column(String(63), primary_key=True)

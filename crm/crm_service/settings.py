@@ -17,6 +17,22 @@ def https_root(value: str) -> str:
     return value.rstrip("/")
 
 
+def bot_origin(value: str, *, test_mode: bool = False) -> str:
+    parts = urlsplit(value)
+    if test_mode and parts.scheme == "http" and parts.hostname in {"localhost", "127.0.0.1", "::1"}:
+        if parts.username or parts.password or parts.path not in ("", "/") or parts.query or parts.fragment:
+            raise ValueError("Expected a loopback test origin without credentials or path")
+        return value.rstrip("/")
+    return https_root(value)
+
+
+def flag(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name, "true" if default else "false").strip().lower()
+    if raw not in {"true", "false"}:
+        raise ValueError(f"{name} must be true or false")
+    return raw == "true"
+
+
 @dataclass(frozen=True)
 class Business:
     id: str
@@ -25,6 +41,11 @@ class Business:
     chatwoot_url: str = ""
     chatwoot_account: str = ""
     readonly_database_url: str = field(default="", repr=False)
+    bot_api_url: str = ""
+    bot_control_secret: str = field(default="", repr=False)
+    bot_source_secret: str = field(default="", repr=False)
+    operations_enabled: bool = False
+    bot_api_enabled: bool = False
 
     def deep_link(self, conversation_id: str | int | None) -> str | None:
         if not self.chatwoot_url or not self.chatwoot_account or not conversation_id:
@@ -62,6 +83,8 @@ class Settings:
     source_mode: str = "synthetic"
     sync_max_projections: int = 50
     sync_max_history_messages: int = 10000
+    bot_test_mode: bool = False
+    bot_timeout_seconds: float = 20.0
 
     def __post_init__(self) -> None:
         for name, low, high in (
@@ -81,8 +104,10 @@ class Settings:
             raise ValueError("sync_max_seconds must be finite and between 0.05 and 120")
         if self.backoff_max_seconds < self.backoff_base_seconds:
             raise ValueError("Backoff maximum must be >= base")
-        if self.source_mode not in {"synthetic", "postgres_readonly", "disabled"}:
+        if self.source_mode not in {"synthetic", "postgres_readonly", "disabled", "bot_api"}:
             raise ValueError("Unsupported CRM_SOURCE_MODE")
+        if not math.isfinite(self.bot_timeout_seconds) or not 0.1 <= self.bot_timeout_seconds <= 60:
+            raise ValueError("bot_timeout_seconds must be finite and between 0.1 and 60")
         for name, high in (("sync_max_projections", 1000), ("sync_max_history_messages", 100000)):
             if type(getattr(self, name)) is not int or not 1 <= getattr(self, name) <= high:
                 raise ValueError(f"Invalid {name}")
@@ -99,6 +124,7 @@ class Settings:
         if min(len(jwt_secret), len(sync_secret)) < 32 or jwt_secret == sync_secret:
             raise ValueError("Use distinct CRM secrets of at least 32 characters")
         businesses = {}
+        test_mode = flag("CRM_BOT_TEST_MODE")
         for raw in os.environ.get("CRM_BUSINESSES", "tanaka,memos,velvet").split(","):
             name = raw.strip()
             if not re.fullmatch(r"[a-z][a-z0-9_]{0,62}", name) or name in businesses:
@@ -112,11 +138,43 @@ class Settings:
             )
             cw = os.environ.get(f"{prefix}_CHATWOOT_APP_URL", "")
             account = os.environ.get(f"{prefix}_CHATWOOT_ACCOUNT_ID", "")
+            bot_url = os.environ.get(f"{prefix}_BOT_API_URL", "")
+            operations = flag(f"{prefix}_HUMAN_CONTROL_ENABLED")
+            source_enabled = flag(f"{prefix}_BOT_API_ENABLED")
+            control_secret = os.environ.get(f"{prefix}_BOT_CONTROL_SECRET", "") if service == "api" else ""
+            source_secret = os.environ.get(f"{prefix}_BOT_SOURCE_SECRET", "") if service == "worker" else ""
+            if (operations or source_enabled) and not bot_url:
+                raise ValueError("Enabled bot integration requires a configured bot origin")
+            if operations and service == "api" and len(control_secret) < 32:
+                raise ValueError(
+                    "Human control requires a dedicated bot control secret of at least 32 characters"
+                )
+            if source_enabled and service == "worker" and len(source_secret) < 32:
+                raise ValueError(
+                    "Bot source requires a dedicated bot source secret of at least 32 characters"
+                )
             if account and not account.isdigit():
                 raise ValueError("Chatwoot account must be numeric")
             businesses[name] = Business(
-                name, https_root(url) if url else "", "", https_root(cw) if cw else "", account, readonly
+                name,
+                https_root(url) if url else "",
+                "",
+                https_root(cw) if cw else "",
+                account,
+                readonly,
+                bot_origin(bot_url, test_mode=test_mode) if bot_url else "",
+                control_secret,
+                source_secret,
+                operations,
+                source_enabled,
             )
+        bot_origins = [
+            b.bot_api_url
+            for b in businesses.values()
+            if b.bot_api_url and (b.operations_enabled or b.bot_api_enabled)
+        ]
+        if len(bot_origins) != len(set(bot_origins)):
+            raise ValueError("Each business needs its own isolated bot origin")
         origins = [b.source_url for b in businesses.values() if b.source_url]
         if len(origins) != len(set(origins)):
             raise ValueError("Each business must use a distinct isolated source Supabase origin")
@@ -154,4 +212,6 @@ class Settings:
             source_mode=os.environ.get("CRM_SOURCE_MODE", "synthetic"),
             sync_max_projections=int(os.environ.get("SYNC_MAX_PROJECTIONS", "50")),
             sync_max_history_messages=int(os.environ.get("SYNC_MAX_HISTORY_MESSAGES", "10000")),
+            bot_test_mode=test_mode,
+            bot_timeout_seconds=float(os.environ.get("CRM_BOT_TIMEOUT_SECONDS", "20")),
         )
