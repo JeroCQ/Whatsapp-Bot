@@ -32,7 +32,7 @@ from gemini_errors import (
 )
 from gemini_runtime import GeminiOperationTimeout, run_gemini
 from webhook_utils import is_simple_greeting
-from commercial_intents import b2b_actions, catalog_may_suppress_handoff, unregistered_presentation_reason
+from commercial_intents import b2b_actions, catalog_may_suppress_handoff, human_handoff_reason, unregistered_presentation_reason
 from follow_up_policy import load_business_policy
 from human_support import human_handoffs_enabled
 from observability import operational_event
@@ -334,6 +334,18 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
 
     try:
         started_at = time.perf_counter()
+        policy = load_business_policy(config.BUSINESS_ID)
+        keyword_reason = human_handoff_reason(text, policy.human_handoff_keywords)
+        if handoffs_enabled and keyword_reason:
+            # Explicit opt-in per business: pause through the existing authority,
+            # without waiting for inference or promising a completed transfer.
+            pause_bot_for_handoff(phone, keyword_reason)
+            operational_event("HANDOFF_REQUESTED", phone=phone, stage="HUMAN_REQUEST",
+                              reason=keyword_reason, result="state_paused")
+            return BotTurn(
+                "Tu solicitud requiere atención de un asesor.", [],
+                follow_up_message="", handoff_requested=True, handoff_reason=keyword_reason,
+            )
         response = _call_gemini(
             "message_logic",
             lambda http_options: client.models.generate_content(
@@ -361,7 +373,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
         # model still writes the conversational answer, while this classifier
         # guarantees the backend action for every configured brand.
         deterministic_b2b_reason, deterministic_b2b_files = (
-            b2b_actions(text, FILE_CATALOG, standard_wholesale_self_service=load_business_policy(config.BUSINESS_ID).standard_wholesale_self_service) if not is_image else (None, [])
+            b2b_actions(text, FILE_CATALOG, standard_wholesale_self_service=policy.standard_wholesale_self_service) if not is_image else (None, [])
         )
         if deterministic_b2b_reason and handoffs_enabled:
             trigger_handoff = True

@@ -4,5 +4,6 @@
   "contact_hours": {"days": [0, 1, 2, 3, 4, 5, 6], "start": "08:00", "end": "18:00"},
   "operating_hours": {"days": [0, 1, 2, 3, 4, 5, 6], "start": "08:00", "end": "18:00"},
   "follow_up_min_spacing_seconds": 900,
-  "standard_wholesale_self_service": false
+  "standard_wholesale_self_service": false,
+  "human_handoff_keywords": ["asesor"]
 }
