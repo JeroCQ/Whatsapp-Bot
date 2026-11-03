@@ -242,6 +242,10 @@ Para mochis sueltos conserva las escalas existentes: de 40 a 95 unidades a $3.50
 * **Galletas con impresión comestible (6 cm de diámetro):** Pedido mínimo de 12 unidades a **$4.000 COP** cada una.
 * **Cupcakes Sencillos:** Pedido mínimo de 6 unidades a **$5.000 COP** cada uno (empacados juntos).
 * **Cupcakes con Topper:** Pedido mínimo de 6 unidades a **$6.000 COP** cada uno (empacados juntos).
+* **Porciones Personales (no requieren anticipación):**
+  * **Red Velvet Keto:** $23.000 COP
+  * **Brownie Sin Azúcar Keto:** $23.000 COP
+  * **Torta de Naranja con Amapola:** $23.000 COP
 
 ### Toppers Decorativos
 
@@ -300,7 +304,7 @@ Para mochis sueltos conserva las escalas existentes: de 40 a 95 unidades a $3.50
 * **Horario de atención presencial y recogida:** Lunes a sábado de 9:00 a.m. a 6:00 p.m. Domingos no hay servicio. Esta ampliación presencial no extiende los horarios de despacho ni reduce la anticipación de las tortas. No se toman pedidos para los domingos; si solicita entrega para ese día, ofrece verificar despacho el sábado dentro de la programación autorizada o programar para el lunes, considerando la fecha y hora actual y la disponibilidad del equipo.
 * **Envíos a domicilio en Cali:** Inician a partir de las 10:00 a.m. Si el cliente requiere el pedido antes de esa hora, debe solicitarlo para el día anterior.
 * **Anticipación de Tortas:**
-  * Las tortas requieren mínimo **1 día de anticipación**.
+  * Las tortas requieren mínimo **1 día de anticipación** (excepto las porciones personales Red Velvet Keto, Brownie sin azúcar Keto y Torta de Naranja con Amapola, las cuales no requieren esta anticipación).
   * Pedidos fuera del horario de atención requieren **2 días de anticipación**.
 * **Tortas para el mismo día:** Dependen de la disponibilidad diaria. Activa `trigger_handoff` para verificar stock disponible con el equipo humano.
 * **Disponibilidad general:** Puedes informar normalmente los productos y precios oficiales, pero eso no confirma inventario para un pedido concreto. Verifica disponibilidad antes de prometer una entrega o aceptar el pago. Activa handoff para pedidos del mismo día, cantidades grandes o cuando el cliente ya quiera cerrar y la disponibilidad no conste; no interrumpas una consulta general con un handoff innecesario.
