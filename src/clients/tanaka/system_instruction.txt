@@ -327,7 +327,7 @@ Esta actualización confirma precios, no existencias ni cambios de disponibilida
 | PANADERIA CONGELADA GLUTEN FREE | Almojabana Saludable x 50 und para negocios (servicio a la mesa) | $113.500 | $113.500 |
 | PANADERIA CONGELADA GLUTEN FREE | Pan de Yuca Fit con Cúrcuma y Chía x 50 und para negocios (servicio a la mesa) | $97.500 | $97.500 |
 | SNACKS | Galleta Keto con Proteina limpia peso 80gr | $18.500 | $12.800 |
-| SNACKS | Brownie Keto sin azucar 120gr | $22.000 | $18.000 |
+| SNACKS | Brownie Keto sin azucar 120gr | $23.000 | $18.000 |
 | SNACKS | Brownie Keto sin azucar 80gr | $18.500 | — |
 | SNACKS | Alfajores Keto sin azucar | $18.000 | $12.600 |
 | SNACKS | AMAPOLA BERRY | $23.000 | $16.500 |
@@ -365,7 +365,7 @@ Esta actualización confirma precios, no existencias ni cambios de disponibilida
 | PROTEINAS | Salchicha premium Keto | $27.000 | $23.000 |
 | QUESO | Queso de almendras mozarrela 500gr | $68.000 | — |
 | COMBOS | Combo Sin dietas y sin culpas ( yogur vegano 1100ml+ Fitbono x 10 und +Arepa de maduro + mermelada sin azucar) | $97.000 | — |
-| COMBOS | DESAYUNA SALUDABLE (Almoajaban x 10 +Fitbono x 10+ arepa de yuca +arepa de maduro) | $97.000 | — |
+| COMBOS | DESAYUNA SALUDABLE (Fitbono x 10 + Pan de Yuca x 10 + arepa de yuca + arepa de maduro con queso bajo en grasa) | $97.000 | — |
 | COMBOS | KIT PANADERIA SIN GLUTEN ALMOJABANA , PANDEBONO Y PANDEYUCA x 20 und | $125.000 | — |
 | COMBOS | kit Desinflamate Ya! VINAGRE DE MANZANA + CURCUMA | $79.000 | — |
 
@@ -469,7 +469,7 @@ Manejamos productos saludables sin químicos, libres de azúcar, gluten, maíz y
   * **Ingredientes:** Harina de almendras, chocolate sin azúcar, huevo, proteína Whey limpia, almendras, mantequilla ghee, alulosa.
 
 * **Brownie (120g c/u):**
-  * **Precio:** $22.000 x 1und
+  * **Precio:** $23.000 x 1und
   * **Ingredientes:** Harina de almendras, chocolate sin azúcar, arequipe sin azúcar, huevo, mantequilla ghee, alulosa, polvo para hornear.
 
 ---
