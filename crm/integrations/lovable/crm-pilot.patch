@@ -1,0 +1,1522 @@
+diff --git a/src/components/CrmPilotPane.tsx b/src/components/CrmPilotPane.tsx
+new file mode 100644
+--- /dev/null
++++ b/src/components/CrmPilotPane.tsx
+@@ -0,0 +1,729 @@
++import { useEffect, useRef, useState, type FormEvent } from "react";
++import { Button } from "@/components/ui/button";
++import { Textarea } from "@/components/ui/textarea";
++import {
++  BUCKET_LABELS,
++  COMMAND_LABELS,
++  canCompose,
++  commandUnsettled,
++  type CrmBucket,
++  type CrmCommandResult,
++  type CrmControl,
++  type CrmConversation,
++  type CrmDetail,
++  type CrmMessage,
++} from "@/lib/crm-pilot-contract";
++
++const BASE = "/api/public/crm-pilot/";
++interface Availability {
++  enabled: boolean;
++  business_id: string | null;
++}
++interface Session {
++  profile: string;
++  business_id: string;
++}
++interface Page {
++  items: CrmConversation[];
++  next_cursor: string | null;
++}
++class PilotError extends Error {
++  constructor(
++    message: string,
++    readonly status: number,
++  ) {
++    super(message);
++  }
++}
++async function request<T>(
++  path: string,
++  credential = "",
++  body?: Record<string, unknown>,
++  signal?: AbortSignal,
++): Promise<T> {
++  const response = await fetch(BASE + path, {
++    method: body === undefined ? "GET" : "POST",
++    cache: "no-store",
++    mode: "same-origin",
++    headers: {
++      ...(credential ? { Authorization: "Bearer " + credential } : {}),
++      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
++    },
++    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
++    ...(signal ? { signal } : {}),
++  });
++  const data: unknown = await response.json();
++  if (!response.ok) {
++    const detail =
++      data && typeof data === "object" ? (data as Record<string, unknown>)["detail"] : null;
++    throw new PilotError(
++      typeof detail === "string"
++        ? detail
++        : `No se pudo completar la consulta (${response.status}).`,
++      response.status,
++    );
++  }
++  return data as T;
++}
++function message(error: unknown): string {
++  return error instanceof Error ? error.message : "No se pudo contactar el CRM.";
++}
++function casePath(phone: string): string {
++  return "conversations/" + encodeURIComponent(phone);
++}
++function mergeMessages(previous: CrmMessage[], incoming: CrmMessage[]): CrmMessage[] {
++  const byId = new Map(previous.map((item) => [item.id, item]));
++  for (const item of incoming) byId.set(item.id, item);
++  return [...byId.values()].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id);
++}
++function waiting(seconds: number): string {
++  const minutes = Math.floor(seconds / 60);
++  return minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
++}
++const INPUT = "w-full rounded-md border border-border bg-background px-3 py-2 text-sm";
++
++/** Only rendered when the server explicitly enables the isolated pilot. */
++export function CrmPilotLink() {
++  const [available, setAvailable] = useState(false);
++  useEffect(() => {
++    let active = true;
++    void request<Availability>("availability")
++      .then((data) => {
++        if (active) setAvailable(data.enabled);
++      })
++      .catch(() => {});
++    return () => {
++      active = false;
++    };
++  }, []);
++  return available ? (
++    <div className="border-b border-border bg-panel px-4 py-2 text-sm">
++      <a className="font-medium text-brand underline" href="/chats?crm_pilot=1">
++        Abrir piloto de atención humana
++      </a>
++    </div>
++  ) : null;
++}
++
++/** Personal pilot credential remains in this component's memory, never localStorage. */
++export function CrmPilotPane() {
++  const [availability, setAvailability] = useState<Availability | null>(null);
++  const [credentialInput, setCredentialInput] = useState("");
++  const [credential, setCredential] = useState("");
++  const [session, setSession] = useState<Session | null>(null);
++  const [error, setError] = useState("");
++  const [loginBusy, setLoginBusy] = useState(false);
++  const [bucket, setBucket] = useState<CrmBucket>("awaiting_human");
++  const [search, setSearch] = useState("");
++  const [debounced, setDebounced] = useState("");
++  const [conversations, setConversations] = useState<CrmConversation[]>([]);
++  const [nextCursor, setNextCursor] = useState<string | null>(null);
++  const [moreLoaded, setMoreLoaded] = useState(false);
++  const [inboxBusy, setInboxBusy] = useState(false);
++  const [inboxTick, setInboxTick] = useState(0);
++  const [selectedPhone, setSelectedPhone] = useState<string | null>(null);
++  const [detail, setDetail] = useState<CrmDetail | null>(null);
++  const [messages, setMessages] = useState<CrmMessage[]>([]);
++  const [olderCursor, setOlderCursor] = useState<string | null>(null);
++  const [control, setControl] = useState<CrmControl | null>(null);
++  const [detailTick, setDetailTick] = useState(0);
++  const [drafts, setDrafts] = useState<Record<string, string>>({});
++  const [commands, setCommands] = useState<Record<string, CrmCommandResult>>({});
++  const [posting, setPosting] = useState(false);
++  const postingRef = useRef(false);
++  const pagingRef = useRef(false);
++  const polls = useRef<Record<string, number>>({});
++  const originalCommands = useRef<
++    Record<string, { phone: string; operation: string; body: Record<string, unknown> }>
++  >({});
++  const historyCursorInitialized = useRef(false);
++  const selectedCommand = selectedPhone ? (commands[selectedPhone] ?? null) : null;
++  const draft = selectedPhone ? (drafts[selectedPhone] ?? "") : "";
++
++  useEffect(() => {
++    let active = true;
++    void request<Availability>("availability")
++      .then((data) => {
++        if (active) setAvailability(data);
++      })
++      .catch((reason: unknown) => {
++        if (active) setError(message(reason));
++      });
++    return () => {
++      active = false;
++    };
++  }, []);
++  useEffect(() => {
++    const timer = window.setTimeout(() => setDebounced(search.trim()), 350);
++    return () => window.clearTimeout(timer);
++  }, [search]);
++  useEffect(() => {
++    setMoreLoaded(false);
++  }, [bucket, debounced, credential]);
++  useEffect(() => {
++    if (!credential) return;
++    const controller = new AbortController();
++    let active = true;
++    setInboxBusy(true);
++    const query = new URLSearchParams({ bucket, limit: "30" });
++    if (debounced) query.set("search", debounced);
++    void request<Page>("inbox?" + query, credential, undefined, controller.signal)
++      .then((page) => {
++        if (active) {
++          setConversations(page.items);
++          setNextCursor(page.next_cursor);
++        }
++      })
++      .catch((reason: unknown) => {
++        if (active) setError(message(reason));
++      })
++      .finally(() => {
++        if (active) setInboxBusy(false);
++      });
++    return () => {
++      active = false;
++      controller.abort();
++    };
++  }, [credential, bucket, debounced, inboxTick]);
++  useEffect(() => {
++    if (!credential || moreLoaded) return;
++    const timer = window.setInterval(() => setInboxTick((value) => value + 1), 5000);
++    return () => window.clearInterval(timer);
++  }, [credential, moreLoaded]);
++  useEffect(() => {
++    setControl(null);
++    setDetail(null);
++    setMessages([]);
++    setOlderCursor(null);
++    setError("");
++    historyCursorInitialized.current = false;
++  }, [selectedPhone, credential]);
++  useEffect(() => {
++    if (!credential || !selectedPhone) return;
++    let active = true;
++    // A CRM read marker is independent of the operational classification.
++    void request(casePath(selectedPhone) + "/read", credential, { read: true }).catch(
++      (reason: unknown) => {
++        if (active) setError(message(reason));
++      },
++    );
++    return () => {
++      active = false;
++    };
++  }, [selectedPhone, credential]);
++  useEffect(() => {
++    if (!credential || !selectedPhone) return;
++    const controller = new AbortController();
++    let active = true;
++    void request<CrmDetail>(
++      casePath(selectedPhone) + "?limit=100",
++      credential,
++      undefined,
++      controller.signal,
++    )
++      .then((data) => {
++        if (active) {
++          setDetail(data);
++          setMessages((previous) => mergeMessages(previous, data.messages));
++          if (!historyCursorInitialized.current) {
++            setOlderCursor(data.next_cursor);
++            historyCursorInitialized.current = true;
++          }
++        }
++      })
++      .catch((reason: unknown) => {
++        if (active) setError(message(reason));
++      });
++    // Fresh authority, never source_state from the synchronized CRM detail.
++    void request<CrmControl>(
++      casePath(selectedPhone) + "/control",
++      credential,
++      undefined,
++      controller.signal,
++    )
++      .then((data) => {
++        if (active) setControl(data);
++      })
++      .catch((reason: unknown) => {
++        if (active) {
++          setControl(null);
++          setError(message(reason));
++        }
++      });
++    return () => {
++      active = false;
++      controller.abort();
++    };
++  }, [selectedPhone, credential, detailTick]);
++  useEffect(() => {
++    if (!credential || !selectedPhone) return;
++    const timer = window.setInterval(() => setDetailTick((value) => value + 1), 3000);
++    return () => window.clearInterval(timer);
++  }, [credential, selectedPhone]);
++  useEffect(() => {
++    if (!credential || !selectedPhone || !selectedCommand) return;
++    const current = selectedCommand;
++    if (!["pending", "unknown", "accepted", "delivered"].includes(current.status)) return;
++    let active = true;
++    const timer = window.setInterval(() => {
++      const count = polls.current[current.command_id] ?? 0;
++      if (count >= 40) {
++        window.clearInterval(timer);
++        return;
++      }
++      polls.current[current.command_id] = count + 1;
++      void request<CrmCommandResult>(
++        casePath(selectedPhone) + "/commands/" + encodeURIComponent(current.command_id),
++        credential,
++      )
++        .then((result) => {
++          if (active) setCommands((previous) => ({ ...previous, [selectedPhone]: result }));
++        })
++        .catch((reason: unknown) => {
++          if (active) setError(message(reason));
++        });
++    }, 1500);
++    return () => {
++      active = false;
++      window.clearInterval(timer);
++    };
++  }, [credential, selectedPhone, selectedCommand]);
++
++  async function login(event: FormEvent) {
++    event.preventDefault();
++    if (loginBusy) return;
++    setLoginBusy(true);
++    setError("");
++    try {
++      const token = credentialInput.trim();
++      const identity = await request<Session>("session", token, {});
++      setSession(identity);
++      setCredential(token);
++      setCredentialInput("");
++    } catch (reason) {
++      setError(message(reason));
++    } finally {
++      setLoginBusy(false);
++    }
++  }
++  function logout() {
++    setCredential("");
++    setSession(null);
++    setCredentialInput("");
++    setSelectedPhone(null);
++    setConversations([]);
++    setCommands({});
++    setDrafts({});
++    setControl(null);
++    setError("");
++    polls.current = {};
++    originalCommands.current = {};
++  }
++  async function loadMore() {
++    if (!nextCursor || pagingRef.current) return;
++    pagingRef.current = true;
++    setInboxBusy(true);
++    try {
++      const query = new URLSearchParams({ bucket, limit: "30", cursor: nextCursor });
++      if (debounced) query.set("search", debounced);
++      const page = await request<Page>("inbox?" + query, credential);
++      setConversations((previous) => [
++        ...new Map([...previous, ...page.items].map((item) => [item.phone_number, item])).values(),
++      ]);
++      setNextCursor(page.next_cursor);
++      setMoreLoaded(true);
++    } catch (reason) {
++      setError(message(reason));
++    } finally {
++      pagingRef.current = false;
++      setInboxBusy(false);
++    }
++  }
++  async function loadOlder() {
++    if (!selectedPhone || !olderCursor || pagingRef.current) return;
++    pagingRef.current = true;
++    try {
++      const query = new URLSearchParams({ limit: "100", cursor: olderCursor });
++      const page = await request<CrmDetail>(casePath(selectedPhone) + "?" + query, credential);
++      setMessages((previous) => mergeMessages(previous, page.messages));
++      setOlderCursor(page.next_cursor);
++    } catch (reason) {
++      setError(message(reason));
++    } finally {
++      pagingRef.current = false;
++    }
++  }
++  async function execute(operation: "take" | "messages" | "close") {
++    if (
++      !selectedPhone ||
++      !control ||
++      !session ||
++      postingRef.current ||
++      commandUnsettled(selectedCommand)
++    )
++      return;
++    if (
++      operation === "messages" &&
++      (!canCompose(control, session.profile, selectedCommand) || !draft.trim())
++    )
++      return;
++    const phone = selectedPhone;
++    const commandId = crypto.randomUUID();
++    const payload: Record<string, unknown> = {
++      command_id: commandId,
++      expected_version: control.version,
++      ...(operation === "messages"
++        ? { text: draft.trim() }
++        : {
++            reason:
++              operation === "take"
++                ? "Atención desde piloto CRM"
++                : "Caso cerrado por agente del piloto",
++          }),
++    };
++    // Retain the exact immutable request for diagnosis; ambiguous outcomes only use GET.
++    originalCommands.current[commandId] = { phone, operation, body: Object.freeze({ ...payload }) };
++    postingRef.current = true;
++    setPosting(true);
++    setError("");
++    setCommands((previous) => ({
++      ...previous,
++      [phone]: { command_id: commandId, status: "pending", control: null },
++    }));
++    try {
++      const result = await request<CrmCommandResult>(
++        casePath(phone) + "/" + operation,
++        credential,
++        payload,
++      );
++      setCommands((previous) => ({ ...previous, [phone]: result }));
++      if (operation === "messages" && ["accepted", "delivered", "read"].includes(result.status)) {
++        setDrafts((previous) => ({ ...previous, [phone]: "" }));
++      }
++    } catch (reason) {
++      const knownRejection =
++        reason instanceof PilotError && [400, 401, 403, 404, 409, 422].includes(reason.status);
++      setCommands((previous) => ({
++        ...previous,
++        [phone]: {
++          command_id: commandId,
++          status: knownRejection ? "rejected" : "unknown",
++          control: null,
++        },
++      }));
++      setError(message(reason));
++    } finally {
++      // One POST only. Fresh /control is mandatory before another human action.
++      setControl(null);
++      setDetailTick((value) => value + 1);
++      setInboxTick((value) => value + 1);
++      postingRef.current = false;
++      setPosting(false);
++    }
++  }
++  async function checkCommand() {
++    if (!selectedPhone || !selectedCommand) return;
++    try {
++      const result = await request<CrmCommandResult>(
++        casePath(selectedPhone) + "/commands/" + encodeURIComponent(selectedCommand.command_id),
++        credential,
++      );
++      setCommands((previous) => ({ ...previous, [selectedPhone]: result }));
++      setDetailTick((value) => value + 1);
++    } catch (reason) {
++      setError(message(reason));
++    }
++  }
++  const mine =
++    !!control &&
++    !!session &&
++    control.phase === "human" &&
++    control.is_paused &&
++    control.confirmed &&
++    control.owner === session.profile;
++  const compose = !!session && canCompose(control, session.profile, selectedCommand) && !posting;
++  return (
++    <div className="flex min-h-[100dvh] flex-col bg-panel-muted text-foreground">
++      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-background px-4 py-3">
++        <div>
++          <h1 className="text-lg font-semibold text-brand">Conversaciones · Piloto CRM</h1>
++          <p className="text-xs text-muted-foreground">
++            {session
++              ? `${session.business_id} · ${session.profile}`
++              : "Acceso personal al piloto de atención humana"}
++          </p>
++        </div>
++        <div className="flex gap-3 text-sm">
++          <a className="underline" href="/chats">
++            Volver al panel
++          </a>
++          {session && (
++            <button className="underline" onClick={logout}>
++              Cerrar sesión de piloto
++            </button>
++          )}
++        </div>
++      </header>
++      {error && (
++        <div
++          role="alert"
++          className="m-3 rounded border border-event-warn-border bg-event-warn p-3 text-sm"
++        >
++          {error}
++        </div>
++      )}
++      {!availability ? (
++        <p className="p-6 text-sm">Comprobando disponibilidad del piloto…</p>
++      ) : !availability.enabled ? (
++        <p className="p-6 text-sm">El piloto CRM está deshabilitado en este despliegue.</p>
++      ) : !session ? (
++        <form
++          onSubmit={(event) => void login(event)}
++          className="mx-auto mt-12 w-full max-w-md space-y-4 rounded-lg border border-border bg-panel p-6"
++        >
++          <h2 className="font-semibold">Entrar como agente de pruebas</h2>
++          <p className="text-sm text-muted-foreground">
++            Usa tu credencial personal del piloto. Las contraseñas compartidas por marca no
++            identifican a un agente.
++          </p>
++          <label className="block text-sm" htmlFor="crm-pilot-credential">
++            Credencial personal
++          </label>
++          <input
++            id="crm-pilot-credential"
++            type="password"
++            value={credentialInput}
++            onChange={(event) => setCredentialInput(event.target.value)}
++            autoComplete="off"
++            className={INPUT}
++            required
++          />
++          <Button type="submit" disabled={loginBusy || !credentialInput.trim()}>
++            {loginBusy ? "Verificando…" : "Entrar al piloto"}
++          </Button>
++        </form>
++      ) : (
++        <div className="grid flex-1 md:grid-cols-[340px_minmax(0,1fr)]">
++          <aside className="border-r border-border bg-panel">
++            <div className="space-y-3 border-b border-border p-4">
++              <label className="block text-xs font-semibold" htmlFor="crm-bucket">
++                Bandeja
++              </label>
++              <select
++                id="crm-bucket"
++                value={bucket}
++                onChange={(event) => setBucket(event.target.value as CrmBucket)}
++                className={INPUT}
++              >
++                {Object.entries(BUCKET_LABELS).map(([value, label]) => (
++                  <option key={value} value={value}>
++                    {label}
++                  </option>
++                ))}
++              </select>
++              <input
++                value={search}
++                onChange={(event) => setSearch(event.target.value)}
++                placeholder="Buscar nombre, teléfono o contenido"
++                aria-label="Buscar conversaciones"
++                className={INPUT}
++              />
++              <Button
++                variant="outline"
++                size="sm"
++                disabled={inboxBusy}
++                onClick={() => {
++                  setMoreLoaded(false);
++                  setInboxTick((value) => value + 1);
++                }}
++              >
++                Actualizar
++              </Button>
++              <p className="text-xs text-muted-foreground">
++                {moreLoaded
++                  ? "Más páginas cargadas. Usa Actualizar para volver al inicio."
++                  : "Se actualiza cada 5 segundos."}
++              </p>
++            </div>
++            <ul className="max-h-[65vh] overflow-auto md:max-h-[80vh]">
++              {conversations.map((item) => (
++                <li key={item.phone_number}>
++                  <button
++                    onClick={() => setSelectedPhone(item.phone_number)}
++                    className={`w-full border-b border-border p-4 text-left hover:bg-panel-muted ${item.phone_number === selectedPhone ? "bg-panel-muted" : ""}`}
++                  >
++                    <span className="block font-semibold">
++                      {item.name || item.phone_number}
++                      {!item.read && (
++                        <span className="ml-2 text-brand" aria-label="No leído">
++                          ●
++                        </span>
++                      )}
++                    </span>
++                    <span className="block text-xs text-muted-foreground">
++                      {item.phone_number} · {BUCKET_LABELS[item.bucket]}
++                    </span>
++                    {item.bucket === "awaiting_human" && (
++                      <span className="mt-1 block text-xs">
++                        Espera {waiting(item.waiting_seconds)} · {item.unanswered_customer_count}{" "}
++                        sin responder · prioridad {item.priority}
++                      </span>
++                    )}
++                  </button>
++                </li>
++              ))}
++            </ul>
++            {!conversations.length && (
++              <p className="p-4 text-sm text-muted-foreground">
++                {inboxBusy ? "Cargando…" : "No hay conversaciones en esta bandeja."}
++              </p>
++            )}
++            {nextCursor && (
++              <Button
++                variant="outline"
++                className="m-3"
++                disabled={inboxBusy}
++                onClick={() => void loadMore()}
++              >
++                Cargar más conversaciones
++              </Button>
++            )}
++          </aside>
++          {!selectedPhone ? (
++            <main className="grid min-h-80 place-items-center p-6 text-sm text-muted-foreground">
++              Selecciona una conversación.
++            </main>
++          ) : (
++            <main className="flex min-w-0 flex-col bg-chat-canvas">
++              <div className="space-y-3 border-b border-border bg-panel p-4">
++                <h2 className="font-semibold">{detail?.name || selectedPhone}</h2>
++                <p className="text-xs text-muted-foreground">
++                  {selectedPhone} · {detail ? BUCKET_LABELS[detail.bucket] : "Consultando CRM…"}
++                </p>
++                <p className="text-sm">
++                  {!control
++                    ? "Consultando control del bot…"
++                    : control.phase === "pausing"
++                      ? "Confirmando pausa: falta conocer el resultado de un envío automático en curso."
++                      : control.phase === "human"
++                        ? `Control humano: ${control.owner ?? "sin responsable"}`
++                        : control.phase === "waiting"
++                          ? "Handoff recibido. Esperando agente."
++                          : "La IA tiene el control."}
++                </p>
++                <div className="flex flex-wrap gap-2">
++                  <Button
++                    disabled={
++                      !control ||
++                      posting ||
++                      commandUnsettled(selectedCommand) ||
++                      !["ai", "waiting"].includes(control.phase)
++                    }
++                    onClick={() => void execute("take")}
++                  >
++                    Tomar control
++                  </Button>
++                  <Button
++                    variant="outline"
++                    disabled={!mine || posting || commandUnsettled(selectedCommand)}
++                    onClick={() => void execute("close")}
++                  >
++                    Cerrar y devolver a IA
++                  </Button>
++                </div>
++                {!!detail?.data_quality_warnings.length && (
++                  <p className="text-xs text-muted-foreground">
++                    Advertencias de datos: {detail.data_quality_warnings.join(", ")}
++                  </p>
++                )}
++                {selectedCommand && (
++                  <div aria-live="polite" className="rounded border border-border p-2 text-xs">
++                    <p className="font-semibold">{COMMAND_LABELS[selectedCommand.status]}</p>
++                    <p className="break-all">Comando: {selectedCommand.command_id}</p>
++                    {selectedCommand.status === "accepted" && (
++                      <p>WhatsApp aceptó el envío; todavía no confirma entrega.</p>
++                    )}
++                    {commandUnsettled(selectedCommand) && (
++                      <p>No vuelvas a enviar. Se consulta el mismo comando sin repetir la orden.</p>
++                    )}
++                    <button className="mt-1 underline" onClick={() => void checkCommand()}>
++                      Consultar resultado
++                    </button>
++                  </div>
++                )}
++              </div>
++              <section
++                aria-label="Historial de mensajes"
++                className="max-h-[55vh] flex-1 space-y-3 overflow-auto p-4"
++              >
++                {olderCursor && (
++                  <Button size="sm" variant="outline" onClick={() => void loadOlder()}>
++                    Cargar mensajes anteriores
++                  </Button>
++                )}
++                {messages.map((item) => (
++                  <article
++                    key={item.id}
++                    className={`max-w-[90%] rounded-lg border border-border p-3 text-sm ${item.role === "user" ? "bg-panel" : "ml-auto bg-secondary"}`}
++                  >
++                    <div className="mb-1 text-xs font-semibold text-muted-foreground">
++                      {item.role === "user"
++                        ? "Cliente"
++                        : item.role === "asesor"
++                          ? "Asesor"
++                          : item.role === "model"
++                            ? "IA"
++                            : "Sistema"}{" "}
++                      · {new Date(item.created_at).toLocaleString("es-CO")}
++                    </div>
++                    <p className="whitespace-pre-wrap break-words">{item.content}</p>
++                    {typeof item.metadata["delivery_status"] === "string" && (
++                      <p className="mt-1 text-xs text-muted-foreground">
++                        {COMMAND_LABELS[
++                          item.metadata["delivery_status"] as keyof typeof COMMAND_LABELS
++                        ] ?? item.metadata["delivery_status"]}
++                      </p>
++                    )}
++                  </article>
++                ))}
++              </section>
++              <form
++                onSubmit={(event) => {
++                  event.preventDefault();
++                  void execute("messages");
++                }}
++                className="space-y-2 border-t border-border bg-panel p-4"
++              >
++                <label htmlFor="crm-reply" className="block text-sm font-semibold">
++                  Respuesta humana
++                </label>
++                <Textarea
++                  id="crm-reply"
++                  value={draft}
++                  maxLength={4096}
++                  disabled={!compose}
++                  onChange={(event) =>
++                    setDrafts((previous) => ({ ...previous, [selectedPhone]: event.target.value }))
++                  }
++                  placeholder="Toma el control y espera la pausa confirmada para responder."
++                />
++                <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
++                  <span>{draft.length}/4096 · Solo texto dentro de la ventana de WhatsApp.</span>
++                  <Button type="submit" disabled={!compose || !draft.trim()}>
++                    Enviar respuesta
++                  </Button>
++                </div>
++                {mine && !control?.can_send && (
++                  <p className="text-xs">
++                    El bot no habilita el envío: revisa la ventana de WhatsApp o un intento todavía
++                    pendiente.
++                  </p>
++                )}
++              </form>
++            </main>
++          )}
++        </div>
++      )}
++    </div>
++  );
++}
+diff --git a/src/lib/crm-pilot-contract.ts b/src/lib/crm-pilot-contract.ts
+new file mode 100644
+--- /dev/null
++++ b/src/lib/crm-pilot-contract.ts
+@@ -0,0 +1,90 @@
++/** Operational CRM wire contract. This module contains no credentials or server configuration. */
++export type CrmBucket = "awaiting_human" | "human_active" | "ai_active" | "closed" | "all";
++export interface CrmConversation {
++  business_id: string;
++  phone_number: string;
++  name: string | null;
++  bucket: Exclude<CrmBucket, "all">;
++  waiting_seconds: number;
++  unanswered_customer_count: number;
++  priority: number;
++  priority_reason: string;
++  read: boolean;
++  data_quality_warnings: string[];
++}
++export interface CrmMessage {
++  id: number;
++  role: "user" | "model" | "asesor" | "system";
++  content: string;
++  created_at: string;
++  metadata: Record<string, unknown>;
++}
++export interface CrmDetail extends CrmConversation {
++  messages: CrmMessage[];
++  next_cursor: string | null;
++}
++export interface CrmControl {
++  business_id: string;
++  phone_number: string;
++  provider: "crm";
++  phase: "ai" | "waiting" | "pausing" | "human";
++  version: number;
++  owner: string | null;
++  is_paused: boolean;
++  confirmed: boolean;
++  can_send: boolean;
++  window_expires_at: string | null;
++}
++export type CrmCommandStatus =
++  | "confirmed"
++  | "pending"
++  | "accepted"
++  | "delivered"
++  | "read"
++  | "failed"
++  | "unknown"
++  | "rejected"
++  | "not_forwarded";
++export interface CrmCommandResult {
++  command_id: string;
++  status: CrmCommandStatus;
++  control: CrmControl | null;
++  provider_message_id?: string | null;
++  error?: string;
++}
++export const BUCKET_LABELS: Record<CrmBucket, string> = {
++  awaiting_human: "Por responder",
++  human_active: "En gestión",
++  ai_active: "IA atendiendo",
++  closed: "Cerradas",
++  all: "Todas",
++};
++export const COMMAND_LABELS: Record<CrmCommandStatus, string> = {
++  confirmed: "Confirmado",
++  pending: "Pendiente",
++  accepted: "Aceptado por WhatsApp",
++  delivered: "Entregado",
++  read: "Leído",
++  failed: "Envío fallido",
++  unknown: "Resultado incierto",
++  rejected: "Rechazado",
++  not_forwarded: "No enviado al bot",
++};
++export function commandUnsettled(result: CrmCommandResult | null): boolean {
++  return result?.status === "pending" || result?.status === "unknown";
++}
++export function canCompose(
++  control: CrmControl | null,
++  actor: string,
++  result: CrmCommandResult | null,
++): boolean {
++  return (
++    !!control &&
++    control.phase === "human" &&
++    control.is_paused &&
++    control.confirmed &&
++    control.can_send &&
++    control.owner === actor &&
++    !commandUnsettled(result)
++  );
++}
+diff --git a/src/lib/crm-pilot.server.ts b/src/lib/crm-pilot.server.ts
+new file mode 100644
+--- /dev/null
++++ b/src/lib/crm-pilot.server.ts
+@@ -0,0 +1,238 @@
++/** Server-only pilot gateway. Never import this module from a browser component. */
++import { createHmac, timingSafeEqual } from "node:crypto";
++
++type Env = Record<string, string | undefined>;
++type Fetcher = typeof fetch;
++interface Config {
++  business: string;
++  actor: string;
++  operatorSecret: string;
++  jwtSecret: string;
++  origin: string;
++}
++const PREFIX = "/api/public/crm-pilot/";
++const COMMON_HEADERS = {
++  "Content-Type": "application/json",
++  "Cache-Control": "no-store",
++  Vary: "Authorization",
++};
++const COMMAND_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}$/;
++const INBOX_PARAMS = new Set([
++  "bucket",
++  "search",
++  "cursor",
++  "limit",
++  "priority",
++  "assigned_to",
++  "tag",
++  "stage",
++]);
++function json(data: unknown, status = 200): Response {
++  return new Response(JSON.stringify(data), { status, headers: COMMON_HEADERS });
++}
++function equal(left: string, right: string): boolean {
++  const a = Buffer.from(left),
++    b = Buffer.from(right);
++  return a.length === b.length && timingSafeEqual(a, b);
++}
++function config(env: Env): Config | null {
++  if (env["CRM_PILOT_ENABLED"] !== "true") return null;
++  const business = env["CRM_PILOT_BUSINESS_ID"] ?? "briosos";
++  const actor = env["CRM_PILOT_OPERATOR_ID"] ?? "";
++  const operatorSecret = env["CRM_PILOT_OPERATOR_SECRET"] ?? "";
++  const jwtSecret = env["CRM_JWT_SECRET"] ?? "";
++  if (
++    !/^[a-z][a-z0-9_]{0,62}$/.test(business) ||
++    !/^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,199}$/.test(actor) ||
++    actor === business ||
++    ["admin", "tanaka", "memos", "velvet"].includes(actor) ||
++    operatorSecret.length < 32 ||
++    jwtSecret.length < 32 ||
++    equal(operatorSecret, jwtSecret) ||
++    Object.entries(env).some(
++      ([key, value]) => key.startsWith("PASSWORD_") && value && equal(operatorSecret, value),
++    )
++  ) {
++    throw new Error("pilot_configuration_invalid");
++  }
++  const target = new URL(env["CRM_BACKEND_URL"] ?? "");
++  if (
++    target.protocol !== "https:" ||
++    target.username ||
++    target.password ||
++    target.search ||
++    target.hash ||
++    !["", "/"].includes(target.pathname)
++  ) {
++    throw new Error("pilot_origin_invalid");
++  }
++  return { business, actor, operatorSecret, jwtSecret, origin: target.origin };
++}
++function jwt(settings: Config): string {
++  const at = Math.floor(Date.now() / 1000);
++  const part = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
++  const head = part({ alg: "HS256", typ: "JWT" });
++  const body = part({
++    iss: "chatty-catalog-compass",
++    aud: "whatsapp-crm",
++    profile: settings.actor,
++    allowed_businesses: [settings.business],
++    iat: at,
++    exp: at + 120,
++  });
++  const signature = createHmac("sha256", settings.jwtSecret)
++    .update(`${head}.${body}`)
++    .digest("base64url");
++  return `${head}.${body}.${signature}`;
++}
++interface Destination {
++  path: string;
++  methods: string[];
++  query: Set<string>;
++  body?: Set<string>;
++  command?: boolean;
++}
++function destination(path: string, business: string): Destination | null {
++  if (path === "capabilities")
++    return { path: "/v1/capabilities", methods: ["GET"], query: new Set() };
++  if (path === "inbox") return { path: "/v1/inbox", methods: ["GET"], query: INBOX_PARAMS };
++  const match =
++    /^conversations\/([^/]+)(?:\/(control|take|messages|close|read|commands\/([^/]+)))?$/.exec(
++      path,
++    );
++  if (!match?.[1]) return null;
++  let phone: string;
++  try {
++    phone = decodeURIComponent(match[1]);
++  } catch {
++    return null;
++  }
++  if (!/^[A-Za-z0-9_.:+-]{1,200}$/.test(phone)) return null;
++  const base = `/v1/conversations/${encodeURIComponent(business)}/${encodeURIComponent(phone)}`;
++  const suffix = match[2];
++  if (!suffix) return { path: base, methods: ["GET"], query: new Set(["cursor", "limit"]) };
++  if (suffix === "control") return { path: base + "/control", methods: ["GET"], query: new Set() };
++  if (suffix.startsWith("commands/")) {
++    if (!match[3] || !COMMAND_ID.test(match[3])) return null;
++    return {
++      path: base + "/commands/" + encodeURIComponent(match[3]),
++      methods: ["GET"],
++      query: new Set(),
++    };
++  }
++  const body =
++    suffix === "read"
++      ? new Set(["read"])
++      : new Set(["command_id", "expected_version", suffix === "messages" ? "text" : "reason"]);
++  return {
++    path: base + "/" + suffix,
++    methods: ["POST"],
++    query: new Set(),
++    body,
++    command: suffix !== "read",
++  };
++}
++export async function handleCrmPilot(
++  request: Request,
++  env: Env,
++  fetcher: Fetcher = fetch,
++): Promise<Response> {
++  const incoming = new URL(request.url);
++  if (!incoming.pathname.startsWith(PREFIX)) return json({ detail: "Not found" }, 404);
++  const path = incoming.pathname.slice(PREFIX.length);
++  let settings: Config | null;
++  try {
++    settings = config(env);
++  } catch {
++    return json({ detail: "El piloto no está configurado correctamente." }, 503);
++  }
++  if (path === "availability" && request.method === "GET") {
++    return json({ enabled: !!settings, business_id: settings?.business ?? null });
++  }
++  if (!settings) return json({ detail: "El piloto CRM está deshabilitado." }, 404);
++  const origin = request.headers.get("origin");
++  const site = request.headers.get("sec-fetch-site");
++  if ((origin && origin !== incoming.origin) || (site && !["same-origin", "none"].includes(site))) {
++    return json({ detail: "Solo se permiten llamadas desde este panel." }, 403);
++  }
++  const authorization = request.headers.get("authorization") ?? "";
++  if (
++    !authorization.startsWith("Bearer ") ||
++    !equal(authorization.slice(7), settings.operatorSecret)
++  ) {
++    return json({ detail: "Credencial personal de piloto inválida." }, 401);
++  }
++  if (path === "session") {
++    if (request.method !== "POST" || incoming.search)
++      return json({ detail: "Método no permitido." }, 405);
++    return json({ profile: settings.actor, business_id: settings.business });
++  }
++  const route = destination(path, settings.business);
++  if (!route) return json({ detail: "Endpoint no permitido." }, 404);
++  if (!route.methods.includes(request.method)) return json({ detail: "Método no permitido." }, 405);
++  const target = new URL(route.path, settings.origin);
++  for (const [key, value] of incoming.searchParams) {
++    if (key === "business_id") {
++      if (value !== settings.business)
++        return json({ detail: "Empresa fuera del alcance del piloto." }, 403);
++    } else if (!route.query.has(key)) return json({ detail: "Parámetro no permitido." }, 400);
++    else target.searchParams.append(key, value);
++  }
++  if (path === "inbox") target.searchParams.set("business_id", settings.business);
++  let body: string | undefined;
++  let commandId: string | undefined;
++  if (request.method !== "GET") {
++    let input: unknown;
++    try {
++      input = await request.json();
++    } catch {
++      return json({ detail: "JSON inválido." }, 400);
++    }
++    if (!input || typeof input !== "object" || Array.isArray(input))
++      return json({ detail: "Cuerpo inválido." }, 400);
++    const payload = input as Record<string, unknown>;
++    if (Object.keys(payload).some((key) => !route.body?.has(key)))
++      return json({ detail: "Campo no permitido." }, 400);
++    if (route.command) {
++      if (typeof payload["command_id"] !== "string" || !COMMAND_ID.test(payload["command_id"])) {
++        return json({ detail: "Identificador de comando inválido." }, 422);
++      }
++      commandId = payload["command_id"];
++    }
++    body = JSON.stringify(payload);
++  }
++  const headers: Record<string, string> = {
++    Authorization: "Bearer " + jwt(settings),
++    Accept: "application/json",
++  };
++  if (body !== undefined) headers["Content-Type"] = "application/json";
++  // Build headers from scratch: Origin, Sec-Fetch-Site, the personal credential,
++  // cookies and client-supplied destination/actor never reach the CRM.
++  try {
++    const upstream = await fetcher(target, {
++      method: request.method,
++      headers,
++      ...(body === undefined ? {} : { body }),
++      redirect: "error",
++      cache: "no-store",
++      signal: AbortSignal.timeout(55_000),
++    });
++    const data: unknown = await upstream.json();
++    if (upstream.status >= 500) throw new Error("upstream_unavailable");
++    return json(data, upstream.status);
++  } catch {
++    // The CRM may already have forwarded a POST. Never retry here or in the UI.
++    if (commandId)
++      return json(
++        {
++          command_id: commandId,
++          status: "unknown",
++          control: null,
++          provider_message_id: null,
++          error: "proxy_outcome_unknown_query_command",
++        },
++        202,
++      );
++    return json({ detail: "No se pudo consultar el CRM. No se cambia el control del bot." }, 503);
++  }
++}
+diff --git a/src/lib/crm-pilot.server.test.mjs b/src/lib/crm-pilot.server.test.mjs
+new file mode 100644
+--- /dev/null
++++ b/src/lib/crm-pilot.server.test.mjs
+@@ -0,0 +1,302 @@
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { createHmac } from "node:crypto";
++import { handleCrmPilot } from "./crm-pilot.server.ts";
++import { canCompose, commandUnsettled } from "./crm-pilot-contract.ts";
++const env = {
++  CRM_PILOT_ENABLED: "true",
++  CRM_PILOT_BUSINESS_ID: "briosos",
++  CRM_PILOT_OPERATOR_ID: "employee-pilot-001",
++  CRM_PILOT_OPERATOR_SECRET: "synthetic-personal-" + "p".repeat(40),
++  CRM_JWT_SECRET: "synthetic-jwt-" + "j".repeat(40),
++  CRM_BACKEND_URL: "https://crm.example",
++};
++const base = "https://frontend.example/api/public/crm-pilot/";
++function incoming(
++  path,
++  { method = "GET", body, auth = env.CRM_PILOT_OPERATOR_SECRET, headers = {} } = {},
++) {
++  return new Request(base + path, {
++    method,
++    headers: {
++      Authorization: "Bearer " + auth,
++      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
++      ...headers,
++    },
++    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
++  });
++}
++const noFetch = () => {
++  throw new Error("unexpected external request");
++};
++test("pilot is disabled by default and a shared brand profile is not an individual", async () => {
++  const disabled = await handleCrmPilot(incoming("availability"), {}, noFetch);
++  assert.deepEqual(await disabled.json(), { enabled: false, business_id: null });
++  assert.equal((await handleCrmPilot(incoming("inbox"), {}, noFetch)).status, 404);
++  for (const actor of ["briosos", "tanaka", "admin"]) {
++    assert.equal(
++      (
++        await handleCrmPilot(
++          incoming("session", { method: "POST", body: {} }),
++          { ...env, CRM_PILOT_OPERATOR_ID: actor },
++          noFetch,
++        )
++      ).status,
++      503,
++    );
++  }
++  assert.equal(
++    (
++      await handleCrmPilot(
++        incoming("inbox"),
++        { ...env, PASSWORD_ADMIN: env.CRM_PILOT_OPERATOR_SECRET },
++        noFetch,
++      )
++    ).status,
++    503,
++  );
++});
++test("dedicated credential authenticates only the configured individual", async () => {
++  assert.equal(
++    (
++      await handleCrmPilot(
++        incoming("session", { method: "POST", body: {}, auth: "wrong" }),
++        env,
++        noFetch,
++      )
++    ).status,
++    401,
++  );
++  const response = await handleCrmPilot(
++    incoming("session", { method: "POST", body: {} }),
++    env,
++    noFetch,
++  );
++  assert.deepEqual(await response.json(), {
++    profile: "employee-pilot-001",
++    business_id: "briosos",
++  });
++  assert.equal(response.headers.get("cache-control"), "no-store");
++});
++test("proxy signs exact short HS256 claims and strips all browser credentials/headers", async () => {
++  let calls = 0;
++  const response = await handleCrmPilot(
++    incoming("inbox?bucket=awaiting_human&limit=1", {
++      headers: {
++        Origin: "https://frontend.example",
++        "Sec-Fetch-Site": "same-origin",
++        Cookie: "sensitive=private",
++        "X-Bot": "tanaka",
++        "X-CRM-Bot-Secret": "untrusted",
++        "X-CRM-Source-Secret": "untrusted",
++      },
++    }),
++    env,
++    async (url, init) => {
++      calls++;
++      assert.equal(url.origin, "https://crm.example");
++      assert.equal(url.pathname, "/v1/inbox");
++      assert.equal(url.searchParams.get("business_id"), "briosos");
++      const headers = new Headers(init.headers);
++      for (const name of [
++        "origin",
++        "sec-fetch-site",
++        "cookie",
++        "x-bot",
++        "x-crm-bot-secret",
++        "x-crm-source-secret",
++      ])
++        assert.equal(headers.has(name), false);
++      const token = headers.get("authorization").slice(7);
++      assert.equal(token.includes(env.CRM_PILOT_OPERATOR_SECRET), false);
++      const [header, body, signature] = token.split(".");
++      assert.deepEqual(JSON.parse(Buffer.from(header, "base64url")), { alg: "HS256", typ: "JWT" });
++      const claims = JSON.parse(Buffer.from(body, "base64url"));
++      assert.equal(claims.iss, "chatty-catalog-compass");
++      assert.equal(claims.aud, "whatsapp-crm");
++      assert.equal(claims.profile, "employee-pilot-001");
++      assert.deepEqual(claims.allowed_businesses, ["briosos"]);
++      assert.equal(claims.exp - claims.iat, 120);
++      assert.ok(Math.abs(claims.iat - Math.floor(Date.now() / 1000)) <= 1);
++      assert.equal(
++        signature,
++        createHmac("sha256", env.CRM_JWT_SECRET).update(`${header}.${body}`).digest("base64url"),
++      );
++      assert.equal(init.redirect, "error");
++      assert.equal(init.cache, "no-store");
++      return Response.json({ items: [], next_cursor: null });
++    },
++  );
++  assert.equal(response.status, 200);
++  assert.equal(calls, 1);
++});
++test("cross-site and cross-tenant input cannot select an upstream destination", async () => {
++  assert.equal(
++    (
++      await handleCrmPilot(
++        incoming("inbox", { headers: { Origin: "https://attacker.example" } }),
++        env,
++        noFetch,
++      )
++    ).status,
++    403,
++  );
++  assert.equal(
++    (
++      await handleCrmPilot(
++        incoming("inbox", { headers: { "Sec-Fetch-Site": "cross-site" } }),
++        env,
++        noFetch,
++      )
++    ).status,
++    403,
++  );
++  for (const path of ["inbox?business_id=tanaka", "inbox?business_id=briosos&business_id=velvet"]) {
++    assert.equal((await handleCrmPilot(incoming(path), env, noFetch)).status, 403);
++  }
++  for (const path of ["inbox?backend_url=https://attacker.example", "inbox?actor=admin"]) {
++    assert.equal((await handleCrmPilot(incoming(path), env, noFetch)).status, 400);
++  }
++  for (const path of [
++    "internal/sync",
++    "https://attacker.example",
++    "conversations/contact%2Fother/control",
++    "conversations/contact%252Fother/control",
++    "conversations/contact/commands/not/valid",
++  ]) {
++    assert.equal((await handleCrmPilot(incoming(path), env, noFetch)).status, 404);
++  }
++});
++test("method and body allowlists prohibit extra actor/credential/URL fields", async () => {
++  assert.equal(
++    (
++      await handleCrmPilot(
++        incoming("conversations/573000000001/control", { method: "POST", body: {} }),
++        env,
++        noFetch,
++      )
++    ).status,
++    405,
++  );
++  assert.equal(
++    (await handleCrmPilot(incoming("conversations/573000000001/messages"), env, noFetch)).status,
++    405,
++  );
++  for (const extra of [
++    "actor",
++    "business_id",
++    "url",
++    "credentials",
++    "expected_business",
++    "backend_url",
++  ]) {
++    const body = {
++      command_id: "synthetic-command-1",
++      expected_version: 3,
++      text: "SYNTHETIC answer",
++      [extra]: "untrusted",
++    };
++    assert.equal(
++      (
++        await handleCrmPilot(
++          incoming("conversations/573000000001/messages", { method: "POST", body }),
++          env,
++          noFetch,
++        )
++      ).status,
++      400,
++    );
++  }
++});
++test("opaque contact identifiers remain intact and a failed send is never called delivered", async () => {
++  const response = await handleCrmPilot(
++    incoming("conversations/CO.SyntheticID/messages", {
++      method: "POST",
++      body: { command_id: "synthetic-command-2", expected_version: 3, text: "SYNTHETIC answer" },
++    }),
++    env,
++    async (url, init) => {
++      assert.equal(url.pathname, "/v1/conversations/briosos/CO.SyntheticID/messages");
++      assert.deepEqual(JSON.parse(init.body), {
++        command_id: "synthetic-command-2",
++        expected_version: 3,
++        text: "SYNTHETIC answer",
++      });
++      return Response.json({ command_id: "synthetic-command-2", status: "failed", control: null });
++    },
++  );
++  assert.equal(response.status, 200);
++  assert.equal((await response.json()).status, "failed");
++});
++test("ambiguous POST is attempted once and becomes query-only unknown", async () => {
++  let calls = 0;
++  const response = await handleCrmPilot(
++    incoming("conversations/573000000001/messages", {
++      method: "POST",
++      body: { command_id: "synthetic-timeout", expected_version: 3, text: "SYNTHETIC answer" },
++    }),
++    env,
++    async () => {
++      calls++;
++      throw new TypeError("synthetic network timeout");
++    },
++  );
++  assert.equal(calls, 1);
++  assert.equal(response.status, 202);
++  assert.deepEqual(await response.json(), {
++    command_id: "synthetic-timeout",
++    status: "unknown",
++    control: null,
++    provider_message_id: null,
++    error: "proxy_outcome_unknown_query_command",
++  });
++});
++test("server rejects unsafe origin configuration instead of following a redirect", async () => {
++  for (const url of [
++    "http://crm.example",
++    "https://user:password@crm.example",
++    "https://crm.example/api",
++    "https://crm.example?token=private",
++  ]) {
++    assert.equal(
++      (await handleCrmPilot(incoming("inbox"), { ...env, CRM_BACKEND_URL: url }, noFetch)).status,
++      503,
++    );
++  }
++});
++test("composer requires confirmed current ownership, pause and a sendable window", () => {
++  const control = {
++    business_id: "briosos",
++    phone_number: "573000000001",
++    provider: "crm",
++    phase: "human",
++    version: 3,
++    owner: "employee-pilot-001",
++    is_paused: true,
++    confirmed: true,
++    can_send: true,
++    window_expires_at: "2030-01-01T00:00:00Z",
++  };
++  assert.equal(canCompose(control, "employee-pilot-001", null), true);
++  for (const change of [
++    { phase: "pausing" },
++    { owner: "other" },
++    { is_paused: false },
++    { confirmed: false },
++    { can_send: false },
++  ]) {
++    assert.equal(canCompose({ ...control, ...change }, "employee-pilot-001", null), false);
++  }
++  for (const status of ["unknown", "pending"]) {
++    const command = { command_id: "synthetic", status, control: null };
++    assert.equal(commandUnsettled(command), true);
++    assert.equal(canCompose(control, "employee-pilot-001", command), false);
++  }
++  assert.equal(canCompose(control, "other", null), false);
++});
++
++test("rotating the personal pilot credential revokes it on the next request", async () => {
++  const changed = { ...env, CRM_PILOT_OPERATOR_SECRET: "synthetic-rotated-" + "r".repeat(40) };
++  const response = await handleCrmPilot(incoming("inbox"), changed, noFetch);
++  assert.equal(response.status, 401);
++});
+diff --git a/src/routes/api/public/crm-pilot/$.ts b/src/routes/api/public/crm-pilot/$.ts
+new file mode 100644
+--- /dev/null
++++ b/src/routes/api/public/crm-pilot/$.ts
+@@ -0,0 +1,7 @@
++import { createFileRoute } from "@tanstack/react-router";
++import { handleCrmPilot } from "@/lib/crm-pilot.server";
++
++const proxy = ({ request }: { request: Request }) => handleCrmPilot(request, process.env);
++export const Route = createFileRoute("/api/public/crm-pilot/$")({
++  server: { handlers: { GET: proxy, POST: proxy } },
++});
+diff --git a/src/routes/chats.tsx b/src/routes/chats.tsx
+--- a/src/routes/chats.tsx
++++ b/src/routes/chats.tsx
+@@ -1,4 +1,5 @@
+-import { createFileRoute } from "@tanstack/react-router";
++import { createFileRoute, useRouterState } from "@tanstack/react-router";
++import { CrmPilotLink, CrmPilotPane } from "@/components/CrmPilotPane";
+ import { queryOptions, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+ import { Component, Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
+ import { Navigate } from "@tanstack/react-router";
+@@ -51,6 +52,11 @@
+ });
+
+ function ChatsPage() {
++  const search = useRouterState({ select: (state) => state.location.searchStr });
++  return new URLSearchParams(search).get("crm_pilot") === "1" ? <CrmPilotPane /> : <LegacyChatsPage />;
++}
++
++function LegacyChatsPage() {
+   const { ready, profile, password } = useClient();
+   if (!ready) return null;
+   if (!profile || !password) return <Navigate to="/" />;
+@@ -58,6 +64,7 @@
+   return (
+     <div className="flex h-[100dvh] flex-col">
+       <AppNav />
++      <CrmPilotLink />
+       {allowed.length === 0 ? (
+         <div className="grid flex-1 place-items-center p-8 text-center text-sm text-muted-foreground">
+           Este perfil todavía no tiene visor de chats.
+diff --git a/src/routeTree.gen.ts b/src/routeTree.gen.ts
+--- a/src/routeTree.gen.ts
++++ b/src/routeTree.gen.ts
+@@ -16,6 +16,7 @@
+ import { Route as DashboardCatalogoRouteImport } from './routes/dashboard.catalogo'
+ import { Route as DashboardHistorialRouteImport } from './routes/dashboard.historial'
+ import { Route as DashboardInstruccionRouteImport } from './routes/dashboard.instruccion'
++import { Route as ApiPublicCrmPilotSplatRouteImport } from './routes/api/public/crm-pilot/$'
+ import { Route as ApiPublicDashboardApiSplatRouteImport } from './routes/api/public/dashboard-api/$'
+
+ const IndexRoute = IndexRouteImport.update({
+@@ -52,6 +53,11 @@
+   id: '/instruccion',
+   path: '/instruccion',
+   getParentRoute: () => DashboardRoute,
++} as any)
++const ApiPublicCrmPilotSplatRoute = ApiPublicCrmPilotSplatRouteImport.update({
++  id: '/api/public/crm-pilot/$',
++  path: '/api/public/crm-pilot/$',
++  getParentRoute: () => rootRouteImport,
+ } as any)
+ const ApiPublicDashboardApiSplatRoute =
+   ApiPublicDashboardApiSplatRouteImport.update({
+@@ -68,6 +74,7 @@
+   '/dashboard/historial': typeof DashboardHistorialRoute
+   '/dashboard/instruccion': typeof DashboardInstruccionRoute
+   '/dashboard/': typeof DashboardIndexRoute
++  '/api/public/crm-pilot/$': typeof ApiPublicCrmPilotSplatRoute
+   '/api/public/dashboard-api/$': typeof ApiPublicDashboardApiSplatRoute
+ }
+ export interface FileRoutesByTo {
+@@ -77,6 +84,7 @@
+   '/dashboard/historial': typeof DashboardHistorialRoute
+   '/dashboard/instruccion': typeof DashboardInstruccionRoute
+   '/dashboard': typeof DashboardIndexRoute
++  '/api/public/crm-pilot/$': typeof ApiPublicCrmPilotSplatRoute
+   '/api/public/dashboard-api/$': typeof ApiPublicDashboardApiSplatRoute
+ }
+ export interface FileRoutesById {
+@@ -88,6 +96,7 @@
+   '/dashboard/historial': typeof DashboardHistorialRoute
+   '/dashboard/instruccion': typeof DashboardInstruccionRoute
+   '/dashboard/': typeof DashboardIndexRoute
++  '/api/public/crm-pilot/$': typeof ApiPublicCrmPilotSplatRoute
+   '/api/public/dashboard-api/$': typeof ApiPublicDashboardApiSplatRoute
+ }
+ export interface FileRouteTypes {
+@@ -100,6 +109,7 @@
+     | '/dashboard/historial'
+     | '/dashboard/instruccion'
+     | '/dashboard/'
++    | '/api/public/crm-pilot/$'
+     | '/api/public/dashboard-api/$'
+   fileRoutesByTo: FileRoutesByTo
+   to:
+@@ -109,6 +119,7 @@
+     | '/dashboard/historial'
+     | '/dashboard/instruccion'
+     | '/dashboard'
++    | '/api/public/crm-pilot/$'
+     | '/api/public/dashboard-api/$'
+   id:
+     | '__root__'
+@@ -119,6 +130,7 @@
+     | '/dashboard/historial'
+     | '/dashboard/instruccion'
+     | '/dashboard/'
++    | '/api/public/crm-pilot/$'
+     | '/api/public/dashboard-api/$'
+   fileRoutesById: FileRoutesById
+ }
+@@ -126,6 +138,7 @@
+   IndexRoute: typeof IndexRoute
+   ChatsRoute: typeof ChatsRoute
+   DashboardRoute: typeof DashboardRouteWithChildren
++  ApiPublicCrmPilotSplatRoute: typeof ApiPublicCrmPilotSplatRoute
+   ApiPublicDashboardApiSplatRoute: typeof ApiPublicDashboardApiSplatRoute
+ }
+
+@@ -180,6 +193,13 @@
+       preLoaderRoute: typeof DashboardInstruccionRouteImport
+       parentRoute: typeof DashboardRoute
+     }
++    '/api/public/crm-pilot/$': {
++      id: '/api/public/crm-pilot/$'
++      path: '/api/public/crm-pilot/$'
++      fullPath: '/api/public/crm-pilot/$'
++      preLoaderRoute: typeof ApiPublicCrmPilotSplatRouteImport
++      parentRoute: typeof rootRouteImport
++    }
+     '/api/public/dashboard-api/$': {
+       id: '/api/public/dashboard-api/$'
+       path: '/api/public/dashboard-api/$'
+@@ -212,6 +232,7 @@
+   IndexRoute: IndexRoute,
+   ChatsRoute: ChatsRoute,
+   DashboardRoute: DashboardRouteWithChildren,
++  ApiPublicCrmPilotSplatRoute: ApiPublicCrmPilotSplatRoute,
+   ApiPublicDashboardApiSplatRoute: ApiPublicDashboardApiSplatRoute,
+ }
+ export const routeTree = rootRouteImport

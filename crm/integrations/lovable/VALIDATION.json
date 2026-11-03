@@ -1,0 +1,12 @@
+{
+  "base_commit": "1cda4a8069d189834837e082b378ae05629a1f02",
+  "original_frontend_modified": false,
+  "patch_apply_check": "passed_without_applying",
+  "node_security_tests_passed": 10,
+  "production_build": "passed",
+  "typescript": "passed",
+  "final_lint_typecheck_build": "passed",
+  "external_transports": "mocked",
+  "physical_whatsapp_receipt": "not_tested",
+  "lockfile_changed_in_artifact": false
+}

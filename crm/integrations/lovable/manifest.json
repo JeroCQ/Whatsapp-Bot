@@ -1,0 +1,15 @@
+{
+  "frontend_repository": "JeroCQ/chatty-catalog-compass",
+  "frontend_base_commit": "1cda4a8069d189834837e082b378ae05629a1f02",
+  "files": [
+    "src/components/CrmPilotPane.tsx",
+    "src/lib/crm-pilot-contract.ts",
+    "src/lib/crm-pilot.server.ts",
+    "src/lib/crm-pilot.server.test.mjs",
+    "src/routes/api/public/crm-pilot/$.ts",
+    "src/routes/chats.tsx",
+    "src/routeTree.gen.ts"
+  ],
+  "original_frontend_modified": false,
+  "pilot_enabled_by_default": false
+}
