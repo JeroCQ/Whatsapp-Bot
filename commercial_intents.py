@@ -9,6 +9,16 @@ def _normal(text: str) -> str:
     return unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode().lower()
 
 
+def human_handoff_reason(text: str, keywords: tuple[str, ...]) -> str | None:
+    """Match only explicitly configured whole words in the current inbound text."""
+    normalized = _normal(text)
+    for keyword in keywords:
+        word = _normal(keyword).strip()
+        if word and re.search(rf"(?<!\w){re.escape(word)}(?!\w)", normalized):
+            return f"HUMAN_REQUEST: palabra clave {keyword}"
+    return None
+
+
 _B2B_PATTERNS = (
     (r"\bmaquil(?:a|ar|an|amos|ado|adora)?\b", "maquila"),
     (r"\b(?:fabricacion|produccion)\s+para\s+terceros\b", "fabricación para terceros"),

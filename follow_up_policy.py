@@ -37,6 +37,7 @@ class BusinessPolicy:
     operating_hours: WeeklyHours
     min_spacing_seconds: int
     standard_wholesale_self_service: bool = False
+    human_handoff_keywords: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -82,7 +83,7 @@ def load_business_policy(business_id: str, environ: Mapping | None = None) -> Bu
     """Load only this deployment's brand data; unknown brands use neutral defaults.
 
     BUSINESS_POLICY_JSON overrides local policy for an isolated deployment.  It
-    contains calendar data only and does not require sharing another brand's IDs.
+    contains business policy only and does not require sharing another brand's IDs.
     """
     environ = os.environ if environ is None else environ
     business_id = str(business_id or "").strip()
@@ -107,7 +108,11 @@ def load_business_policy(business_id: str, environ: Mapping | None = None) -> Bu
     self_service = document.get("standard_wholesale_self_service", False)
     if type(self_service) is not bool:
         raise ValueError("standard_wholesale_self_service must be boolean")
-    return BusinessPolicy(selected_timezone, contact, operating, spacing, self_service)
+    keywords = document.get("human_handoff_keywords", [])
+    if not isinstance(keywords, list) or any(not isinstance(word, str) or not word.strip() for word in keywords):
+        raise ValueError("human_handoff_keywords must be a list of nonempty strings")
+    return BusinessPolicy(selected_timezone, contact, operating, spacing, self_service,
+                          tuple(word.strip() for word in keywords))
 
 
 def _local(value: datetime, policy: BusinessPolicy) -> datetime:
