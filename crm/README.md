@@ -23,6 +23,9 @@ flowchart LR
 
 ## Guías vigentes
 
+- [Prompt listo para Railway](../docs/RAILWAY_BRIOSOS_CRM_PROMPT.md): despliega solo
+  Briosos desde el proyecto existente. El código frontend ya está integrado;
+  Lovable solo requiere secretos privados y publicación, sin reimplementación.
 - [Entrega operativa del piloto](../docs/CRM_PILOT_HANDOFF.md): contrato de control,
   configuración por servicio, Railway solo Briosos, botones/compositor Lovable,
   aceptación local y pasos pendientes para comprobar recepción física.

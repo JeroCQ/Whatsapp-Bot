@@ -1,5 +1,10 @@
 # Continuar el piloto Briosos, sin reconstruir
 
+El camino elegido por el usuario es ejecutar el despliegue con la IA del proyecto
+Railway, usando [RAILWAY_BRIOSOS_CRM_PROMPT.md](RAILWAY_BRIOSOS_CRM_PROMPT.md).
+No hace falta resolver las credenciales de esta sesión Codex para usar ese camino.
+El diagnóstico de acceso que sigue es histórico, no un requisito del despliegue.
+
 El código está terminado para la integración del piloto y publicado en Git.
 La activación y la recepción física todavía no se han verificado. No confundir
 pruebas con proveedores simulados con un despliegue real.

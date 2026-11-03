@@ -13,6 +13,11 @@ environment variable, database migration, or manual setup.
 
 ## Deployments por negocio
 
+Para activar únicamente el **piloto CRM de Briosos** con el código ya publicado,
+usa el [prompt listo para la IA de Railway](docs/RAILWAY_BRIOSOS_CRM_PROMPT.md).
+La interfaz ya está integrada en GitHub; Lovable solo necesita configuración
+privada y publicación, sin otra tarea de generación de código.
+
 Para cualquier negocio nuevo, comienza por el runbook canónico
 [`docs/NEW_BUSINESS_SETUP.md`](docs/NEW_BUSINESS_SETUP.md). Define el orden completo
 GitHub → Supabase → Meta → Chatwoot opcional → Railway → dashboard, las fuentes de
