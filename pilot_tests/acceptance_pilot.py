@@ -1019,3 +1019,152 @@ def test_full_canonical_install_and_upgrade_preserve_data_and_revoke_browser_rol
         with admin.connect() as active:
             active.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
         admin.dispose()
+
+
+def test_failed_delivery_updates_inbox_incrementally_and_late_sent_cannot_erase_it(
+    pilot,
+):
+    from crm_service.bot_source import BotSourceAdapter
+    from crm_service.models import SourceMessage, SyncCursor
+    from crm_service.sync import Synchronizer
+    from sqlalchemy import select
+
+    worker = Synchronizer(
+        pilot.settings,
+        pilot.app.state.sessions,
+        lambda business: BotSourceAdapter(business, transport=pilot.transport),
+    )
+
+    def sync():
+        assert worker.run(BUSINESS)[BUSINESS] == "ok"
+        response = pilot.crm.get(
+            "/v1/inbox",
+            params={"bucket": "all", "business_id": BUSINESS},
+            headers=_jwt(pilot.settings),
+        )
+        assert response.status_code == 200
+        return response.json()["items"][0]
+
+    _post_incoming(pilot)
+    _take(pilot)
+    response = _command(
+        pilot,
+        "messages",
+        "incremental-failed-reply",
+        text_value="SYNTHETIC accepted then failed",
+    )
+    assert response.json()["status"] == "accepted"
+    provider_message = pilot.meta.sent[-1]
+    assert sync()["bucket"] == "human_active"
+    accepted = (
+        sync()
+    )  # Advance the ordinary rolling-reconciliation deadline before the callback.
+    with pilot.app.state.sessions() as session:
+        cursor = session.get(SyncCursor, (BUSINESS, "message_reconciliation"))
+        assert cursor and datetime.fromisoformat(
+            cursor.value["next_at"]
+        ) > datetime.now(timezone.utc)
+        human = session.scalar(
+            select(SourceMessage).where(
+                SourceMessage.business_id == BUSINESS, SourceMessage.role == "asesor"
+            )
+        )
+        assert human.message_metadata["delivery_status"] == "accepted"
+    assert (
+        pilot.crm.post(
+            f"/v1/conversations/{BUSINESS}/{PHONE}/read",
+            json={"read": True},
+            headers=_jwt(pilot.settings),
+        ).status_code
+        == 200
+    )
+    for status in ("failed", "failed", "sent"):
+        encoded, headers = _signed(_receipt(provider_message, status))
+        assert (
+            pilot.bot.post("/webhook", content=encoded, headers=headers).status_code
+            == 200
+        )
+    assert _command_status(pilot, "incremental-failed-reply")["status"] == "failed"
+    failed = sync()
+    assert (
+        failed["bucket"] == "awaiting_human"
+        and failed["unanswered_customer_count"] == 1
+    )
+    assert failed["read"] and failed["last_message_id"] == accepted["last_message_id"]
+    with pilot.app.state.sessions() as session:
+        human = session.scalar(
+            select(SourceMessage).where(
+                SourceMessage.business_id == BUSINESS, SourceMessage.role == "asesor"
+            )
+        )
+        assert (
+            human.message_metadata["delivery_status"] == "accepted"
+        )  # The new receipt fact, not a historical reread, changed classification.
+    facts = (
+        pilot.repository.table("message_logs")
+        .select("*")
+        .eq("phone_number", PHONE)
+        .execute()
+        .data
+    )
+    statuses = [
+        row["metadata"]["delivery_status"]
+        for row in facts
+        if row["metadata"].get("source") == "crm_delivery"
+    ]
+    assert statuses.count("failed") == 1 and statuses.count("accepted") == 1
+
+
+def test_delivery_receipts_after_close_do_not_reopen_or_mark_unread(pilot):
+    from crm_service.bot_source import BotSourceAdapter
+    from crm_service.sync import Synchronizer
+
+    worker = Synchronizer(
+        pilot.settings,
+        pilot.app.state.sessions,
+        lambda business: BotSourceAdapter(business, transport=pilot.transport),
+    )
+
+    def sync():
+        assert worker.run(BUSINESS)[BUSINESS] == "ok"
+        response = pilot.crm.get(
+            "/v1/inbox",
+            params={"bucket": "all", "business_id": BUSINESS},
+            headers=_jwt(pilot.settings),
+        )
+        assert response.status_code == 200
+        return response.json()["items"][0]
+
+    _post_incoming(pilot)
+    _take(pilot)
+    assert (
+        _command(
+            pilot,
+            "messages",
+            "closed-receipt-reply",
+            text_value="SYNTHETIC close with pending receipt",
+        ).json()["status"]
+        == "accepted"
+    )
+    provider_message = pilot.meta.sent[-1]
+    assert _command(pilot, "close", "close-before-receipt").status_code == 200
+    closed = sync()
+    assert closed["bucket"] == "closed"
+    assert (
+        pilot.crm.post(
+            f"/v1/conversations/{BUSINESS}/{PHONE}/read",
+            json={"read": True},
+            headers=_jwt(pilot.settings),
+        ).status_code
+        == 200
+    )
+    for status in ("delivered", "read", "sent", "failed"):
+        encoded, headers = _signed(_receipt(provider_message, status))
+        assert (
+            pilot.bot.post("/webhook", content=encoded, headers=headers).status_code
+            == 200
+        )
+    assert _command_status(pilot, "closed-receipt-reply")["status"] == "read"
+    after = sync()
+    assert after["bucket"] == "closed" and after["read"]
+    assert after["last_message_id"] == closed["last_message_id"]

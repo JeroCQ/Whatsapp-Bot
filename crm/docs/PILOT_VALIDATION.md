@@ -33,7 +33,7 @@ CRM_TEST_DATABASE_URL=postgresql+psycopg://agent@127.0.0.1:55432/crm_test .venv/
 ```
 
 Resultado: lint y formato correctos; mypy correcto (20 archivos de servicio);
-**201 tests CRM pasan**, incluyendo migraciones upgrade/downgrade, paridad de
+**210 tests CRM pasan**, incluyendo migraciones upgrade/downgrade, paridad de
 metadata y upgrade con datos existentes; JWT/aislamiento/contrato, presupuestos,
 fuentes sintéticas y permisos efectivos de lectores PostgreSQL dedicados.
 
@@ -49,7 +49,7 @@ python -m py_compile main.py bot.py config.py database.py
 git diff --check
 ```
 
-Aceptación: **12 tests pasan**, con PostgreSQL real para bot y CRM; solo transportes
+Aceptación: **14 tests pasan**, con PostgreSQL real para bot y CRM; solo transportes
 Meta/Gemini simulados. Se ejecutan ambos scripts SQL completos con stubs locales
 auth/storage de Supabase, además del bloque CRM en la suite. Upgrade repetido
 preserva datos y caso tomado. Las funciones no conservan permisos para anon,
@@ -82,13 +82,17 @@ sin reenvío; fallo explícito; receipt no firmado rechazado; callback opaco res
 el resultado incierto; ventana vencida; campos de destino inyectados rechazados;
 JWT/empresa ajenos rechazados; exportación real del bot hacia inbox y todos los
 ciclos; trabajo viejo cercado tras tomar/cerrar; seguimiento viejo y reset no
-liberan control; SQL nuevo/upgrade con la misma definición.
+liberan control; SQL nuevo/upgrade con la misma definición. Un failed posterior a accepted vuelve
+al inbox Por responder con el siguiente polling incremental, aunque la metadata
+antecedente siga cacheada; callbacks repetidos o sent tardío no borran el fallo.
+Los hechos de entrega no reabren casos cerrados ni cambian leído por actor.
 
 ## Límites y siguiente paso
 
 No se ha probado recepción en un dispositivo real ni se han usado credenciales
-productivas, Railway, Supabase remoto o Meta real. No hay acceso Railway/secretos
-piloto inyectados en esta sesión. No se ha modificado Lovable, desplegado servicios
+productivas, Railway, Supabase remoto o Meta real. La CLI Railway 5.71.0 está instalada; railway whoami respondió Unauthorized y
+no hay secretos piloto inyectados. Se guardó el requisito RAILWAY_TOKEN para entrada
+segura por el usuario, pendiente de guardar/publicar la configuración. No se ha modificado Lovable, desplegado servicios
 ni aplicado SQL en Briosos o los tres negocios activos. Briosos es el único piloto
 autorizado por el usuario; ejecutar allí los pasos de la guía con acceso seguro.
 

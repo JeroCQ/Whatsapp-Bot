@@ -6,6 +6,7 @@ from typing import Any
 BUCKETS = {"awaiting_human", "human_active", "ai_active", "closed"}
 PENDING = {"pending", "reserved", "sending", "unknown", "exhausted"}
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+DELIVERY_RANK = {"accepted": 0, "failed": 1, "delivered": 2, "read": 3}
 
 
 def timestamp(value: Any) -> datetime:
@@ -31,7 +32,20 @@ def classify(
     warnings: list[str] | None = None,
 ) -> dict[str, Any]:
     quality = set(warnings or [])
-    ordered = sorted(messages, key=order)
+    # Delivery facts advance the source watermark, but are not conversational
+    # activity: a receipt cannot reopen a case or change an actor's read state.
+    receipts: dict[str, str] = {}
+    activity = []
+    for message in messages:
+        metadata = message.get("metadata") or {}
+        if message.get("role") == "system" and metadata.get("source") == "crm_delivery":
+            command, status = metadata.get("command_id"), metadata.get("delivery_status")
+            if isinstance(command, str) and isinstance(status, str) and status in DELIVERY_RANK:
+                if DELIVERY_RANK[status] > DELIVERY_RANK.get(receipts.get(command, ""), -1):
+                    receipts[command] = status
+        else:
+            activity.append(message)
+    ordered = sorted(activity, key=order)
     closed_at = max(
         (
             order(m)
@@ -55,7 +69,21 @@ def classify(
     if boundary is None and delivery:
         started = timestamp(delivery.get("created_at"))
         boundary = (delivery_time if closed_at and started <= closed_at[0] else started, -1)
-    humans = [m for m in cycle if m.get("role") == "asesor" and (boundary is None or order(m) > boundary)]
+    humans = []
+    for message in cycle:
+        if message.get("role") != "asesor" or (boundary is not None and order(message) <= boundary):
+            continue
+        metadata = message.get("metadata") or {}
+        status = metadata.get("delivery_status")
+        status = status if isinstance(status, str) else None
+        command = metadata.get("source_event_id")
+        receipt = receipts.get(command) if isinstance(command, str) else None
+        # Reconciliation can observe a newer metadata edit before its append-only
+        # fact, so do not let an older accepted event erase a known failure/read.
+        if receipt and DELIVERY_RANK[receipt] > DELIVERY_RANK.get(status or "", -1):
+            status = receipt
+        if status not in {"failed", "unknown", "pending", "reserved", "sending"}:
+            humans.append(message)
     # Index responses once instead of comparing every inbound with every human message.
     covered: set[str] = set()
     legacy_latest = None

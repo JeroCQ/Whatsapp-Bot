@@ -437,7 +437,8 @@ BEGIN
     -- Do not regress delivery receipts when the HTTP acknowledgement arrives late.
     IF attempt.status='read' OR (attempt.status='delivered' AND target_status<>'read') THEN
       target_status := attempt.status;
-    ELSIF attempt.status='failed' AND p_action='finish_send' THEN
+    ELSIF attempt.status='failed' AND target_status NOT IN ('delivered','read') THEN
+      -- A late HTTP acknowledgement or Meta sent callback cannot erase a known failure.
       target_status := 'failed';
     ELSIF attempt.status='accepted' AND target_status='unknown' THEN
       target_status := 'accepted';
@@ -457,6 +458,17 @@ BEGIN
       UPDATE public.message_logs SET metadata=COALESCE(metadata,'{}'::jsonb) || jsonb_build_object(
         'delivery_status',target_status,'provider_message_id',COALESCE(provider_id,attempt.provider_message_id))
         WHERE event_key='crm-human:'||p_business_id||':'||p_request_id;
+      IF attempt.status IS DISTINCT FROM target_status AND target_status IN ('accepted','delivered','read','failed') THEN
+        -- Metadata edits alone are invisible to the incremental ID watermark. Append a
+        -- receipt fact, without message content, so the next bounded poll sees it.
+        INSERT INTO public.message_logs(phone_number,role,content,metadata,event_key)
+          VALUES(p_phone,'system','DELIVERY_STATUS: '||target_status,
+            jsonb_build_object('business_id',p_business_id,'source','crm_delivery',
+              'command_id',p_request_id,'delivery_status',target_status,
+              'provider_message_id',COALESCE(provider_id,attempt.provider_message_id)),
+            'crm-delivery:'||p_business_id||':'||p_request_id||':'||target_status)
+          ON CONFLICT(event_key) DO NOTHING;
+      END IF;
     END IF;
     v_response := jsonb_build_object('command_id',p_request_id,'status',target_status,
          'provider_message_id',COALESCE(provider_id,attempt.provider_message_id),

@@ -172,3 +172,92 @@ def test_function_does_not_mutate_inputs():
     before = repr(messages)
     classify_messages(messages)
     assert repr(messages) == before
+
+
+def receipt(i, command, status):
+    return msg(
+        i,
+        "system",
+        "DELIVERY_STATUS: " + status,
+        metadata={
+            "source": "crm_delivery",
+            "command_id": command,
+            "delivery_status": status,
+        },
+    )
+
+
+@pytest.mark.parametrize("modern", [True, False])
+def test_failed_human_response_does_not_answer_customer(modern):
+    incoming = {"source_event_id": "inbound-one"} if modern else {}
+    human = {"delivery_status": "failed"}
+    if modern:
+        human.update(source_event_id="reply-one", inbound_message_ids=["inbound-one"])
+    result = classify_messages([msg(1, "user", metadata=incoming), msg(2, "asesor", metadata=human)])
+    assert result["bucket"] == "awaiting_human"
+    assert result["unanswered_customer_count"] == 1
+
+
+def test_incremental_failed_receipt_overrides_cached_accepted_response_without_mutation():
+    messages = [
+        msg(1, "user", metadata={"source_event_id": "inbound-one"}),
+        msg(
+            2,
+            "asesor",
+            metadata={
+                "source_event_id": "reply-one",
+                "inbound_message_ids": ["inbound-one"],
+                "delivery_status": "accepted",
+            },
+        ),
+        receipt(3, "reply-one", "failed"),
+    ]
+    before = repr(messages)
+    result = classify_messages(messages)
+    assert result["bucket"] == "awaiting_human" and result["unanswered_customer_count"] == 1
+    assert result["last_message_id"] == 2
+    assert repr(messages) == before
+
+
+def test_receipt_for_different_command_does_not_invalidate_human_response():
+    messages = [
+        msg(1, "user", metadata={"source_event_id": "inbound-one"}),
+        msg(
+            2,
+            "asesor",
+            metadata={
+                "source_event_id": "reply-one",
+                "inbound_message_ids": ["inbound-one"],
+                "delivery_status": "accepted",
+            },
+        ),
+        receipt(3, "other-reply", "failed"),
+    ]
+    assert classify_messages(messages)["bucket"] == "human_active"
+
+
+@pytest.mark.parametrize("status", ["accepted", "delivered", "read", "failed"])
+def test_receipts_after_close_do_not_reopen_or_create_unread_activity(status):
+    messages = [msg(1, "user"), msg(2, "system", "RESOLVED: done"), receipt(3, "old-reply", status)]
+    result = classify_messages(messages, paused=False)
+    assert result["bucket"] == "closed"
+    assert result["last_message_id"] == 2
+
+
+def test_receipts_and_reconciled_metadata_preserve_monotonic_delivery():
+    messages = [
+        msg(1, "user", metadata={"source_event_id": "inbound-one"}),
+        msg(
+            2,
+            "asesor",
+            metadata={
+                "source_event_id": "reply-one",
+                "inbound_message_ids": ["inbound-one"],
+                "delivery_status": "failed",
+            },
+        ),
+        receipt(3, "reply-one", "accepted"),
+    ]
+    assert classify_messages(messages)["bucket"] == "awaiting_human"
+    messages.extend([receipt(4, "reply-one", "delivered"), receipt(5, "reply-one", "accepted")])
+    assert classify_messages(messages)["bucket"] == "human_active"

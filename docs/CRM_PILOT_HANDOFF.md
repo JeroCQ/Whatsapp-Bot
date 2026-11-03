@@ -9,9 +9,9 @@ La rama de trabajo es `crm-staging-safety`. No fusionar ni hacer push a `43-CRM`
 `crm/Dockerfile` se conserva. El frontend existente y las instrucciones/catálogos
 del bot se conservan; la conexión de los nuevos botones se entrega al frontend.
 
-Commit bot: `c5531d0b53e8e77de5b41bb2f5c86a69a59c5390`. El commit CRM que
-contiene esta guía desciende directamente de ese commit; para la entrega conjunta
-usar el HEAD comunicado en el informe final. En Railway verificar el SHA de cada
+Base bot: `c5531d0b53e8e77de5b41bb2f5c86a69a59c5390`; integración CRM:
+`af45254911e38d80434ac6d28ac875a0ca98c626`. Para la entrega conjunta, incluidos
+los arreglos posteriores de entrega, usar el HEAD comunicado en el informe final. En Railway verificar el SHA de cada
 servicio; no basta que el nombre de la rama coincida.
 
 ## Distribución de servicios
@@ -114,6 +114,10 @@ Estados: `confirmed`, `pending`, `accepted`, `delivered`, `read`, `failed`,
 `unknown`; además `rejected` y `not_forwarded` en el ledger del CRM. `accepted`
 solo confirma aceptación del proveedor. `delivered/read` requieren webhook Meta
 firmado del número correcto y se guardan también en metadata del mensaje asesor.
+Los cambios generan hechos DELIVERY_STATUS idempotentes que el siguiente polling
+incremental consume; un fallo vuelve a Por responder sin esperar reconciliación
+histórica. Los recibos no reabren casos ni marcan no leído, y un sent tardío no
+borra un fallo confirmado.
 `failed` es un resultado de envío fallido, no un éxito aunque HTTP sea 200.
 
 401 JWT inválido/vencido; 403 empresa o cabeceras de navegador; 409 versión,
@@ -325,7 +329,10 @@ forzando errores externos en un envío real.
 
 Pendiente aquí: acceso Railway/Meta configurado de forma segura, aplicar esquema
 solo al piloto, desplegar sus servicios, integrar Lovable y registrar recepción
-física. Este entorno no tiene CLI/conector Railway ni claves piloto inyectadas.
+física. La CLI oficial Railway 5.71.0 ya está instalada y probada en este entorno, pero
+su comprobación de acceso respondió Unauthorized: no hay credenciales piloto
+inyectadas. Se guardó el requisito seguro RAILWAY_TOKEN para el proyecto de pruebas;
+el usuario debe aportar el valor en configuración y guardar/publicar el entorno.
 La autorización de Briosos no concede acceso ni autorización sobre otros negocios.
 
 ## Operación, rollback y otros negocios
