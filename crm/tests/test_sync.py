@@ -207,8 +207,8 @@ def test_second_attention_transition_gets_new_event(notifications_settings, sess
 def test_existing_message_cannot_move_between_phones(seeded, sessions):
     datasets, worker = seeded
     datasets["tanaka"]["message_logs"][0]["phone_number"] = "different-phone"
-    worker.run()  # The rolling reconciliation reaches the end and restarts at ID zero.
     assert worker.run()["tanaka"] == "failed"
+    assert worker.run()["tanaka"] == "backoff"
     with sessions() as session:
         assert session.get(SourceMessage, ("tanaka", 1)).phone_number == "573001"
         assert session.get(SourceConversation, ("tanaka", "different-phone")) is None

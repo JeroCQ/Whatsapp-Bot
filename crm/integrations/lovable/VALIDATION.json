@@ -1,0 +1,15 @@
+{
+  "base_commit": "1cda4a8069d189834837e082b378ae05629a1f02",
+  "original_frontend_modified": false,
+  "patch_apply_check": "passed_without_applying",
+  "node_security_tests_passed": 10,
+  "production_build": "passed",
+  "typescript": "passed",
+  "final_lint_typecheck_build": "passed",
+  "external_transports": "mocked",
+  "physical_whatsapp_receipt": "not_tested",
+  "lockfile_changed_in_artifact": false,
+  "subsequently_applied_with_user_authorization": true,
+  "frontend_main_commit": "6060d7828cc7ff58fb2b644911b847404a71302d",
+  "frontend_main_push_verified": true
+}

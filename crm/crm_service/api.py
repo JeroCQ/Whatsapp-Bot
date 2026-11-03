@@ -7,10 +7,13 @@ from datetime import timedelta
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy import and_, func, or_, select, text, tuple_
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from crm_service.bot_commands import CommandCoordinator
+from crm_service.bot_gateway import BotGateway, BotGatewayError
 from crm_service.classification import timestamp
 from crm_service.db import database
 from crm_service.models import (
@@ -23,6 +26,7 @@ from crm_service.models import (
     ReadState,
     SourceConversation,
     SourceMessage,
+    SyncRequest,
     SyncStatus,
     Task,
     now,
@@ -30,17 +34,21 @@ from crm_service.models import (
 from crm_service.notifications import endpoint_allowed, endpoint_hash, preference
 from crm_service.schemas import (
     Bucket,
+    ControlInput,
     CRMUpdate,
+    HumanMessageInput,
     NoteInput,
     PreferencesInput,
     PushInput,
     ReadInput,
+    SyncInput,
     TaskInput,
     TaskUpdate,
 )
 from crm_service.security import Actor, authenticate, decode_cursor, encode_cursor
 from crm_service.settings import Settings
-from crm_service.sync import Synchronizer, lock_id
+from crm_service.sync import lock_id
+from crm_service.sync_jobs import job_response
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -50,6 +58,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     engine, sessions = database(settings)
     app = FastAPI(title="Independent WhatsApp CRM", version="0.1.0", docs_url=None, redoc_url=None)
     app.state.settings, app.state.sessions, app.state.engine = settings, sessions, engine
+    app.state.bot_transport = None
 
     def db() -> Iterator[Session]:
         with sessions.begin() as session:
@@ -57,18 +66,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     DB = Annotated[Session, Depends(db)]
 
-    def actor(request: Request, session: DB) -> Actor:
+    def actor(request: Request) -> Actor:
         principal = authenticate(request, settings)
-        session.execute(
-            text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_id("actor:" + principal.profile)}
-        )
-        # Identity comes exclusively from the signed server JWT, never from a query/body.
-        agent = session.get(Agent, principal.profile)
-        if agent is None:
-            session.add(Agent(profile=principal.profile, allowed_businesses=list(principal.businesses)))
-        else:
-            agent.allowed_businesses = list(principal.businesses)
-        session.flush()
+        # Never retain a profile lock/connection across a remote bot command.
+        with sessions.begin() as session:
+            session.execute(
+                text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_id("actor:" + principal.profile)}
+            )
+            agent = session.get(Agent, principal.profile)
+            if agent is None:
+                session.add(Agent(profile=principal.profile, allowed_businesses=list(principal.businesses)))
+            else:
+                agent.allowed_businesses = list(principal.businesses)
         return principal
 
     Auth = Annotated[Actor, Depends(actor)]
@@ -146,7 +155,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             with engine.connect() as conn:
                 version = conn.scalar(text("SELECT version_num FROM alembic_version"))
-                if version != "0001_crm":
+                if version != "0003_bot_commands":
                     raise HTTPException(503, "CRM migrations required")
         except SQLAlchemyError:
             raise HTTPException(503, "CRM database unavailable or migrations required") from None
@@ -154,24 +163,102 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/v1/capabilities")
     def capabilities(principal: Auth) -> dict[str, Any]:
+        enabled = [name for name in principal.businesses if settings.businesses[name].operations_enabled]
+        bot_sources = [name for name in principal.businesses if settings.businesses[name].bot_api_enabled]
         return {
-            "source_read_only": True,
+            "source_read_only": settings.source_mode == "bot_api" and bool(bot_sources),
+            "source_methods_read_only": True,
+            "source_credentials_verified": False,
+            "production_sources_enabled": settings.source_mode == "bot_api" and bool(bot_sources),
+            "source_access_mode": settings.source_mode,
+            "sync_execution": "worker",
             "crm_updates": True,
-            "manual_handoff_enabled": False,
+            "manual_handoff_enabled": bool(enabled),
             "manual_handoff_contract": {
                 "version": 1,
                 "transport": "authenticated_bot_endpoint_only",
-                "implemented": False,
+                "implemented": True,
             },
-            "send_messages": False,
-            "resolve_conversations": False,
-            "resume_bot": False,
+            "human_control_businesses": enabled,
+            "send_transport": "authenticated_bot_endpoint_only",
+            "send_messages": bool(enabled),
+            "resolve_conversations": bool(enabled),
+            "resume_bot": bool(enabled),
             "notifications_enabled": settings.notifications_enabled,
         }
 
     @app.get("/v1/businesses")
     def businesses(principal: Auth) -> list[dict[str, str]]:
         return [{"business_id": name} for name in principal.businesses]
+
+    def bot_gateway(principal: Actor, business_id: str) -> BotGateway:
+        principal.authorize(business_id)
+        try:
+            return BotGateway(
+                settings.businesses[business_id],
+                transport=app.state.bot_transport,
+                timeout=settings.bot_timeout_seconds,
+                test_mode=settings.bot_test_mode,
+            )
+        except BotGatewayError as error:
+            raise HTTPException(error.status_code, error.code) from None
+
+    @app.get("/v1/conversations/{business_id}/{phone_number}/control")
+    def authoritative_control(business_id: str, phone_number: str, principal: Auth) -> dict[str, Any]:
+        gateway = bot_gateway(principal, business_id)
+        try:
+            return gateway.control(phone_number)
+        except BotGatewayError as error:
+            raise HTTPException(error.status_code, error.code) from None
+        finally:
+            gateway.close()
+
+    def execute_bot_command(
+        business_id: str, phone_number: str, operation: str, payload: dict[str, Any], principal: Actor
+    ) -> JSONResponse:
+        gateway = bot_gateway(principal, business_id)
+        try:
+            result, status = CommandCoordinator(sessions, gateway).execute(
+                principal, phone_number, operation, payload
+            )
+            return JSONResponse(content=result, status_code=status)
+        except BotGatewayError as error:
+            raise HTTPException(error.status_code, error.code) from None
+        finally:
+            gateway.close()
+
+    @app.post("/v1/conversations/{business_id}/{phone_number}/take")
+    def take_human_control(
+        business_id: str, phone_number: str, body: ControlInput, principal: Auth
+    ) -> JSONResponse:
+        return execute_bot_command(business_id, phone_number, "take", body.model_dump(), principal)
+
+    @app.post("/v1/conversations/{business_id}/{phone_number}/messages")
+    def human_message(
+        business_id: str, phone_number: str, body: HumanMessageInput, principal: Auth
+    ) -> JSONResponse:
+        return execute_bot_command(business_id, phone_number, "messages", body.model_dump(), principal)
+
+    @app.post("/v1/conversations/{business_id}/{phone_number}/close")
+    def close_human_case(
+        business_id: str, phone_number: str, body: ControlInput, principal: Auth
+    ) -> JSONResponse:
+        return execute_bot_command(business_id, phone_number, "close", body.model_dump(), principal)
+
+    @app.get("/v1/conversations/{business_id}/{phone_number}/commands/{command_id}")
+    def bot_command_status(
+        business_id: str, phone_number: str, command_id: str, principal: Auth
+    ) -> JSONResponse:
+        gateway = bot_gateway(principal, business_id)
+        try:
+            if not command_id or len(command_id) > 100 or any(c in "/\\" for c in command_id):
+                raise HTTPException(422, "Invalid command identity")
+            result, status = CommandCoordinator(sessions, gateway).status(principal, phone_number, command_id)
+            return JSONResponse(content=result, status_code=status)
+        except BotGatewayError as error:
+            raise HTTPException(error.status_code, error.code) from None
+        finally:
+            gateway.close()
 
     @app.get("/v1/agents")
     def agents(principal: Auth, session: DB) -> list[dict[str, Any]]:
@@ -635,6 +722,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "last_success": row.last_success if row else None,
                     "last_error": row.last_error if row else None,
                     "data_quality_warnings": row.warnings if row else [],
+                    "run_state": row.run_state if row else "pending",
+                    "next_retry_at": row.next_retry_at if row else None,
+                    "metrics": row.metrics if row else {},
                     "stale": not row
                     or not row.last_success
                     or row.last_success < now() - timedelta(minutes=5),
@@ -642,12 +732,41 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         return {"items": items}
 
-    @app.post("/internal/sync")
-    def run_sync(request: Request) -> dict[str, str]:
-        if request.headers.get("origin") or not hmac.compare_digest(
-            request.headers.get("x-crm-sync-secret", ""), settings.sync_secret
+    def internal_auth(request: Request) -> None:
+        if (
+            request.headers.get("origin")
+            or request.headers.get("sec-fetch-site")
+            or not hmac.compare_digest(request.headers.get("x-crm-sync-secret", ""), settings.sync_secret)
         ):
             raise HTTPException(401, "Internal authentication required")
-        return Synchronizer(settings, sessions).run()
+
+    @app.post("/internal/sync", status_code=202, dependencies=[Depends(internal_auth)])
+    def run_sync(request: Request, body: SyncInput, session: DB) -> dict[str, Any]:
+        internal_auth(request)
+        if body.business_id not in settings.businesses:
+            raise HTTPException(422, "Unknown business")
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": lock_id("job:" + body.business_id + ":" + body.idempotency_key)},
+        )
+        row = session.scalar(
+            select(SyncRequest).where(
+                SyncRequest.business_id == body.business_id,
+                SyncRequest.idempotency_key == body.idempotency_key,
+            )
+        )
+        if row is None:
+            row = SyncRequest(business_id=body.business_id, idempotency_key=body.idempotency_key)
+            session.add(row)
+            session.flush()
+        return job_response(row)
+
+    @app.get("/internal/sync/{request_id}", dependencies=[Depends(internal_auth)])
+    def get_sync(request_id: str, request: Request, session: DB) -> dict[str, Any]:
+        internal_auth(request)
+        row = session.get(SyncRequest, request_id)
+        if row is None:
+            raise HTTPException(404, "Sync request not found")
+        return job_response(row)
 
     return app

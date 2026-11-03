@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import hmac
 import json
 import os
 import tempfile
@@ -18,6 +19,11 @@ from fastapi.staticfiles import StaticFiles
 
 import chatwoot_api
 import handoff_delivery
+from human_support import human_handoffs_enabled, uses_chatwoot, uses_crm, human_support_provider as human_provider
+from human_control_store import build_runtime_store, ControlError
+from human_send_gate import automatic_send_gate
+from human_control_api import create_router as create_control_router
+from crm_source_api import SupabaseSourceReader, create_source_router
 from bot import FILE_CATALOG, process_message_logic, transcribe_audio_message
 from conversation_summary import build_handoff_summary, format_handoff_history
 from config import config
@@ -78,6 +84,15 @@ from chatwoot_media import MediaValidationError, _safe_asset_url, get_media_asse
 from provider_errors import ProviderError, provider_error, provider_transport_error, sanitize_text
 from outage_recovery import find_recoveries
 from catalog_delivery_recovery import find_catalog_recoveries
+
+
+def get_control_store():
+    return build_runtime_store(supabase, config.BUSINESS_ID)
+
+
+def get_source_reader():
+    import database
+    return SupabaseSourceReader(database.supabase, config.BUSINESS_ID, human_provider(config))
 from file_catalog import advisor_file_command, advisor_file_notes
 from dashboard_api import admin_auth, router as dashboard_router, validate_deployment_client
 
@@ -138,7 +153,7 @@ async def health_check():
     return {
         "status": "ok",
         "business_id": config.BUSINESS_ID,
-        "chatwoot_enabled": getattr(config, "CHATWOOT_ENABLED", True),
+        "chatwoot_enabled": uses_chatwoot(config),
         "commit": DEPLOYMENT_COMMIT_SHA,
         "queue_enabled": queue_enabled(),
         "queue": get_queue_stats(),
@@ -157,11 +172,11 @@ async def health_alias():
 async def log_deployment_version():
     """Log the Railway commit so deployments can be verified."""
     print(f"[STARTUP] WhatsApp bot running commit: {DEPLOYMENT_COMMIT_SHA}. Queue enabled: {queue_enabled()}")
-    if getattr(config, "CHATWOOT_ENABLED", True):
+    if uses_chatwoot(config):
         task = asyncio.create_task(_recover_pending_handoffs_loop())
         _BACKGROUND_TASKS.add(task)
         task.add_done_callback(_BACKGROUND_TASKS.discard)
-    if config.GEMINI_OUTAGE_RECOVERY_SINCE and getattr(config, "CHATWOOT_ENABLED", True):
+    if config.GEMINI_OUTAGE_RECOVERY_SINCE and uses_chatwoot(config):
         OUTAGE_RECOVERY_STATUS.clear()
         OUTAGE_RECOVERY_STATUS.update({"status": "scheduled", "since": config.GEMINI_OUTAGE_RECOVERY_SINCE})
         task = asyncio.create_task(_run_outage_recovery(config.GEMINI_OUTAGE_RECOVERY_SINCE))
@@ -172,7 +187,7 @@ async def log_deployment_version():
 
 async def _run_outage_recovery(since: str):
     """Run locally so the repair cannot remain stuck behind a stale RQ job id."""
-    if not getattr(config, "CHATWOOT_ENABLED", True):
+    if not uses_chatwoot(config):
         return
     OUTAGE_RECOVERY_STATUS.update({"status": "running", "since": since})
     try:
@@ -236,10 +251,13 @@ def send_whatsapp_message(to_number: str, text: str):
         "text": {"preview_url": False, "body": text},
     }
     try:
-        response = post(url, headers=headers, json=payload)
-        if not 200 <= response.status_code < 300:
-            raise provider_error("meta", "send_text", response, (config.WA_TOKEN,))
-        record_provider_message_id(response)
+        with automatic_send_gate(config, get_control_store, to_number, payload):
+            if uses_crm(config):
+                payload["biz_opaque_callback_data"] = current_trace()["crm_reserved_attempt"]
+            response = post(url, headers=headers, json=payload)
+            if not 200 <= response.status_code < 300:
+                raise provider_error("meta", "send_text", response, (config.WA_TOKEN,))
+            record_provider_message_id(response)
         return True
     except requests.exceptions.RequestException as e:
         raise provider_transport_error("meta", "send_text", e) from e
@@ -260,7 +278,8 @@ def _check_customer_window():
 def send_scheduled_follow_up(phone_number: str, token: str, message: str,
                              stage: str = "LEGACY", attempt: int = 1,
                              scheduled_at: str = "", meta_window_expires_at: str = "", *,
-                             business_id=None, phone_number_id=None, reference_at=None, source_event_id="", preflight_retry=0):
+                             business_id=None, phone_number_id=None, reference_at=None, source_event_id="", preflight_retry=0,
+                             crm_control_version=None):
     """Legacy positional jobs remain loadable; every send uses the current guard."""
     if (business_id is not None and business_id != config.BUSINESS_ID) or (phone_number_id is not None and str(phone_number_id) != str(config.WA_PHONE_NUMBER_ID)):
         return {"status": "wrong_deployment"}
@@ -268,7 +287,7 @@ def send_scheduled_follow_up(phone_number: str, token: str, message: str,
         operational_event("FOLLOW_UP_SKIPPED", phone=phone_number, stage=stage,
                           reason="disabled_by_configuration", attempt=attempt, result="not_sent")
         return {"status": "disabled_by_configuration"}
-    if not getattr(config, "CHATWOOT_ENABLED", True) and message and message.strip():
+    if not human_handoffs_enabled(config) and message and message.strip():
         # Jobs created before a mode change still carry their original text.
         # Apply the current customer-text policy before reserving or sending;
         # never replace an unsolicited reminder with a newly invented message.
@@ -287,6 +306,14 @@ def send_scheduled_follow_up(phone_number: str, token: str, message: str,
             operational_event(name, phone=phone_number, stage=stage, reason=reason, attempt=attempt,
                               scheduled_at=scheduled_at, result=result)
             return {"status": reason}
+
+        if uses_crm(config):
+            if crm_control_version is None:
+                return event("legacy_missing_control_epoch")
+            control = get_control_store().get_control(phone_number)
+            if control["phase"] != "ai" or control["version"] != crm_control_version:
+                return event("human_control_epoch_changed")
+            update_trace(crm_control_version=crm_control_version)
 
         now = datetime.now(timezone.utc)
         expiry = parse_timestamp(meta_window_expires_at)
@@ -311,6 +338,7 @@ def send_scheduled_follow_up(phone_number: str, token: str, message: str,
                        target.isoformat(), meta_window_expires_at, business_id=config.BUSINESS_ID,
                        phone_number_id=config.WA_PHONE_NUMBER_ID, reference_at=reference.isoformat() if reference_verified else None,
                        source_event_id=source_event_id, preflight_retry=preflight_retry + int(preflight_failure),
+                       **({"crm_control_version": crm_control_version} if uses_crm(config) else {}),
                        job_id=f"follow-up-resume-{config.BUSINESS_ID}-{token}-{attempt}-{int(target.timestamp())}")
             return event(reason, "queued", "FOLLOW_UP_REPROGRAMMED")
 
@@ -437,6 +465,13 @@ def schedule_follow_up_sequence(phone_number: str, plan, *, customer_message_rec
         operational_event("FOLLOW_UP_SKIPPED", phone=phone_number, stage=plan.stage,
                           reason="redis_unavailable", result="not_scheduled")
         return
+    control_kwargs = {}
+    if uses_crm(config):
+        control = get_control_store().get_control(phone_number)
+        epoch = current_trace().get("crm_control_version")
+        if epoch is None or control["phase"] != "ai" or control["version"] != epoch:
+            return
+        control_kwargs["crm_control_version"] = epoch
     try:
         now = datetime.now(timezone.utc)
         window_start = parse_timestamp(customer_message_received_at)
@@ -461,6 +496,7 @@ def schedule_follow_up_sequence(phone_number: str, plan, *, customer_message_rec
                 plan.messages[attempt - 1], plan.stage, attempt, scheduled.isoformat(),
                 expiry.isoformat(), business_id=config.BUSINESS_ID, phone_number_id=config.WA_PHONE_NUMBER_ID,
                 reference_at=window_start.isoformat(), source_event_id=current_trace().get("source_event_id", ""),
+                **control_kwargs,
                 job_id=f"follow-up-{config.BUSINESS_ID}-{phone_number}-{plan.stage}-{attempt}-{token}",
             )
             operational_event("FOLLOW_UP_SCHEDULED", phone=phone_number, stage=plan.stage,
@@ -494,10 +530,13 @@ def send_whatsapp_media(to_number: str, media_id: str, media_type: str, caption:
         media_type: media_payload,
     }
     try:
-        response = post(url, headers=headers, json=payload)
-        if not 200 <= response.status_code < 300:
-            raise provider_error("meta", f"send_{media_type}", response, (config.WA_TOKEN,))
-        record_provider_message_id(response)
+        with automatic_send_gate(config, get_control_store, to_number, payload):
+            if uses_crm(config):
+                payload["biz_opaque_callback_data"] = current_trace()["crm_reserved_attempt"]
+            response = post(url, headers=headers, json=payload)
+            if not 200 <= response.status_code < 300:
+                raise provider_error("meta", f"send_{media_type}", response, (config.WA_TOKEN,))
+            record_provider_message_id(response)
         return True
     except requests.exceptions.RequestException as e:
         raise ProviderError("meta", f"send_{media_type}", getattr(getattr(e, "response", None), "status_code", None), message="transport error") from e
@@ -634,10 +673,13 @@ def send_presaved_file(to_number: str, file_id: str, *, raise_on_failure: bool =
     headers = {"Authorization": f"Bearer {config.WA_TOKEN}", "Content-Type": "application/json"}
     try:
         _check_customer_window()
-        response = post(url, headers=headers, json=payload)
-        if not 200 <= response.status_code < 300:
-            raise provider_error("meta", "send_catalog", response, (config.WA_TOKEN,))
-        record_provider_message_id(response)
+        with automatic_send_gate(config, get_control_store, to_number, payload):
+            if uses_crm(config):
+                payload["biz_opaque_callback_data"] = current_trace()["crm_reserved_attempt"]
+            response = post(url, headers=headers, json=payload)
+            if not 200 <= response.status_code < 300:
+                raise provider_error("meta", "send_catalog", response, (config.WA_TOKEN,))
+            record_provider_message_id(response)
         print(f"[FILE CATALOG] Sent file id={file_id} to={to_number}")
         return True
     except requests.exceptions.RequestException as exc:
@@ -886,7 +928,7 @@ def _audio_transcript_note(transcript):
 
 
 def _create_handoff_ticket_if_needed(sender_phone: str, sender_name: str, new_state: dict, effective_media_id: str, message_body: str, mime_type: str, filename: str, effective_media_type: str = None, media_bytes: bytes = None, downloaded_mime_type: str = None, *, audio_transcript: str = None):
-    if not getattr(config, "CHATWOOT_ENABLED", True):
+    if not uses_chatwoot(config):
         return {"status": "disabled"}
     if not new_state or not new_state.get("is_paused"):
         return {"status": "not_requested"}
@@ -1005,7 +1047,7 @@ def _schedule_handoff_retry(phone, request):
 
 
 def retry_pending_handoff(phone, request_id, business_id):
-    if not getattr(config, "CHATWOOT_ENABLED", True):
+    if not uses_chatwoot(config):
         return
     if business_id != config.BUSINESS_ID:
         return
@@ -1023,7 +1065,7 @@ def retry_pending_handoff(phone, request_id, business_id):
 
 
 async def _recover_pending_handoffs_loop():
-    if not getattr(config, "CHATWOOT_ENABLED", True):
+    if not uses_chatwoot(config):
         return
     while True:
         try:
@@ -1034,7 +1076,7 @@ async def _recover_pending_handoffs_loop():
 
 
 def recover_pending_handoffs():
-    if not getattr(config, "CHATWOOT_ENABLED", True):
+    if not uses_chatwoot(config):
         return
     for row in handoff_delivery.pending_requests(actionable_only=True):
         if row["status"] in {"pending", "reserved", "sending"}:
@@ -1048,13 +1090,13 @@ def pending_handoffs(client_name: str = Query(min_length=1)):
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     return {"client_name": config.BUSINESS_ID, "requests": (
-        handoff_delivery.pending_requests() if getattr(config, "CHATWOOT_ENABLED", True) else []
+        handoff_delivery.pending_requests() if uses_chatwoot(config) else []
     )}
 
 
 def escalate_unattended_b2b_handoff(phone_number: str, conversation_id: int, reason: str):
     """Raise one priority reminder when no advisor has logged a public response."""
-    if not getattr(config, "CHATWOOT_ENABLED", True):
+    if not uses_chatwoot(config):
         return
     logs = get_message_logs(phone_number, limit=50)
     handoff_index = max((i for i, row in enumerate(logs) if row.get("role") == "system" and str(row.get("content", "")).startswith("HANDOFF:")), default=-1)
@@ -1086,7 +1128,7 @@ def manual_handoff(body: ManualHandoffRequest, client_name: str = Query(min_leng
         validate_deployment_client(client_name)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
-    if not getattr(config, "CHATWOOT_ENABLED", True):
+    if not uses_chatwoot(config):
         raise HTTPException(409, "La derivación humana está deshabilitada para este negocio")
     state = get_or_create_customer_state(body.phone_number, body.customer_name)
     if not state:
@@ -1147,7 +1189,7 @@ def recover_catalog_delivery(phone_number: str, catalog_id: str):
         if not candidate:
             return {"status": "already_resolved"}
         if not candidate.within_service_window:
-            if not getattr(config, "CHATWOOT_ENABLED", True):
+            if not uses_chatwoot(config):
                 return {"status": "window_closed", "catalog_id": catalog_id}
             reason = f"Recuperar manualmente catálogo no entregado: {catalog_id}. Fuera de ventana automática."
             pause_bot_for_handoff(phone_number, reason)
@@ -1171,14 +1213,14 @@ def recover_catalog_delivery(phone_number: str, catalog_id: str):
             send_whatsapp_message(
                 phone_number,
                 ("El adjunto volvió a fallar. Se necesita revisión del equipo para ayudarte personalmente."
-                 if getattr(config, "CHATWOOT_ENABLED", True) else
+                 if human_handoffs_enabled(config) else
                  "No pude adjuntar el archivo en este momento. Puedes pedírmelo de nuevo más adelante."),
             )
         except Exception:
             print("[CATALOG RECOVERY] No fue posible enviar el aviso final al cliente")
         state = get_or_create_customer_state(phone_number, "Cliente")
         _create_handoff_ticket_if_needed(phone_number, "Cliente", state, None, reason, None, None)
-        return {"status": "manual_handoff" if getattr(config, "CHATWOOT_ENABLED", True) else "delivery_failed",
+        return {"status": "manual_handoff" if uses_chatwoot(config) else "delivery_failed",
                 "catalog_id": catalog_id}
 
 
@@ -1208,7 +1250,7 @@ def enqueue_catalog_delivery_recoveries(body: BulkCatalogRecoveryRequest, client
 
 def recover_gemini_outage_handoffs(since: str):
     """Create missing Chatwoot tickets for unanswered turns from an old outage."""
-    if not getattr(config, "CHATWOOT_ENABLED", True):
+    if not uses_chatwoot(config):
         return {"candidates": 0, "tickets_created": 0, "skipped": 0, "failed": 0, "status": "disabled"}
     rows = (
         supabase.table("message_logs")
@@ -1279,7 +1321,7 @@ def _recover_whatsapp_processing_error(sender_phone, sender_name, message_body, 
             print(f"[PROCESSING ERROR] {technical}")
             save_message_log(sender_phone, "system", f"ERROR NO MANEJADO: {technical}")
             reason = "El bot encontró un error técnico y no pudo completar la solicitud. Requiere revisión humana."
-        if not getattr(config, "CHATWOOT_ENABLED", True):
+        if not human_handoffs_enabled(config):
             operational_event("BOT_PROCESSING_FAILED", phone=sender_phone, stage="DIRECT_RESPONSE",
                               reason="delivery_failed" if text_delivery_failed else "processing_failed",
                               result="bot_kept_active")
@@ -1304,7 +1346,7 @@ def _recover_whatsapp_processing_error(sender_phone, sender_name, message_body, 
     return technical
 
 
-def process_whatsapp_message(sender_phone: str, sender_name: str, message_body: str, is_image: bool = False, media_id: str = None, is_audio: bool = False, audio_media_id: str = None, media_type: str = None, mime_type: str = None, filename: str = None, event_id: str = None, customer_message_received_at=None):
+def process_whatsapp_message(sender_phone: str, sender_name: str, message_body: str, is_image: bool = False, media_id: str = None, is_audio: bool = False, audio_media_id: str = None, media_type: str = None, mime_type: str = None, filename: str = None, event_id: str = None, customer_message_received_at=None, crm_control_version=None):
     """Procesador que enruta entre el Bot y Chatwoot basado en el estado."""
     started_at = time.perf_counter()
     received = parse_timestamp(customer_message_received_at)
@@ -1315,11 +1357,21 @@ def process_whatsapp_message(sender_phone: str, sender_name: str, message_body: 
         try:
             with phone_lock(sender_phone):
                 try:
+                    if uses_crm(config):
+                        if not get_or_create_customer_state(sender_phone, sender_name or "Cliente"):
+                            raise RuntimeError("customer_state_unavailable")
+                        control = get_control_store().get_control(sender_phone)
+                        update_trace(crm_control_version=control["version"] if crm_control_version is None else crm_control_version)
                     result = _process_whatsapp_message_unlocked(sender_phone, sender_name, message_body, is_image, media_id, is_audio, audio_media_id, media_type, mime_type, filename, customer_message_received_at=received)
                     if isinstance(result, dict) and result.get("status") == "delivery_failed":
                         mark_webhook_event_processed("whatsapp", event_id, status="failed", error=result["reason"])
                         return
                 except Exception as error:
+                    if uses_crm(config) and ((isinstance(error, ControlError) and error.code in {
+                            "control_version_conflict", "automatic_send_fenced"}) or
+                            (isinstance(error, ProviderError) and error.operation == "control_validation")):
+                        mark_webhook_event_processed("whatsapp", event_id)
+                        return
                     technical = _recover_whatsapp_processing_error(sender_phone, sender_name, message_body, error, expiry,
                         mime_type, filename, has_media=bool(media_id or audio_media_id or is_image or is_audio))
                     mark_webhook_event_processed("whatsapp", event_id, status="failed", error=technical)
@@ -1351,14 +1403,15 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
                       reason="customer_replied" if not terminal_customer_signal else "terminal_customer_signal",
                       result="invalidated")
 
-    if is_restart_command(message_body):
-        invalidate_follow_up(sender_phone)
-        reset_client_history(sender_phone)
-        send_whatsapp_message(sender_phone, "🔄 Conversación reiniciada. El bot está activo y empezamos de cero.")
+    if is_restart_command(message_body) and not uses_crm(config):
+        # The repository refuses a reset if a provider rollback left a CRM case open.
+        if reset_client_history(sender_phone) is not False:
+            invalidate_follow_up(sender_phone)
+            send_whatsapp_message(sender_phone, "🔄 Conversación reiniciada. El bot está activo y empezamos de cero.")
         return
 
     state_record = get_or_create_customer_state(sender_phone, sender_name or "Cliente")
-    if state_record and not getattr(config, "CHATWOOT_ENABLED", True):
+    if state_record and not human_handoffs_enabled(config):
         state_record = ensure_bot_only_state(sender_phone, state_record)
     if not state_record:
         print("[DEBUG] 3. ERROR: No se pudo obtener ni crear el state_record")
@@ -1387,8 +1440,12 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
             _create_handoff_ticket_if_needed(sender_phone, sender_name, state_record, effective_media_id, message_body, mime_type, filename, effective_media_type)
         return
 
+    if uses_crm(config):
+        control = get_control_store().get_control(sender_phone)
+        if control["version"] != current_trace().get("crm_control_version"):
+            return {"status": "control_epoch_changed"}
     if human_control_active(state_record):
-        if not getattr(config, "CHATWOOT_ENABLED", True):
+        if not uses_chatwoot(config):
             # A remaining bare pause is an explicit operator/safety pause,
             # rather than a disabled Chatwoot handoff. Do not override it.
             return
@@ -1456,7 +1513,7 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
             send_whatsapp_message(
                 sender_phone,
                 ("Perdón, no pude procesar bien tu nota de voz. Tu solicitud necesita revisión del equipo."
-                 if getattr(config, "CHATWOOT_ENABLED", True) else
+                 if human_handoffs_enabled(config) else
                  "No pude entender la nota de voz. ¿Puedes escribirme tu mensaje o enviar otro audio?"),
             )
             state = get_or_create_customer_state(sender_phone, sender_name or "Cliente")
@@ -1482,10 +1539,15 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
     print("[DEBUG] 6. Respuesta IA generada")
 
     if ai_turn:
+        if uses_crm(config):
+            # Handoff or a takeover during inference fences stale answers/files.
+            control = get_control_store().get_control(sender_phone)
+            if control["phase"] != "ai" or control["version"] != current_trace().get("crm_control_version"):
+                return {"status": "human_control", "phase": control["phase"]}
         # Creating the case precedes any assertion to the customer that an
         # advisor was notified. A catalog never overrides this paused state.
         initial_state = get_or_create_customer_state(sender_phone)
-        if getattr(config, "CHATWOOT_ENABLED", True) and initial_state and initial_state.get("is_paused"):
+        if uses_chatwoot(config) and initial_state and initial_state.get("is_paused"):
             handoff = _create_handoff_ticket_if_needed(sender_phone, sender_name, initial_state,
                 effective_media_id, message_body, mime_type, filename, effective_media_type, audio_bytes, downloaded_mime_type,
                 **({"audio_transcript": transcript} if is_audio else {}))
@@ -1533,14 +1595,14 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
                 send_whatsapp_message(
                     sender_phone,
                     ("Perdón, no pude adjuntar el catálogo. Se necesita revisión del equipo para enviártelo manualmente."
-                     if getattr(config, "CHATWOOT_ENABLED", True) else
+                     if human_handoffs_enabled(config) else
                      "No pude adjuntar el archivo en este momento. Puedes pedírmelo de nuevo más adelante."),
                 )
                 save_message_log(
                     sender_phone,
                     "model",
                     ("Perdón, no pude adjuntar el catálogo. Se necesita revisión del equipo para enviártelo manualmente."
-                     if getattr(config, "CHATWOOT_ENABLED", True) else
+                     if human_handoffs_enabled(config) else
                      "No pude adjuntar el archivo en este momento. Puedes pedírmelo de nuevo más adelante."),
                 )
             except Exception as exc:
@@ -1732,7 +1794,7 @@ def process_chatwoot_event(data: dict, event_id: str = None):
 
 def _process_chatwoot_event_untraced(data: dict, event_id: str = None):
     """Process a Chatwoot webhook event from the queue/worker."""
-    if not getattr(config, "CHATWOOT_ENABLED", True):
+    if not uses_chatwoot(config):
         mark_webhook_event_processed("chatwoot", event_id)
         return {"status": "disabled"}
     started_at = time.perf_counter()
@@ -1901,6 +1963,7 @@ def process_claimed_whatsapp_event(
     business_id: str = None,
     phone_number_id: str = None,
     customer_message_received_at=None,
+    crm_control_version=None,
 ):
     """Claim a Meta event off the request path, then perform the expensive work."""
     sender_phone = args[0] if args else None
@@ -1918,12 +1981,14 @@ def process_claimed_whatsapp_event(
         print(f"[WEBHOOK DEBUG] WhatsApp duplicado ignorado: {event_id}")
         return
     received_kwargs = {"customer_message_received_at": customer_message_received_at} if customer_message_received_at is not None else {}
+    if uses_crm(config):
+        received_kwargs["crm_control_version"] = crm_control_version if crm_control_version is not None else -1
     process_whatsapp_message(*args, event_id=event_id, **received_kwargs)
 
 
 def process_claimed_chatwoot_event(data: dict, event_id: str = None):
     """Claim a Chatwoot event off the request path before processing it."""
-    if not getattr(config, "CHATWOOT_ENABLED", True):
+    if not uses_chatwoot(config):
         return {"status": "disabled"}
     conv_id = data.get("conversation", {}).get("id") or data.get("id")
     if not claim_webhook_event("chatwoot", event_id, str(conv_id) if conv_id else None):
@@ -1945,6 +2010,12 @@ async def verify_webhook(
 
 @app.post("/webhook")
 async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
+    if uses_crm(config):
+        raw = await request.body()
+        secret = getattr(config, "WA_APP_SECRET", "") or ""
+        expected = "sha256=" + hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
+        if not secret or not hmac.compare_digest(request.headers.get("x-hub-signature-256", ""), expected):
+            raise HTTPException(401, "Invalid Meta webhook signature")
     data = await request.json()
     accepted = 0
     rejected = 0
@@ -1953,6 +2024,21 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
             for entry in data.get("entry", []):
                 for change in entry.get("changes", []):
                     value = change.get("value", {})
+                    if uses_crm(config) and value.get("statuses"):
+                        if not whatsapp_destination_matches(value, config.WA_PHONE_NUMBER_ID):
+                            rejected += len(value["statuses"])
+                            continue
+                        for receipt in value["statuses"]:
+                            if receipt.get("status") not in {"sent", "delivered", "read", "failed"}:
+                                continue
+                            status = "accepted" if receipt["status"] == "sent" else receipt["status"]
+                            try:
+                                get_control_store().ack_provider_receipt(
+                                    str(receipt.get("id") or ""), status,
+                                    attempt_id=str(receipt.get("biz_opaque_callback_data") or ""))
+                            except ControlError as error:
+                                if error.status_code != 404:
+                                    raise
                     if "messages" not in value:
                         continue
                     if not whatsapp_destination_matches(value, config.WA_PHONE_NUMBER_ID):
@@ -1980,6 +2066,10 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                         received_at = parse_timestamp(message.get("timestamp"))
                         if received_at:
                             record_customer_activity(sender_phone, received_at, event_id or "")
+                        control_kwargs = {}
+                        if uses_crm(config):
+                            get_or_create_customer_state(sender_phone, sender_name or "Cliente")
+                            control_kwargs["crm_control_version"] = get_control_store().get_control(sender_phone)["version"]
                         if message_type == "text":
                             body = message.get("text", {}).get("body")
                             _dispatch_before_ack(
@@ -1996,6 +2086,7 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                                 business_id=config.BUSINESS_ID,
                                 phone_number_id=config.WA_PHONE_NUMBER_ID,
                                 **({"customer_message_received_at": received_at.isoformat()} if received_at else {}),
+                                **control_kwargs,
                             )
                             accepted += 1
                         elif message_type in WHATSAPP_MEDIA_TYPES:
@@ -2020,6 +2111,7 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                                 business_id=config.BUSINESS_ID,
                                 phone_number_id=config.WA_PHONE_NUMBER_ID,
                                 **({"customer_message_received_at": received_at.isoformat()} if received_at else {}),
+                                **control_kwargs,
                             )
                             accepted += 1
         return {
@@ -2030,13 +2122,16 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
         }
     except Exception as e:
         print(f"Error Webhook Meta: {e}")
+        if uses_crm(config):
+            # Meta must retry a signed receipt that the durable authority could not store.
+            raise HTTPException(503, "Webhook processing temporarily unavailable") from None
         return {"status": "error"}
 
 
 @app.post("/chatwoot-webhook")
 @app.post("/chatwoo-webhook", include_in_schema=False)
 async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
-    if not getattr(config, "CHATWOOT_ENABLED", True):
+    if not uses_chatwoot(config):
         raise HTTPException(404, "Chatwoot está deshabilitado para este negocio")
     raw_body = await request.body()
     timestamp = request.headers.get("X-Chatwoot-Timestamp", "")
@@ -2089,3 +2184,9 @@ async def root_webhook_dispatcher(request: Request, background_tasks: Background
         raise HTTPException(status_code=404, detail="Use /chatwoot-webhook")
     print(f"[WEBHOOK DEBUG] POST / payload no reconocido: keys={list(data.keys())}")
     return {"status": "ignored", "reason": "unrecognized_root_webhook_payload"}
+
+# Explicitly disabled by default; callbacks resolve the same authoritative runtime.
+app.include_router(create_control_router(config, lambda: get_control_store(),
+    lambda phone, text: send_whatsapp_message(phone, text), get_message_logs,
+    invalidate_follow_up, phone_lock))
+app.include_router(create_source_router(config, lambda: get_source_reader()))

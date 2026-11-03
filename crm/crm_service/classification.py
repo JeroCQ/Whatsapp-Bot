@@ -6,6 +6,7 @@ from typing import Any
 BUCKETS = {"awaiting_human", "human_active", "ai_active", "closed"}
 PENDING = {"pending", "reserved", "sending", "unknown", "exhausted"}
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+DELIVERY_RANK = {"accepted": 0, "failed": 1, "delivered": 2, "read": 3}
 
 
 def timestamp(value: Any) -> datetime:
@@ -31,7 +32,20 @@ def classify(
     warnings: list[str] | None = None,
 ) -> dict[str, Any]:
     quality = set(warnings or [])
-    ordered = sorted(messages, key=order)
+    # Delivery facts advance the source watermark, but are not conversational
+    # activity: a receipt cannot reopen a case or change an actor's read state.
+    receipts: dict[str, str] = {}
+    activity = []
+    for message in messages:
+        metadata = message.get("metadata") or {}
+        if message.get("role") == "system" and metadata.get("source") == "crm_delivery":
+            command, status = metadata.get("command_id"), metadata.get("delivery_status")
+            if isinstance(command, str) and isinstance(status, str) and status in DELIVERY_RANK:
+                if DELIVERY_RANK[status] > DELIVERY_RANK.get(receipts.get(command, ""), -1):
+                    receipts[command] = status
+        else:
+            activity.append(message)
+    ordered = sorted(activity, key=order)
     closed_at = max(
         (
             order(m)
@@ -55,20 +69,41 @@ def classify(
     if boundary is None and delivery:
         started = timestamp(delivery.get("created_at"))
         boundary = (delivery_time if closed_at and started <= closed_at[0] else started, -1)
-    humans = [m for m in cycle if m.get("role") == "asesor" and (boundary is None or order(m) > boundary)]
+    humans = []
+    for message in cycle:
+        if message.get("role") != "asesor" or (boundary is not None and order(message) <= boundary):
+            continue
+        metadata = message.get("metadata") or {}
+        status = metadata.get("delivery_status")
+        status = status if isinstance(status, str) else None
+        command = metadata.get("source_event_id")
+        receipt = receipts.get(command) if isinstance(command, str) else None
+        # Reconciliation can observe a newer metadata edit before its append-only
+        # fact, so do not let an older accepted event erase a known failure/read.
+        if receipt and DELIVERY_RANK[receipt] > DELIVERY_RANK.get(status or "", -1):
+            status = receipt
+        if status not in {"failed", "unknown", "pending", "reserved", "sending"}:
+            humans.append(message)
+    # Index responses once instead of comparing every inbound with every human message.
+    covered: set[str] = set()
+    legacy_latest = None
+    all_latest = max((order(m) for m in humans), default=None)
+    for human in humans:
+        refs = (human.get("metadata") or {}).get("inbound_message_ids")
+        if isinstance(refs, list) and refs:
+            covered.update(ref for ref in refs if isinstance(ref, str))
+        else:
+            current = order(human)
+            legacy_latest = max(legacy_latest, current) if legacy_latest else current
     unanswered = []
     for customer in incoming:
         event = (customer.get("metadata") or {}).get("source_event_id")
-        answered = False
-        for human in humans:
-            refs = (human.get("metadata") or {}).get("inbound_message_ids")
-            if event and isinstance(refs, list) and refs:
-                answered = event in refs
-            else:
-                quality.add("legacy_response_order_fallback")
-                answered = order(human) > order(customer)
-            if answered:
-                break
+        response_latest = legacy_latest if event else all_latest
+        if response_latest:
+            quality.add("legacy_response_order_fallback")
+        answered = (isinstance(event, str) and event in covered) or bool(
+            response_latest and response_latest > order(customer)
+        )
         if not answered:
             unanswered.append(customer)
     paused = state.get("is_paused")
@@ -76,11 +111,14 @@ def classify(
         quality.add("missing_is_paused_conservative_attention")
         paused = True
     chatwoot = state.get("chatwoot_conversation_id")
-    status = delivery.get("status")
+    crm = state.get("human_support_provider") == "crm"
+    phase = state.get("crm_control_phase")
+    case_exists = bool(phase == "human" and state.get("crm_control_owner")) if crm else bool(chatwoot)
+    status = None if crm else delivery.get("status")
     if paused:
         bucket = (
             "awaiting_human"
-            if (unanswered or not humans or status in PENDING or not chatwoot)
+            if (unanswered or not humans or status in PENDING or not case_exists)
             else "human_active"
         )
     else:
@@ -90,7 +128,11 @@ def classify(
     if bucket == "awaiting_human":
         if status in {"unknown", "exhausted"}:
             priority, reason = 1, "handoff_delivery_uncertain"
-        elif not chatwoot:
+        elif crm and phase == "pausing":
+            priority, reason = 1, "crm_pause_pending_inflight_send"
+        elif crm and not case_exists:
+            priority, reason = 3, "crm_handoff_unassigned"
+        elif not case_exists:
             priority, reason = 2, "paused_without_chatwoot"
         elif status in {"pending", "reserved", "sending"}:
             priority, reason = 3, "handoff_creation_pending"

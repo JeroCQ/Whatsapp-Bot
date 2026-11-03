@@ -181,11 +181,11 @@ def test_browser_rejected(client):
 
 
 def test_internal_endpoint_requires_separate_secret(client, settings, monkeypatch):
-    monkeypatch.setattr(Synchronizer, "run", lambda _: {"tanaka": "ok"})
-    assert client.post("/internal/sync").status_code == 401
-    assert client.post("/internal/sync", headers={"x-crm-sync-secret": settings.sync_secret}).json() == {
-        "tanaka": "ok"
-    }
+    monkeypatch.setattr(Synchronizer, "run", lambda *_: pytest.fail("API must not read sources"))
+    body = {"business_id": "tanaka", "idempotency_key": "backfill-1"}
+    assert client.post("/internal/sync", json=body).status_code == 401
+    response = client.post("/internal/sync", json=body, headers={"x-crm-sync-secret": settings.sync_secret})
+    assert response.status_code == 202 and response.json()["status"] == "pending"
 
 
 def test_notification_preferences_scoped(client):

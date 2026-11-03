@@ -50,6 +50,8 @@ class ReadOnlyClient(httpx.Client):
     def __init__(self, business: Business, transport: httpx.BaseTransport | None = None):
         self.origin = business.source_url.rstrip("/")
         self.allowed_paths = {f"/rest/v1/{table}" for table in FIELDS}
+        if transport is None:
+            raise SourceFailure("privileged_postgrest_credentials_disabled")
         super().__init__(
             base_url=self.origin,
             timeout=httpx.Timeout(20, connect=5),

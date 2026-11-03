@@ -13,11 +13,11 @@ def test_future_business_requires_no_code_branch(monkeypatch):
     basic_env(monkeypatch)
     monkeypatch.setenv("CRM_BUSINESSES", "future_shop")
     monkeypatch.setenv("FUTURE_SHOP_SOURCE_SUPABASE_URL", "https://future.supabase.co")
-    monkeypatch.setenv("FUTURE_SHOP_SOURCE_SUPABASE_SERVICE_ROLE_KEY", "synthetic")
+    monkeypatch.setenv("FUTURE_SHOP_SOURCE_SUPABASE_SERVICE_ROLE_KEY", "administrative-key-must-never-load")
     settings = Settings.from_env()
     assert set(settings.businesses) == {"future_shop"}
-    assert settings.businesses["future_shop"].source_key == "synthetic"
-    assert "synthetic" not in repr(settings)
+    assert settings.businesses["future_shop"].source_key == ""
+    assert "administrative-key-must-never-load" not in repr(settings)
 
 
 def test_sources_must_be_isolated(monkeypatch):

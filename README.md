@@ -13,6 +13,11 @@ environment variable, database migration, or manual setup.
 
 ## Deployments por negocio
 
+Para activar únicamente el **piloto CRM de Briosos** con el código ya publicado,
+usa el [prompt listo para la IA de Railway](docs/RAILWAY_BRIOSOS_CRM_PROMPT.md).
+La interfaz ya está integrada en GitHub; Lovable solo necesita configuración
+privada y publicación, sin otra tarea de generación de código.
+
 Para cualquier negocio nuevo, comienza por el runbook canónico
 [`docs/NEW_BUSINESS_SETUP.md`](docs/NEW_BUSINESS_SETUP.md). Define el orden completo
 GitHub → Supabase → Meta → Chatwoot opcional → Railway → dashboard, las fuentes de
@@ -40,6 +45,16 @@ en código anterior. La instrucción inicial es genérica y los seguimientos que
 desactivados hasta confirmar sus reglas. El preflight común
 `python scripts/check_business_setup.py` revisa la configuración offline sin
 mostrar secretos; las conexiones y el procesamiento real se verifican aparte.
+
+El piloto de Briosos configura `human_handoff_keywords: ["asesor"]` en su
+`business_policy.json`. La palabra completa, sola o en una frase y sin distinguir
+mayúsculas, solicita la pausa existente antes de llamar a Gemini y suprime el
+seguimiento de ese turno. No activa esa regla en las otras marcas. Si se usa
+`BUSINESS_POLICY_JSON`, incluir también esa lista en la política del despliegue.
+La regla respeta el proveedor humano configurado: en `bot_only` no pausa ni
+habilita atención humana; en el piloto requiere su proveedor `crm` ya configurado.
+No cambia proveedores ni variables de Railway por sí sola. Se aplica tanto a
+instalaciones nuevas como existentes, sin cambios de esquema ni migraciones.
 
 ## Arquitectura repetible para marcas actuales y futuras
 
