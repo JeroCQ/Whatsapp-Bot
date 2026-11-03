@@ -25,6 +25,45 @@ aplicación ni solicites desarrollo adicional a Lovable.
   la integración frontend. Ejecuta el trabajo disponible, sin pedir otra
   confirmación genérica. Pide solo un dato/acceso externo concreto si falta.
 
+## Aclaración sobre los servicios encontrados
+
+Según el inventario de solo lectura, hay dos pares CRM. Para este piloto utiliza
+**crm-staging-api y crm-staging-sync**; conserva crm-api y crm-sync sin cambios.
+Actualiza ambos servicios staging a la misma rama crm-staging-safety y commit
+compatible actual, en vez de dejar el worker en crm-staging-fixtures.
+
+El candidato a bot es bot-briosos-web. Un dominio con etiqueta bot-velvet-web no
+prueba su identidad: puede conservar un nombre anterior, pero tampoco permite
+confirmar Briosos. Antes de modificarlo consulta únicamente GET /health (o GET /)
+en su dominio actual. El código de 43-CRM ya devuelve business_id, commit y cola.
+Si business_id no es briosos, no cambies ese servicio. No renombres recursos ni
+cambies BUSINESS_ID para hacer que la prueba coincida artificialmente.
+
+El health confirma la identidad configurada, no la exclusividad del Supabase.
+Verifica además el hostname del Supabase contra el proyecto Briosos autorizado.
+Si hay ejecución remota permitida, consulta solo BUSINESS_ID y el hostname obtenido
+al analizar SUPABASE_URL; no vuelques el entorno ni imprimas claves. Si la conexión
+solo ofrece nombres y no permite esa comprobación, pide al propietario únicamente
+esos dos datos no secretos, no contraseñas ni claves administrativas.
+
+Entre Postgres y Postgres-iFCO, elige por la referencia real de CRM_DATABASE_URL
+del par staging, no por el nombre. Confirma que ambos staging usan la misma base
+lógica CRM y que esa base no está compartida con crm-api/crm-sync u otros servicios
+que deban permanecer intactos. Un servidor PostgreSQL puede alojar bases lógicas
+distintas: compara host y nombre de base, sin mostrar usuario/contraseña. Si no
+puedes inspeccionar referencias, pide solo servicio PostgreSQL y base lógica
+referenciados por staging, y si el otro par usa esa misma base. No migres una base
+cuya exclusividad no esté verificada: /ready de las versiones antiguas exige su
+revisión anterior y fallaría al migrarla globalmente a 0003.
+
+No hace falta crear un worker bot separado por defecto. `python run_railway.py`
+ya puede ejecutar el worker embebido si Briosos usa Redis; sin Redis usa tareas
+en segundo plano. Verifica su modo/consumidores en health y conserva el esquema
+existente. Esto es independiente del sync-worker del CRM, que sí es otro proceso.
+Si hay Redis, comprueba los consumidores, su commit y el aislamiento de la cola
+en health; no asumas que el nombre de cola se deriva siempre de BUSINESS_ID ni
+cambies la cola a ciegas. No debe quedar un consumidor antiguo en la cola piloto.
+
 ## 1. Verificar y preparar el esquema antes de activar
 
 Inventaría los servicios y registra sus IDs, ramas, commits y configuraciones
