@@ -7,7 +7,7 @@ registro configurado; no se ha activado ni desplegado ningún negocio desde Code
 
 ## Versiones y servicios
 
-Código backend validado: **0864a998a9efe60c0026e101a38bc6b47b87db17**. Código frontend validado:
+Código backend validado: **af357d3479c7a715a3beb1bc6c53b687e09cc263**. Código frontend validado:
 **43a935cd135cc08dfeb053e0a00d8bbcf4790e75**. La rama de trabajo en ambos repositorios es
 `feat/crm-media-delivery`. Los PR apuntan respectivamente a `crm-staging-safety`
 y `main`; no a `43-CRM`. El commit posterior que añade esta guía no cambia código.
@@ -142,10 +142,12 @@ No se usan URLs temporales de Meta como historial permanente.
    ejecutar los dos. Para un proyecto nuevo corresponde
    [`bootstrap.sql`](../supabase/bootstrap.sql). Las secciones de control y
    multimedia son idénticas y fueron probadas con datos previos.
-3. En el PostgreSQL **propio del CRM**, ejecutar desde `/crm`
-   `alembic upgrade head` (también es el preDeploy del API existente). Nueva revisión:
-   `0004_delivery_receipts`, compatible con los datos anteriores. No ejecutar
-   Alembic contra el Supabase del bot. Actualizar API y sync con el mismo código.
+3. Para el PostgreSQL **propio del CRM**, conservar el preDeploy existente del API:
+   desde `/crm`, `alembic upgrade head`. Se ejecuta al actualizar el API al código
+   compatible y lleva a `0004_delivery_receipts`, preservando datos. No adelantar
+   esa revisión mientras se pretenda mantener un API antiguo que exige `0003`;
+   coordinar la ventana de actualización. No ejecutar Alembic contra el Supabase
+   del bot. Actualizar API y sync con el mismo código.
 4. No activar archivos si el bucket está público, falta el esquema, falta espacio
    o la cuenta de servicio no puede acceder. `/media-capabilities` devuelve el
    motivo; la UI no debe aparentar que el almacenamiento existe.
@@ -157,10 +159,13 @@ hasta habilitarlo. No se ha provisionado infraestructura alternativa.
 
 ## Orden de actualización y comprobación
 
-1. Revisar los dos PR y sus commits. Integrarlos manualmente en sus bases correctas;
-   Codex no hace merge ni cambia ramas o variables de Railway.
-2. Aplicar backups y migraciones anteriores antes de usar los endpoints nuevos.
-3. Actualizar un bot a la vez, comenzando por Briosos de pruebas. Mantener intactos
+1. Revisar los dos PR y sus commits, todavía sin merge: las ramas conectadas pueden
+   disparar auto-deploy. Codex no hace merge ni cambia ramas o variables de Railway.
+2. Hacer backups y aplicar primero el SQL aditivo de cada Supabase elegido. Tener
+   preparados los valores privados para el código compatible; no iniciar un bot
+   antiguo esperando que variables nuevas añadan endpoints que no implementa.
+3. Integrar manualmente el PR backend cuando el esquema del piloto esté preparado.
+   Actualizar un bot a la vez, comenzando por Briosos de pruebas. Mantener intactos
    los demás servicios hasta su propia actualización explícita; no sustituir sus
    instrucciones, precios, números o colas por los de Briosos.
 4. Actualizar `crm-staging-api` y `crm-staging-sync` al mismo backend compatible.
@@ -186,7 +191,8 @@ hasta habilitarlo. No se ha provisionado infraestructura alternativa.
    Usar el ID correspondiente para los otros negocios. No bajar límites de
    aislamiento, copiar claves administrativas o marcar un baseline parcial como
    completo. Un negocio fallido no debe bloquear a los demás.
-7. Publicar el frontend ya integrado por el procedimiento habitual. Entrar con
+7. Solo con el backend preparado, integrar el PR frontend y publicar por el
+   procedimiento habitual (su sincronización puede ser automática). Entrar con
    Admin y comprobar cada negocio seleccionado, capacidades y errores. No hay otro
    servicio web o pantalla que crear.
 8. Realizar la prueba física siguiente con remitente/destinatario autorizados.
