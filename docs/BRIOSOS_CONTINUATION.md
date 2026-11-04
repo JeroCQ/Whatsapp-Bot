@@ -1,3 +1,5 @@
+> Histórico del piloto anterior. Para la entrega multimedia/multiempresa usar únicamente [CRM_MEDIA_DEPLOYMENT.md](CRM_MEDIA_DEPLOYMENT.md); las instrucciones de credencial personal o restricción Briosos de este documento no aplican a esa entrega.
+
 # Continuar el piloto Briosos, sin reconstruir
 
 El camino elegido por el usuario es ejecutar el despliegue con la IA del proyecto

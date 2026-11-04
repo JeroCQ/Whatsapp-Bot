@@ -1,3 +1,5 @@
+> Histórico del piloto anterior. Para la entrega multimedia/multiempresa usar únicamente [CRM_MEDIA_DEPLOYMENT.md](CRM_MEDIA_DEPLOYMENT.md); las instrucciones de credencial personal o restricción Briosos de este documento no aplican a esa entrega.
+
 # Desplegar el piloto Briosos desde Railway
 
 Este es el encargo para la IA de Railway dentro del proyecto existente que contiene

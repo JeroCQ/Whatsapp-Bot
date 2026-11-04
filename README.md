@@ -13,6 +13,8 @@ environment variable, database migration, or manual setup.
 
 ## Deployments por negocio
 
+Para esta entrega de audio, archivos y recibos, usar la [guía única coordinada](docs/CRM_MEDIA_DEPLOYMENT.md). Incluye Admin multiempresa, versiones, migraciones y rollback; no crear otro CRM ni cambiar webhooks.
+
 Para activar únicamente el **piloto CRM de Briosos** con el código ya publicado,
 usa el [prompt listo para la IA de Railway](docs/RAILWAY_BRIOSOS_CRM_PROMPT.md).
 La interfaz ya está integrada en GitHub; Lovable solo necesita configuración
