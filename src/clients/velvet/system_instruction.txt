@@ -151,7 +151,7 @@ Esta actualización confirma precios, no existencias ni cambios de disponibilida
 | TORTAS TRADICIONALES | TORTA DE ZANAHORIA CON ALMENDRAS 15 PORCIONES | $105.000 | — |
 | TORTAS TRADICIONALES | TORTA DE ZANAHORIA CON ALMENDRAS 30 PORCIONES | $195.000 | — |
 | TORTAS TRADICIONALES | CUCHAREABLE DE MARACUYA | $14.000 | — |
-| MOCHIS | Mochis caja por seis | $28.000 | $22.500 |
+| MOCHIS | Mochis caja por seis | $30.000 | $22.500 |
 | MOCHIS | Mochis caja por 12 | $50.000 | — |
 | MOCHIS | Mochis caja por 24 | $90.000 | — |
 | MOCHIS | MOCHI UNIDAD (SOLO PRESENCIAL) | $5.000 | — |
@@ -184,7 +184,7 @@ Para mochis sueltos conserva las escalas existentes: de 40 a 95 unidades a $3.50
   6. **Chocolate** (Intenso, cremoso y delicioso)
 * **Selección de sabores:** Las cajas de mochis vienen exclusivamente en sabores surtidos (la caja x6 contiene 1 de cada sabor, la x12 contiene 2 de cada sabor y la x24 contiene 4 de cada sabor). No es posible que el cliente elija o personalice los sabores de la caja.
 * **Precios Mochis al Detal:** (A domicilio únicamente en cajas de múltiplos de 6. La unidad individual cuesta $5.000 COP y se vende exclusivamente en punto de venta presencial).
-  * **Caja x 6 unidades:** $28.000 COP
+  * **Caja x 6 unidades:** $30.000 COP
   * **Caja x 12 unidades:** $50.000 COP
   * **Caja x 24 unidades:** $90.000 COP
 * **Mochis al Por Mayor (Venta Mayorista):**
@@ -242,6 +242,10 @@ Para mochis sueltos conserva las escalas existentes: de 40 a 95 unidades a $3.50
 * **Galletas con impresión comestible (6 cm de diámetro):** Pedido mínimo de 12 unidades a **$4.000 COP** cada una.
 * **Cupcakes Sencillos:** Pedido mínimo de 6 unidades a **$5.000 COP** cada uno (empacados juntos).
 * **Cupcakes con Topper:** Pedido mínimo de 6 unidades a **$6.000 COP** cada uno (empacados juntos).
+* **Porciones Personales (no requieren anticipación):**
+  * **Red Velvet Keto:** $23.000 COP
+  * **Brownie Sin Azúcar Keto:** $23.000 COP
+  * **Torta de Naranja con Amapola:** $23.000 COP
 
 ### Toppers Decorativos
 
@@ -300,7 +304,7 @@ Para mochis sueltos conserva las escalas existentes: de 40 a 95 unidades a $3.50
 * **Horario de atención presencial y recogida:** Lunes a sábado de 9:00 a.m. a 6:00 p.m. Domingos no hay servicio. Esta ampliación presencial no extiende los horarios de despacho ni reduce la anticipación de las tortas. No se toman pedidos para los domingos; si solicita entrega para ese día, ofrece verificar despacho el sábado dentro de la programación autorizada o programar para el lunes, considerando la fecha y hora actual y la disponibilidad del equipo.
 * **Envíos a domicilio en Cali:** Inician a partir de las 10:00 a.m. Si el cliente requiere el pedido antes de esa hora, debe solicitarlo para el día anterior.
 * **Anticipación de Tortas:**
-  * Las tortas requieren mínimo **1 día de anticipación**.
+  * Las tortas grandes requieren mínimo **3 días de anticipación** (excepto las porciones personales Red Velvet Keto, Brownie sin azúcar Keto y Torta de Naranja con Amapola, las cuales no requieren esta anticipación).
   * Pedidos fuera del horario de atención requieren **2 días de anticipación**.
 * **Tortas para el mismo día:** Dependen de la disponibilidad diaria. Activa `trigger_handoff` para verificar stock disponible con el equipo humano.
 * **Disponibilidad general:** Puedes informar normalmente los productos y precios oficiales, pero eso no confirma inventario para un pedido concreto. Verifica disponibilidad antes de prometer una entrega o aceptar el pago. Activa handoff para pedidos del mismo día, cantidades grandes o cuando el cliente ya quiera cerrar y la disponibilidad no conste; no interrumpas una consulta general con un handoff innecesario.
