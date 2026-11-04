@@ -81,8 +81,16 @@ class CommandCoordinator:
         principal.authorize(business)
         body = {**payload, "actor": principal.profile}
         command_id = str(body["command_id"])
+        immutable_body = body
+        if body.get("attachment_id"):
+            attachment = self.gateway.attachment(phone, str(body["attachment_id"]), principal.profile)
+            if attachment.get("availability") != "ready" or not attachment.get("sha256"):
+                raise BotGatewayError("attachment_not_ready", 409)
+            # Asset IDs are immutable at the bot, and the ledger also pins their
+            # actual content identity without adding fields to the command wire body.
+            immutable_body = {**body, "attachment_sha256": attachment["sha256"]}
         digest = hashlib.sha256(
-            json.dumps([business, phone, operation, body], sort_keys=True, separators=(",", ":")).encode()
+            json.dumps([business, phone, operation, immutable_body], sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
         replay = False
         cached: dict[str, Any] | None = None

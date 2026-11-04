@@ -1,7 +1,8 @@
 from datetime import datetime
 from typing import Literal
+from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class Input(BaseModel):
@@ -70,7 +71,19 @@ class ControlInput(Input):
 class HumanMessageInput(Input):
     command_id: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
     expected_version: int = Field(ge=0)
-    text: str = Field(min_length=1, max_length=4096)
+    text: str = Field(default="", max_length=4096)
+    attachment_id: str | None = None
+
+    @field_validator("attachment_id")
+    @classmethod
+    def valid_attachment(cls, value: str | None) -> str | None:
+        return str(UUID(value)) if value is not None else None
+
+    @model_validator(mode="after")
+    def content_required(self) -> "HumanMessageInput":
+        if not self.text and not self.attachment_id:
+            raise ValueError("A message requires text or an attachment")
+        return self
 
 
 class PushKeys(Input):

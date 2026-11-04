@@ -1,3 +1,5 @@
+> Artefacto histórico: no aplicar estas copias ni el patch al frontend publicado. El código vigente se entrega directamente en `JeroCQ/chatty-bot-command-center`; consultar la [guía coordinada](../../../docs/CRM_MEDIA_DEPLOYMENT.md).
+
 # Parche archivado de integración Lovable del piloto
 
 **Ya aplicado y subido al frontend main, con autorización del usuario:**

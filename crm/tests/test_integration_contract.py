@@ -46,6 +46,10 @@ OPERATIONS = {
     ("GET", CONVERSATION),
     ("GET", CONVERSATION + "/control"),
     ("GET", CONVERSATION + "/commands/{command_id}"),
+    ("GET", CONVERSATION + "/message-updates"),
+    ("POST", CONVERSATION + "/attachments"),
+    ("GET", CONVERSATION + "/attachments/{asset_id}"),
+    ("GET", CONVERSATION + "/attachments/{asset_id}/content"),
     ("POST", CONVERSATION + "/take"),
     ("POST", CONVERSATION + "/messages"),
     ("POST", CONVERSATION + "/close"),
@@ -205,11 +209,26 @@ def test_detail_contract_message_pagination(contract_client):
         "handoff_delivery",
         "messages",
         "next_cursor",
+        "delivery_cursor",
     }
     assert isinstance(first["next_cursor"], str)
     assert len(first["messages"]) == 1
     message = first["messages"][0]
-    assert set(message) == {"id", "role", "content", "created_at", "metadata", "event_key"}
+    assert set(message) == {
+        "id",
+        "role",
+        "content",
+        "created_at",
+        "metadata",
+        "event_key",
+        "delivery_status",
+        "provider_message_id",
+        "command_id",
+        "attachments",
+        "is_delivery_event",
+    }
+    assert isinstance(first["delivery_cursor"], str)
+    assert message["attachments"] == [] and message["is_delivery_event"] is False
     assert message["id"] == 2 and message["metadata"]["source_event_id"] == "fixture-inbound-2"
     older = contract_client.get(path, params={"limit": 1, "cursor": first["next_cursor"]}).json()
     assert older["next_cursor"] is None and older["messages"][0]["id"] == 1

@@ -85,8 +85,18 @@ class Settings:
     sync_max_history_messages: int = 10000
     bot_test_mode: bool = False
     bot_timeout_seconds: float = 20.0
+    media_enabled: bool = False
+    # None inherits the configured business registry; an explicit empty list
+    # enables no businesses. Authentication still scopes every request.
+    media_businesses: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
+        if (
+            type(self.media_enabled) is not bool
+            or any(not re.fullmatch(r"[a-z][a-z0-9_]{0,62}", name) for name in self.media_businesses or ())
+            or len(set(self.media_businesses or ())) != len(self.media_businesses or ())
+        ):
+            raise ValueError("Invalid CRM media business configuration")
         for name, low, high in (
             ("page_size", 1, 1000),
             ("max_pages", 1, 1000),
@@ -214,4 +224,23 @@ class Settings:
             sync_max_history_messages=int(os.environ.get("SYNC_MAX_HISTORY_MESSAGES", "10000")),
             bot_test_mode=test_mode,
             bot_timeout_seconds=float(os.environ.get("CRM_BOT_TIMEOUT_SECONDS", "20")),
+            media_enabled=flag("CRM_MEDIA_ENABLED"),
+            media_businesses=(
+                tuple(
+                    part.strip()
+                    for part in os.environ["CRM_MEDIA_ALLOWED_BUSINESSES"].split(",")
+                    if part.strip()
+                )
+                if "CRM_MEDIA_ALLOWED_BUSINESSES" in os.environ
+                else None
+            ),
+        )
+
+    def media_allowed(self, business_id: str) -> bool:
+        business = self.businesses.get(business_id)
+        return bool(
+            self.media_enabled
+            and (self.media_businesses is None or business_id in self.media_businesses)
+            and business
+            and business.operations_enabled
         )

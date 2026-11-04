@@ -5,11 +5,14 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import tempfile
+from functools import partial
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+import anyio
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from human_control_store import ControlError
 from human_support import uses_crm
@@ -30,7 +33,14 @@ class TakeCommand(ControlCommand):
 
 
 class ReplyCommand(ControlCommand):
-    text: str = Field(min_length=1, max_length=4096)
+    text: str = Field(default="", max_length=4096)
+    attachment_id: str | None = Field(default=None, min_length=36, max_length=36)
+
+    @model_validator(mode="after")
+    def message_content(self) -> "ReplyCommand":
+        if not self.text and not self.attachment_id:
+            raise ValueError("A message needs text or an attachment")
+        return self
 
 
 class CloseCommand(ControlCommand):
@@ -44,6 +54,9 @@ def create_router(
     get_logs: Any,
     invalidate_followup: Any,
     phone_lock: Any,
+    *,
+    media_factory: Any = None,
+    send_media: Any = None,
 ) -> APIRouter:
     """Callbacks are the bot's existing send/history/coordination functions."""
     router = APIRouter()
@@ -83,6 +96,99 @@ def create_router(
             value["status"] = "pending"
         status_code = 202 if value.get("status") in {"pending", "unknown"} else 200
         return JSONResponse(jsonable_encoder(value), status_code=status_code)
+
+    def media_service() -> Any:
+        from crm_media import media_enabled
+        if not media_factory or not media_enabled(config):
+            raise HTTPException(404, "CRM media is not enabled")
+        return media_factory()
+
+    def media_failure(error: Exception) -> HTTPException:
+        from crm_media_policy import MediaError
+        if isinstance(error, MediaError):
+            return HTTPException(error.status_code, error.code, headers=getattr(error, "headers", None))
+        if isinstance(error, ControlError):
+            return HTTPException(error.status_code, error.code)
+        return HTTPException(503, "private_media_unavailable")
+
+    @router.get("/internal/crm/v1/businesses/{business_id}/media-capabilities")
+    def media_capabilities(business_id: str, request: Request) -> dict[str, Any]:
+        authorize(request, business_id)
+        from crm_media import media_enabled
+        from crm_media_policy import LIMITS
+        if not media_factory or not media_enabled(config):
+            return {"business_id": business_id, "media_enabled": False, "storage_ready": False, "reason": "crm_media_not_enabled", "limits": LIMITS}
+        return media_factory().readiness()
+
+    @router.post(base + "/attachments")
+    async def attachment_upload(
+        business_id: str, phone: str, request: Request,
+        upload_id: str = Query(min_length=36, max_length=36),
+        filename: str = Query(min_length=1),
+        expected_version: int = Query(ge=0), voice_note: bool = False,
+    ) -> dict[str, Any]:
+        authorize(request, business_id)
+        from crm_media import canonical_id, require_human_control
+        from crm_media_policy import safe_filename, upload_limit
+        service = media_service()
+        actor = request.headers.get("x-crm-actor", "")
+        if not actor or len(actor) > 200:
+            raise HTTPException(401, "CRM actor authentication required")
+        mime = request.headers.get("content-type", "")
+        try:
+            canonical_id(upload_id)
+            safe_filename(filename)
+            maximum = upload_limit(mime)
+            declared = int(request.headers.get("x-upload-size", ""))
+            if declared < 1 or declared > maximum:
+                raise HTTPException(413, "attachment_too_large")
+            store = store_factory()
+            await anyio.to_thread.run_sync(require_human_control, store, phone, actor, expected_version)
+            with tempfile.NamedTemporaryFile(mode="w+b") as stream:
+                actual = 0
+                async for chunk in request.stream():
+                    actual += len(chunk)
+                    if actual > maximum or actual > declared:
+                        raise HTTPException(413, "attachment_too_large")
+                    stream.write(chunk)
+                if actual != declared:
+                    raise HTTPException(422, "attachment_length_mismatch")
+                stream.flush()
+                result = await anyio.to_thread.run_sync(partial(
+                    service.upload, phone, upload_id, actor, stream.name, mime, filename, voice_note=voice_note,
+                ))
+                await anyio.to_thread.run_sync(require_human_control, store, phone, actor, expected_version)
+                return result
+        except HTTPException:
+            raise
+        except ValueError as error:
+            raise media_failure(error) if hasattr(error, "code") else HTTPException(422, "invalid_upload_size") from None
+        except Exception as error:
+            raise media_failure(error) from None
+
+    @router.get(base + "/attachments/{attachment_id}")
+    def attachment_metadata(business_id: str, phone: str, attachment_id: str, request: Request) -> dict[str, Any]:
+        authorize(request, business_id)
+        try:
+            return media_service().metadata(phone, attachment_id)
+        except HTTPException:
+            raise
+        except Exception as error:
+            raise media_failure(error) from None
+
+    @router.get(base + "/attachments/{attachment_id}/content")
+    def attachment_content(
+        business_id: str, phone: str, attachment_id: str, request: Request, variant: str = "original",
+    ) -> StreamingResponse:
+        authorize(request, business_id)
+        try:
+            iterator, status, headers = media_service().content(phone, attachment_id,
+                range_header=request.headers.get("range"), if_range=request.headers.get("if-range"), variant=variant)
+            return StreamingResponse(iterator, status_code=status, headers=headers)
+        except HTTPException:
+            raise
+        except Exception as error:
+            raise media_failure(error) from None
 
     @router.get(base + "/control")
     def control(business_id: str, phone: str, request: Request) -> dict[str, Any]:
@@ -143,6 +249,28 @@ def create_router(
         if not valid_whatsapp_sender(phone):
             raise HTTPException(422, "Invalid WhatsApp recipient")
         store = store_factory()
+        attachment = None
+        service = None
+        if body.attachment_id:
+            from crm_media_policy import validate_caption
+            try:
+                service = media_service()
+                attachment = service.outbound(phone, body.attachment_id, body.actor)
+                validate_caption(attachment["kind"], body.text)
+                if not send_media:
+                    raise HTTPException(503, "media_sender_unavailable")
+            except HTTPException:
+                raise
+            except Exception as error:
+                raise media_failure(error) from None
+        digest = _digest(body, attachment)
+
+        def begin(inbound: list[str]) -> dict[str, Any]:
+            args = [phone, body.command_id, "human", body.actor, body.expected_version, digest, body.text, inbound]
+            if attachment:
+                from crm_media import public_attachment
+                args.append([public_attachment(attachment)])
+            return call(store, "begin_send", *args)
         # Replayed provider results are never sent again, even if a later close changed the epoch.
         try:
             prior = store.get_command(phone, body.command_id)
@@ -155,33 +283,11 @@ def create_router(
             ) from None
         else:
             # begin_send compares the immutable original request, including actor/text/version.
-            value = call(
-                store,
-                "begin_send",
-                phone,
-                body.command_id,
-                "human",
-                body.actor,
-                body.expected_version,
-                _digest(body),
-                body.text,
-                prior.get("control", {}).get("inbound_message_ids") or [],
-            )
+            value = begin((prior.get("control") or {}).get("inbound_message_ids") or [])
             return mutation_response(value)
         with phone_lock(phone):
             snapshot = call(store, "get_control", phone)
-            value = call(
-                store,
-                "begin_send",
-                phone,
-                body.command_id,
-                "human",
-                body.actor,
-                body.expected_version,
-                _digest(body),
-                body.text,
-                snapshot.get("inbound_message_ids") or [],
-            )
+            value = begin(snapshot.get("inbound_message_ids") or [])
             if value.get("status") != "reserved":
                 return mutation_response(value)
             snapshot = value["control"]
@@ -193,7 +299,8 @@ def create_router(
                 meta_window_expires_at=snapshot.get("window_expires_at"),
             ):
                 try:
-                    accepted = send_text(phone, body.text)
+                    accepted = (service.send_attachment(phone, attachment, body.text, send_media)
+                                if attachment else send_text(phone, body.text))
                     provider_id = str(current_trace().get("provider_message_id") or "")
                     status = "accepted" if accepted and provider_id else "unknown"
                     detail = (
@@ -214,12 +321,12 @@ def create_router(
                         if status == "failed"
                         else "provider_outcome_unknown",
                     )
-                except Exception:
-                    status, provider_id, detail = (
-                        "unknown",
-                        "",
-                        "provider_outcome_unknown",
-                    )
+                except Exception as error:
+                    from crm_media_policy import MediaError
+                    if isinstance(error, MediaError):
+                        status, provider_id, detail = "failed", "", error.code
+                    else:
+                        status, provider_id, detail = "unknown", "", "provider_outcome_unknown"
                 result = call(
                     store,
                     "finish_send",
@@ -234,7 +341,10 @@ def create_router(
     return router
 
 
-def _digest(body: ReplyCommand) -> str:
+def _digest(body: ReplyCommand, attachment: dict[str, Any] | None = None) -> str:
+    payload = body.model_dump(exclude_none=True)
+    if attachment:
+        payload["attachment_sha256"] = attachment["sha256"]
     return hashlib.sha256(
-        json.dumps(body.model_dump(), sort_keys=True, separators=(",", ":")).encode()
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()

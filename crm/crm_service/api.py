@@ -4,18 +4,39 @@ import json
 import logging
 from collections.abc import Iterator
 from datetime import timedelta
+from tempfile import SpooledTemporaryFile
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import and_, func, or_, select, text, tuple_
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
+from starlette.background import BackgroundTask
+from starlette.concurrency import run_in_threadpool
 
 from crm_service.bot_commands import CommandCoordinator
 from crm_service.bot_gateway import BotGateway, BotGatewayError
 from crm_service.classification import timestamp
 from crm_service.db import database
+from crm_service.delivery import (
+    delivery_watermark,
+    message_updates,
+    serialize_message,
+    visible_message_clause,
+)
+from crm_service.media import (
+    LIMITS,
+    MAX_UPLOAD_BYTES,
+    MIMES,
+    BodyLimitMiddleware,
+    attachment_id,
+    range_headers,
+    upload_parameters,
+)
+from crm_service.media import (
+    filename as attachment_filename,
+)
 from crm_service.models import (
     Agent,
     AuditEvent,
@@ -59,6 +80,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="Independent WhatsApp CRM", version="0.1.0", docs_url=None, redoc_url=None)
     app.state.settings, app.state.sessions, app.state.engine = settings, sessions, engine
     app.state.bot_transport = None
+    app.add_middleware(BodyLimitMiddleware)
 
     def db() -> Iterator[Session]:
         with sessions.begin() as session:
@@ -155,7 +177,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             with engine.connect() as conn:
                 version = conn.scalar(text("SELECT version_num FROM alembic_version"))
-                if version != "0003_bot_commands":
+                if version != "0004_delivery_receipts":
                     raise HTTPException(503, "CRM migrations required")
         except SQLAlchemyError:
             raise HTTPException(503, "CRM database unavailable or migrations required") from None
@@ -165,6 +187,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def capabilities(principal: Auth) -> dict[str, Any]:
         enabled = [name for name in principal.businesses if settings.businesses[name].operations_enabled]
         bot_sources = [name for name in principal.businesses if settings.businesses[name].bot_api_enabled]
+        media_businesses = []
+        media_reasons: dict[str, str] = {}
+        for name in principal.businesses:
+            if not settings.media_allowed(name):
+                continue
+            gateway = None
+            try:
+                gateway = bot_gateway(principal, name)
+                media = gateway.media_capabilities()
+                if media["media_enabled"] and media["storage_ready"]:
+                    media_businesses.append(name)
+                else:
+                    media_reasons[name] = "bot_media_storage_not_ready"
+            except (BotGatewayError, HTTPException):
+                media_reasons[name] = "bot_media_unavailable"
+            finally:
+                if gateway is not None:
+                    gateway.close()
         return {
             "source_read_only": settings.source_mode == "bot_api" and bool(bot_sources),
             "source_methods_read_only": True,
@@ -185,6 +225,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "resolve_conversations": bool(enabled),
             "resume_bot": bool(enabled),
             "notifications_enabled": settings.notifications_enabled,
+            "media_enabled": bool(media_businesses),
+            "media_businesses": media_businesses,
+            "media": {
+                "enabled": bool(media_businesses),
+                "storage_ready": bool(media_businesses),
+                "unavailable_businesses": media_reasons,
+                "max_upload_bytes": MAX_UPLOAD_BYTES,
+                "limits_by_kind": LIMITS,
+                "upload_mime_types": sorted(MIMES),
+                "voice_note_input_mime_types": ["audio/webm", "audio/mp4", "audio/ogg"],
+            },
         }
 
     @app.get("/v1/businesses")
@@ -237,7 +288,179 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def human_message(
         business_id: str, phone_number: str, body: HumanMessageInput, principal: Auth
     ) -> JSONResponse:
-        return execute_bot_command(business_id, phone_number, "messages", body.model_dump(), principal)
+        if body.attachment_id and not settings.media_allowed(business_id):
+            principal.authorize(business_id)
+            raise HTTPException(404, "CRM media is not enabled for this business")
+        return execute_bot_command(
+            business_id, phone_number, "messages", body.model_dump(exclude_none=True), principal
+        )
+
+    def media_gateway(principal: Actor, business_id: str) -> BotGateway:
+        principal.authorize(business_id)
+        if not settings.media_allowed(business_id):
+            raise HTTPException(404, "CRM media is not enabled for this business")
+        return bot_gateway(principal, business_id)
+
+    def require_upload_control(gateway: BotGateway, phone: str, principal: Actor, version: int) -> None:
+        control = gateway.control(phone)
+        if (
+            control["version"] != version
+            or control["phase"] != "human"
+            or not control["is_paused"]
+            or not control["confirmed"]
+            or not control["can_send"]
+            or control.get("owner") != principal.profile
+        ):
+            raise BotGatewayError("confirmed_human_control_required", 409)
+
+    @app.post("/v1/conversations/{business_id}/{phone_number}/attachments")
+    async def upload_attachment(
+        business_id: str,
+        phone_number: str,
+        request: Request,
+        principal: Auth,
+        upload_id: str,
+        filename: str,
+        expected_version: int = Query(ge=0),
+        voice_note: bool = False,
+    ) -> dict[str, Any]:
+        asset_id = attachment_id(upload_id)
+        # Keep the wire filename as data; never treat it as a filesystem path.
+        name = attachment_filename(filename)
+        mime, size = upload_parameters(
+            request.headers.get("content-type", ""), request.headers.get("x-upload-size", ""), voice_note
+        )
+        gateway = media_gateway(principal, business_id)
+        try:
+            await run_in_threadpool(
+                require_upload_control, gateway, phone_number, principal, expected_version
+            )
+            with SpooledTemporaryFile(max_size=1024**2, mode="w+b") as spool:
+                actual = 0
+                async for chunk in request.stream():
+                    actual += len(chunk)
+                    if actual > size:
+                        raise HTTPException(413, "Attachment exceeds declared size")
+                    spool.write(chunk)
+                if actual != size:
+                    raise HTTPException(422, "Attachment length differs from X-Upload-Size")
+                spool.seek(0)
+                # A completed upload is not authority to send; recheck after it took time.
+                await run_in_threadpool(
+                    require_upload_control, gateway, phone_number, principal, expected_version
+                )
+                result = await run_in_threadpool(
+                    gateway.upload_attachment,
+                    phone_number,
+                    asset_id,
+                    name,
+                    expected_version,
+                    principal.profile,
+                    mime,
+                    size,
+                    voice_note,
+                    spool,
+                )
+            with sessions.begin() as session:
+                audit(
+                    session,
+                    principal,
+                    business_id,
+                    phone_number,
+                    "media.upload",
+                    {
+                        "attachment_id": result["id"],
+                        "size_bytes": result["size_bytes"],
+                        "availability": result["availability"],
+                    },
+                )
+            return result
+        except BotGatewayError as error:
+            raise HTTPException(error.status_code, error.code) from None
+        finally:
+            gateway.close()
+
+    @app.get("/v1/conversations/{business_id}/{phone_number}/attachments/{asset_id}")
+    def attachment_metadata(
+        business_id: str,
+        phone_number: str,
+        asset_id: str,
+        principal: Auth,
+    ) -> dict[str, Any]:
+        asset_id = attachment_id(asset_id)
+        gateway = media_gateway(principal, business_id)
+        try:
+            return gateway.attachment(phone_number, asset_id, principal.profile)
+        except BotGatewayError as error:
+            raise HTTPException(error.status_code, error.code) from None
+        finally:
+            gateway.close()
+
+    @app.get("/v1/conversations/{business_id}/{phone_number}/attachments/{asset_id}/content")
+    def attachment_download(
+        business_id: str,
+        phone_number: str,
+        asset_id: str,
+        request: Request,
+        principal: Auth,
+        variant: str = Query(default="original", pattern="^(original|playback)$"),
+    ) -> StreamingResponse:
+        asset_id = attachment_id(asset_id)
+        headers = range_headers(request.headers)
+        gateway = media_gateway(principal, business_id)
+        try:
+            # Validate identity and safe media type before streaming any bytes.
+            metadata = gateway.attachment(phone_number, asset_id, principal.profile)
+            response = gateway.attachment_content(phone_number, asset_id, headers, variant)
+        except BotGatewayError as error:
+            gateway.close()
+            raise HTTPException(error.status_code, error.code) from None
+        except Exception:
+            gateway.close()
+            raise
+
+        def close_download() -> None:
+            response.close()
+            gateway.close()
+
+        def chunks() -> Iterator[bytes]:
+            try:
+                for chunk in response.iter_bytes(chunk_size=64 * 1024):
+                    yield chunk
+            finally:
+                close_download()
+
+        safe_headers = {
+            key: response.headers[key]
+            for key in (
+                "content-length",
+                "content-range",
+                "accept-ranges",
+                "content-disposition",
+                "etag",
+                "last-modified",
+            )
+            if key in response.headers
+        }
+        safe_headers.update(
+            {
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+                "Referrer-Policy": "no-referrer",
+            }
+        )
+        mime = (
+            metadata.get("playback_mime_type", "audio/mp4")
+            if variant == "playback"
+            else metadata["mime_type"]
+        )
+        return StreamingResponse(
+            chunks(),
+            status_code=response.status_code,
+            headers=safe_headers,
+            media_type=mime,
+            background=BackgroundTask(close_download),
+        )
 
     @app.post("/v1/conversations/{business_id}/{phone_number}/close")
     def close_human_case(
@@ -391,9 +614,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         cursor: str | None = None,
     ) -> dict[str, Any]:
         source, crm = conversation(session, principal, business_id, phone_number)
+        updates_scope = f"message-updates:{principal.profile}:{','.join(principal.businesses)}:{business_id}:{phone_number}"
+        watermark = delivery_watermark(session, business_id, phone_number)
         scope = f"messages:{principal.profile}:{','.join(principal.businesses)}:{business_id}:{phone_number}"
         query = select(SourceMessage).where(
-            SourceMessage.business_id == business_id, SourceMessage.phone_number == phone_number
+            SourceMessage.business_id == business_id,
+            SourceMessage.phone_number == phone_number,
+            visible_message_clause(),
         )
         if cursor:
             data = decode_cursor(cursor, scope, settings)
@@ -418,18 +645,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "source_state": source.state,
             "customer": source.customer,
             "handoff_delivery": source.handoff,
-            "messages": [
-                {
-                    "id": m.source_id,
-                    "role": m.role,
-                    "content": m.content,
-                    "created_at": m.created_at,
-                    "metadata": m.message_metadata,
-                    "event_key": m.event_key,
-                }
-                for m in reversed(rows[:limit])
-            ],
+            "messages": [serialize_message(m) for m in reversed(rows[:limit])],
             "next_cursor": next_cursor,
+            "delivery_cursor": encode_cursor({"revision": watermark}, updates_scope, settings),
+        }
+
+    @app.get("/v1/conversations/{business_id}/{phone_number}/message-updates")
+    def delivery_updates(
+        business_id: str,
+        phone_number: str,
+        principal: Auth,
+        session: DB,
+        after: str | None = None,
+        limit: int = Query(default=200, ge=1, le=200),
+    ) -> dict[str, Any]:
+        conversation(session, principal, business_id, phone_number)
+        scope = f"message-updates:{principal.profile}:{','.join(principal.businesses)}:{business_id}:{phone_number}"
+        revision = 0
+        if after:
+            checkpoint = decode_cursor(after, scope, settings)
+            revision = checkpoint.get("revision", -1)
+            if type(revision) is not int or revision < 0:
+                raise HTTPException(400, "Invalid message update cursor")
+        rows, next_revision, has_more = message_updates(session, business_id, phone_number, revision, limit)
+        return {
+            "items": [serialize_message(row) for row in rows],
+            "next_cursor": encode_cursor({"revision": next_revision}, scope, settings),
+            "has_more": has_more,
         }
 
     @app.patch("/v1/conversations/{business_id}/{phone_number}/crm")

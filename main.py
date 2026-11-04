@@ -23,6 +23,7 @@ from human_support import human_handoffs_enabled, uses_chatwoot, uses_crm, human
 from human_control_store import build_runtime_store, ControlError
 from human_send_gate import automatic_send_gate
 from human_control_api import create_router as create_control_router
+from crm_media import MediaService, media_enabled
 from crm_source_api import SupabaseSourceReader, create_source_router
 from bot import FILE_CATALOG, process_message_logic, transcribe_audio_message
 from conversation_summary import build_handoff_summary, format_handoff_history
@@ -509,6 +510,7 @@ def schedule_follow_up_sequence(phone_number: str, plan, *, customer_message_rec
 
 def send_whatsapp_media(to_number: str, media_id: str, media_type: str, caption: str = None, filename: str = None):
     """Send any WhatsApp-supported media type using an uploaded Meta media id."""
+    update_trace(provider_message_id="")
     _check_customer_window()
     media_type = normalize_media_type(media_type)
     url = f"https://graph.facebook.com/v20.0/{config.WA_PHONE_NUMBER_ID}/messages"
@@ -1418,8 +1420,24 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
         raise RuntimeError("customer_state_unavailable")
 
     incoming_text = f"[Archivo/{effective_media_type}] {message_body or ''}" if effective_media_id else (message_body or "")
+    attachment = None
+    if effective_media_id and media_enabled(config):
+        # Archive the original even while human control is active, before any
+        # transcription attempt. A storage/transcription failure never blocks
+        # reception or releases the bot's authoritative pause.
+        try:
+            attachment = MediaService(config, supabase).capture_inbound(
+                sender_phone, str(current_trace().get("source_event_id") or ""),
+                effective_media_id, mime_type or "", filename or "", effective_media_type or "document",
+            )
+        except Exception:
+            operational_event("CRM_MEDIA_ARCHIVE_FAILED", phone=sender_phone, stage="INBOUND",
+                              reason="private_media_unavailable", result="original_pending")
     with message_trace(input_type=effective_media_type or "text"):
-        save_message_log(sender_phone, "user", incoming_text)
+        if attachment:
+            save_message_log(sender_phone, "user", incoming_text, metadata={"attachments": [attachment]})
+        else:
+            save_message_log(sender_phone, "user", incoming_text)
 
     preferences = follow_up_preference_patch(message_body or "", state_record)
     agreed_date = customer_agreed_not_before(message_body or "", customer_message_received_at,
@@ -2188,5 +2206,8 @@ async def root_webhook_dispatcher(request: Request, background_tasks: Background
 # Explicitly disabled by default; callbacks resolve the same authoritative runtime.
 app.include_router(create_control_router(config, lambda: get_control_store(),
     lambda phone, text: send_whatsapp_message(phone, text), get_message_logs,
-    invalidate_follow_up, phone_lock))
+    invalidate_follow_up, phone_lock,
+    media_factory=lambda: MediaService(config, supabase),
+    send_media=lambda phone, media_id, kind, caption, filename:
+        send_whatsapp_media(phone, media_id, kind, caption, filename)))
 app.include_router(create_source_router(config, lambda: get_source_reader()))

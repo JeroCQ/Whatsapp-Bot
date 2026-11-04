@@ -81,6 +81,7 @@ class ControlStore:
         request_digest: str = "",
         text: str = "",
         inbound_message_ids: list[str] | None = None,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         return self._call(
             phone,
@@ -93,6 +94,7 @@ class ControlStore:
                 "request_digest": request_digest,
                 "text": text,
                 "inbound_message_ids": inbound_message_ids or [],
+                **({"attachments": attachments} if attachments else {}),
             },
         )
 

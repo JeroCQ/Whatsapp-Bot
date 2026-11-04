@@ -446,11 +446,13 @@ BEGIN
     UPDATE public.crm_send_attempts SET status=target_status,
       provider_message_id=COALESCE(provider_id,provider_message_id),detail=left(p_payload->>'detail',100),updated_at=now()
       WHERE business_id=p_business_id AND attempt_id=p_request_id;
-    IF attempt.kind='human' AND target_status IN ('accepted','delivered','read') THEN
+    IF attempt.kind='human' AND target_status IN ('accepted','delivered','read','failed','unknown') THEN
       INSERT INTO public.message_logs(phone_number,role,content,metadata,event_key)
         VALUES(p_phone,'asesor',COALESCE(attempt.request->'payload'->>'text',''),
           jsonb_build_object('business_id',p_business_id,'source','human','source_event_id',p_request_id,
-            'actor',attempt.actor,'provider_message_id',COALESCE(provider_id,attempt.provider_message_id),'delivery_status',target_status,
+            'actor',attempt.actor,'command_id',p_request_id,
+            'attachments',COALESCE(attempt.request->'payload'->'attachments','[]'::jsonb),
+            'provider_message_id',COALESCE(provider_id,attempt.provider_message_id),'delivery_status',target_status,
             'inbound_message_ids',COALESCE(attempt.request->'payload'->'inbound_message_ids','[]'::jsonb)),
           'crm-human:'||p_business_id||':'||p_request_id) ON CONFLICT(event_key) DO NOTHING;
     END IF;
@@ -464,7 +466,7 @@ BEGIN
         INSERT INTO public.message_logs(phone_number,role,content,metadata,event_key)
           VALUES(p_phone,'system','DELIVERY_STATUS: '||target_status,
             jsonb_build_object('business_id',p_business_id,'source','crm_delivery',
-              'command_id',p_request_id,'delivery_status',target_status,
+              'command_id',p_request_id,'source_event_id',p_request_id,'delivery_status',target_status,
               'provider_message_id',COALESCE(provider_id,attempt.provider_message_id)),
             'crm-delivery:'||p_business_id||':'||p_request_id||':'||target_status)
           ON CONFLICT(event_key) DO NOTHING;
@@ -502,3 +504,70 @@ DO $$ BEGIN
   END IF;
 END $$;
 -- CRM CONTROL END
+
+-- CRM PRIVATE MEDIA BEGIN
+-- Optional private storage: application defaults remain disabled. Run separately
+-- against each authorized business Supabase, after review/backup. Existing rows and
+-- bot control functions are preserved. No public object URLs or client policies.
+CREATE TABLE IF NOT EXISTS public.crm_media_assets (
+  business_id text NOT NULL,
+  id uuid NOT NULL,
+  phone_number text NOT NULL,
+  actor text NOT NULL DEFAULT '',
+  direction text NOT NULL CHECK (direction IN ('inbound','outbound')),
+  kind text NOT NULL CHECK (kind IN ('image','audio','document','video','sticker')),
+  mime_type text NOT NULL,
+  filename text NOT NULL,
+  size_bytes bigint NOT NULL DEFAULT 0 CHECK (size_bytes BETWEEN 0 AND 100000000),
+  sha256 text CHECK (sha256 IS NULL OR sha256 ~ '^[a-f0-9]{64}$'),
+  source_sha256 text CHECK (source_sha256 IS NULL OR source_sha256 ~ '^[a-f0-9]{64}$'),
+  source_filename text,
+  source_mime_type text,
+  voice_note boolean NOT NULL DEFAULT false,
+  status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','ready','unavailable')),
+  storage_key text,
+  original_storage_key text,
+  playback jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(playback)='object'),
+  source_event_id text,
+  meta_media_id text,
+  error text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY(business_id,id),
+  CHECK (length(business_id) BETWEEN 1 AND 63),
+  CHECK (length(phone_number) BETWEEN 1 AND 200),
+  CHECK (status <> 'ready' OR (storage_key IS NOT NULL AND sha256 IS NOT NULL AND size_bytes > 0))
+);
+ALTER TABLE public.crm_media_assets DROP CONSTRAINT IF EXISTS crm_media_assets_kind_check;
+ALTER TABLE public.crm_media_assets ADD CONSTRAINT crm_media_assets_kind_check CHECK (kind IN ('image','audio','document','video','sticker'));
+CREATE INDEX IF NOT EXISTS ix_crm_media_conversation ON public.crm_media_assets(business_id,phone_number,created_at);
+ALTER TABLE public.crm_media_assets ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.crm_media_assets FROM PUBLIC;
+DO $$ DECLARE role_name text; BEGIN
+  FOREACH role_name IN ARRAY ARRAY['anon','authenticated'] LOOP
+    IF to_regrole(role_name) IS NOT NULL THEN
+      EXECUTE format('REVOKE ALL ON TABLE public.crm_media_assets FROM %I',role_name);
+    END IF;
+  END LOOP;
+  IF to_regrole('service_role') IS NOT NULL THEN
+    GRANT SELECT,INSERT,UPDATE ON public.crm_media_assets TO service_role;
+  END IF;
+END $$;
+DO $$ DECLARE role_name text; policy_name text; BEGIN
+  IF to_regclass('storage.buckets') IS NOT NULL THEN
+    INSERT INTO storage.buckets(id,name,public,file_size_limit)
+      VALUES('crm-private-media','crm-private-media',false,100000000)
+      ON CONFLICT(id) DO UPDATE SET public=false,file_size_limit=100000000;
+  END IF;
+  IF to_regclass('storage.objects') IS NOT NULL THEN
+    FOREACH role_name IN ARRAY ARRAY['anon','authenticated'] LOOP
+      IF to_regrole(role_name) IS NOT NULL THEN
+        policy_name := 'crm_media_private_'||role_name;
+        IF NOT EXISTS(SELECT 1 FROM pg_policies WHERE schemaname='storage' AND tablename='objects' AND policyname=policy_name) THEN
+          EXECUTE format('CREATE POLICY %I ON storage.objects AS RESTRICTIVE FOR ALL TO %I USING (bucket_id <> ''crm-private-media'') WITH CHECK (bucket_id <> ''crm-private-media'')',policy_name,role_name);
+        END IF;
+      END IF;
+    END LOOP;
+  END IF;
+END $$;
+-- CRM PRIVATE MEDIA END

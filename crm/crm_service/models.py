@@ -13,6 +13,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -51,6 +52,11 @@ class SourceMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     message_metadata: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
     event_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    delivery_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    command_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    provider_message_id: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    delivery_revision: Mapped[int] = mapped_column(BigInteger, default=0, server_default=text("0"))
+    is_delivery_event: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     __table_args__ = (
         ForeignKeyConstraint(
             ["business_id", "phone_number"],
@@ -58,6 +64,33 @@ class SourceMessage(Base):
         ),
         Index("uq_source_event", "business_id", "event_key", unique=True),
         Index("ix_source_timeline", "business_id", "phone_number", "created_at", "source_id"),
+        Index("ix_source_command", "business_id", "phone_number", "command_id"),
+        Index("ix_source_provider", "business_id", "phone_number", "provider_message_id"),
+        Index("ix_source_delivery_revision", "business_id", "phone_number", "delivery_revision"),
+    )
+
+
+class DeliveryReceipt(Base):
+    """A durable receipt fact, including those arriving before the original message."""
+
+    __tablename__ = "delivery_receipts"
+    business_id: Mapped[str] = mapped_column(String(63), primary_key=True)
+    event_source_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    phone_number: Mapped[str] = mapped_column(String(200))
+    command_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    provider_message_id: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    status: Mapped[str] = mapped_column(String(20))
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    matched_source_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["business_id", "event_source_id"], ["source_messages.business_id", "source_messages.source_id"]
+        ),
+        ForeignKeyConstraint(
+            ["business_id", "matched_source_id"], ["source_messages.business_id", "source_messages.source_id"]
+        ),
+        Index("ix_receipt_command", "business_id", "phone_number", "command_id"),
+        Index("ix_receipt_provider", "business_id", "phone_number", "provider_message_id"),
     )
 
 

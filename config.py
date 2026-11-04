@@ -77,6 +77,11 @@ class Settings:
     CRM_BOT_CONTROL_SECRET = os.getenv("CRM_BOT_CONTROL_SECRET", "")
     CRM_SOURCE_READ_ENABLED = parse_boolean_env("CRM_SOURCE_READ_ENABLED", default=False)
     CRM_SOURCE_READ_SECRET = os.getenv("CRM_SOURCE_READ_SECRET", "")
+    CRM_MEDIA_ENABLED = parse_boolean_env("CRM_MEDIA_ENABLED", default=False)
+    # Optional narrowing only; each bot still serves its own BUSINESS_ID. Media
+    # remains disabled until explicitly enabled and private storage is ready.
+    CRM_MEDIA_ALLOWED_BUSINESSES = os.getenv("CRM_MEDIA_ALLOWED_BUSINESSES", "")
+    CRM_MEDIA_BUCKET = os.getenv("CRM_MEDIA_BUCKET", "crm-private-media")
     # Retained in automatic mode only as an immediate rollback value. It is
     # included in creation requests exclusively when the mode is fixed.
     CHATWOOT_ASSIGNEE_ID = os.getenv("CHATWOOT_ASSIGNEE_ID")

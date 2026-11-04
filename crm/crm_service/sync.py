@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from crm_service.budget import BudgetExhausted, ReadBudget
 from crm_service.classification import EPOCH, classify, timestamp
+from crm_service.delivery import project_message, visible_message_clause
 from crm_service.local_targets import require_disposable_source
 from crm_service.models import (
     CRMConversation,
@@ -263,6 +264,7 @@ class Synchronizer:
             raise SourceFailure("invalid_message_timestamp")
         row.message_metadata, row.event_key = metadata, key
         session.flush()
+        project_message(session, row)
 
     def messages(self, session: Session, business: Business, adapter: Reader, budget: ReadBudget) -> None:
         cursor = self.cursor(session, business.id, "message_logs")
@@ -325,6 +327,7 @@ class Synchronizer:
                 .where(
                     SourceMessage.business_id == business.id,
                     SourceMessage.phone_number == source.phone_number,
+                    visible_message_clause(),
                 )
                 .limit(self.settings.sync_max_history_messages + 1)
             ).all()
@@ -336,7 +339,10 @@ class Synchronizer:
                     "role": m.role,
                     "content": m.content,
                     "created_at": m.created_at,
-                    "metadata": m.message_metadata,
+                    "metadata": {
+                        **m.message_metadata,
+                        **({"delivery_status": m.delivery_status} if m.delivery_status else {}),
+                    },
                 }
                 for m in rows
             ]
