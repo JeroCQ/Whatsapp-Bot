@@ -1,6 +1,6 @@
 # Contrato servidor frontend ↔ CRM
 
-La atención operativa del piloto se especifica en
+La atención operativa del piloto se especifica en 
 [CRM_PILOT_HANDOFF.md](../../docs/CRM_PILOT_HANDOFF.md): `GET C/control`,
 `GET C/commands/{command_id}`, `POST C/take`, `POST C/messages`, `POST C/close`,
 cuerpos, respuestas, estados inciertos y conexión de Lovable. Este documento
