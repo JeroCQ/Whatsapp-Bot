@@ -259,6 +259,32 @@ def test_push_validation_dedup_and_ownership(client, settings):
     assert client.post("/v1/push/subscriptions", json=body).status_code == 409
 
 
+def test_push_configuration_requires_current_server_authentication_and_scope(client, settings):
+    assert client.get("/v1/push/config").json() == {
+        "enabled": False,
+        "configured": False,
+        "public_key": None,
+        "reason": "disabled",
+        "allowed_businesses": ["tanaka"],
+    }
+    client.headers.pop("Authorization")
+    assert client.get("/v1/push/config").status_code == 401
+    client.headers["Authorization"] = "Bearer " + token(settings, allowed_businesses=["memos"])
+    assert client.get("/v1/push/config").json()["allowed_businesses"] == ["memos"]
+
+
+def test_push_configuration_is_usable_when_enabled(notifications_settings, sessions):
+    app = create_app(notifications_settings)
+    try:
+        with TestClient(app) as client:
+            client.headers["Authorization"] = "Bearer " + token(notifications_settings)
+            config = client.get("/v1/push/config").json()
+            assert config["configured"] and config["public_key"]
+            assert notifications_settings.vapid_private_key not in str(config)
+    finally:
+        app.state.engine.dispose()
+
+
 def test_partial_task_patch(client):
     base = "/v1/conversations/tanaka/573001/tasks"
     item = client.post(base, json={"title": "Pendiente"}).json()["id"]

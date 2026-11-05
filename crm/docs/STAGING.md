@@ -114,11 +114,11 @@ documentados en el README del worker. No colocar DSNs de origen en `crm-api`
 para usar `/internal/sync`: ese endpoint solo debe solicitar trabajo en la base
 CRM, y el proceso worker es quien dispone de credenciales de lectura.
 
-Mantener siempre `NOTIFICATIONS_ENABLED=false`. El flujo sintético no necesita
-VAPID ni suscripciones. La integración Web Push individual requiere además una
-clave pública VAPID accesible mediante un contrato futuro, identidad estable por
-empleado, service worker y revocación; un perfil compartido por marca no representa
-a cada empleado de forma individual.
+Mantener siempre `NOTIFICATIONS_ENABLED=false` en el flujo sintético, que no
+necesita VAPID ni suscripciones. La activación Web Push del CRM autorizado usa
+el contrato `/v1/push/config` y [el runbook](RUNBOOK.md#activación-web-push).
+Un perfil compartido por marca o Admin no representa a cada empleado de forma
+individual; alta/baja y revocación global de empleados siguen sin implementarse.
 
 ## Suite automatizada
 
