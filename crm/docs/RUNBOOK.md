@@ -9,7 +9,8 @@ estado de atención y envíos reside en el bot. Migración CRM: 0003_bot_command
 El esquema nuevo del bot y las instrucciones Railway/Lovable están en
 [CRM_PILOT_HANDOFF.md](../../docs/CRM_PILOT_HANDOFF.md).
 
-Mantener NOTIFICATIONS_ENABLED=false. El modo bot_api soporta exportación real
+Las fuentes sintéticas mantienen NOTIFICATIONS_ENABLED=false. Para el CRM
+autorizado, Web Push tiene activación explícita descrita más abajo. El modo bot_api soporta exportación real
 por un secreto GET dedicado del bot, distinto del de control. Fuentes PostgreSQL
 directas siguen limitadas a loopback marcado, incluso en postgres_readonly.
 No reutilizar SERVICE_ROLE_KEY ni otras claves administrativas del bot.
@@ -85,11 +86,43 @@ registra perfil/empresa/acción/campos sin contenido completo.
 4. Definir identidad estable por empleado y revocación. Un perfil compartido por
    marca no es identidad individual. No hay endpoints de alta/revocación ni canal
    automático de revocación de notificaciones.
-5. Mantener notificaciones apagadas hasta definir clave pública VAPID (sin endpoint
-   actual), service worker, suscripciones, revocación y deduplicación. Un crash entre
+5. Validar `GET /v1/push/config`, el service worker y la revocación del dispositivo
+   antes de dar por activa la entrega. Un crash entre
    aceptación push y commit puede repetir entrega: no hay garantía exactly-once.
 6. Acordar capacidades ausentes: tareas globales, métricas de tiempos/SLA, adjuntos
    humanos y plantillas fuera de ventana. Las acciones del bot implementadas
    requieren confirmar versión/pausa y tratar unknown sin reenvío automático.
 7. Ensayar restauración, carga y alertas de presupuesto/frescura con datos aprobados.
    La validación local no autoriza promoción ni un despliegue.
+
+## Activación Web Push
+
+Aplica al API y sync existentes, tanto en instalaciones nuevas como actualizadas;
+no requiere SQL ni nuevas migraciones. Las fixtures siempre permanecen apagadas.
+
+1. Reutilizar un par VAPID P-256 ya configurado, si existe. Si no existe, generar
+   el par una sola vez fuera de Git y conservar la clave privada en el canal de
+   secretos del hosting; no imprimirla en chat/logs. Se acepta el valor privado
+   base64url de 32 bytes o su PEM completo, nunca una ruta a archivo del servidor.
+2. En **API y sync**, configurar privadamente el mismo `VAPID_PRIVATE_KEY` y un
+   `VAPID_SUBJECT=mailto:<correo-operativo-real>`, y luego
+   `NOTIFICATIONS_ENABLED=true`. El frontend no necesita una variable VAPID propia:
+   recibe únicamente la clave pública de `/api/crm/push/config`.
+3. Después de actualizar ambos servicios y publicar el frontend revisado, iniciar
+   sesión en el dominio HTTPS final. Consultar el estado real del endpoint y
+   aceptar la invitación de notificaciones. En iPhone/iPad, Web Push exige la app
+   instalada en pantalla de inicio en una versión compatible; el permiso nativo
+   requiere una acción del usuario y no se puede forzar tras un efecto de React.
+4. Confirmar un handoff **nuevo** posterior al baseline, una notificación con
+   enlace a su empresa/conversación y ausencia de repetición al seguir polling.
+   No se notifica por backfill ni por suscripciones creadas después del evento.
+   Cerrar/cambiar cuenta debe revocar el dispositivo y su vinculación del SW.
+5. Rollback de notificaciones: `NOTIFICATIONS_ENABLED=false` en API y sync. No
+   cambia la recepción del bot, no elimina la base CRM y no reenvía mensajes.
+
+La cuenta Admin y los perfiles compartidos siguen siendo identidades de perfil,
+no empleados individuales. El servidor valida alcance/preferencias y permite
+eliminar la suscripción propia. Rotar una contraseña no revoca automáticamente
+suscripciones previamente registradas; no hay revocación global de identidades.
+Un permiso concedido o una suscripción creada no prueban recepción física. Quedan
+por probar el hosting final, proveedores Web Push e iPhone/Android reales.

@@ -52,7 +52,7 @@ from crm_service.models import (
     Task,
     now,
 )
-from crm_service.notifications import endpoint_allowed, endpoint_hash, preference
+from crm_service.notifications import endpoint_allowed, endpoint_hash, preference, push_config
 from crm_service.schemas import (
     Bucket,
     ControlInput,
@@ -961,6 +961,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
         audit(session, principal, body.business_id, "", "preferences.update")
         return {"ok": True}
+
+    @app.get("/v1/push/config")
+    def notification_config(principal: Auth) -> dict[str, Any]:
+        return {**push_config(settings), "allowed_businesses": list(principal.businesses)}
 
     @app.post("/v1/push/subscriptions", status_code=201)
     def subscribe(body: PushInput, principal: Auth, session: DB) -> dict[str, str]:

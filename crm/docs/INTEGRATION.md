@@ -88,12 +88,17 @@ token = jwt.encode({
 `profile` es una identidad opaca confiada al servidor emisor, no una cuenta que
 el CRM autentique por sí mismo. **Un perfil compartido `tanaka`, `memos` o `admin`
 no representa a cada empleado**: leído, preferencias, suscripciones y auditoría
-se compartirían. Antes del piloto se necesita un identificador estable por persona
-y un mecanismo de revocación. No hay endpoints de alta/baja de empleados ni de
+se comparten. La integración actual usa el acceso existente por perfil y permite
+revocar la suscripción del dispositivo; no acredita identidad individual. Para
+operación con identidad individual se necesita un identificador estable por persona
+y revocación administrativa. No hay endpoints de alta/baja de empleados ni de
 revocación global. El registro CRM de agentes refleja el último alcance de JWT
-observado; Web Push no recibe automáticamente revocaciones del frontend y el
+observado; Web Push no tiene un canal de revocación global de perfiles y el
 vencimiento del JWT no elimina por sí mismo ese registro ni las suscripciones.
-Mantener `NOTIFICATIONS_ENABLED=false` hasta resolverlo.
+El frontend revoca la suscripción al salir/cambiar cuenta y el service worker debe
+rechazar payloads que no correspondan a su vinculación activa `{profile,id}`.
+El operador debe tener presente la limitación de cuentas compartidas; no hay
+logout remoto de todos los dispositivos mediante este contrato.
 
 ## Convenciones de datos y errores
 
@@ -293,6 +298,7 @@ empresa autorizada; el API no restringe edición exclusivamente al autor.
 | `GET /v1/notifications` | `offset=0`, `limit=50` (1–200) | 200 `{"items":[{"id":"...","business_id":"example_a","phone_number":"contact-001","url":"/chats?...","created_at":"fecha"}]}` |
 | `GET /v1/me/preferences` | JWT | 200 objeto indexado por empresas autorizadas, por ejemplo `{"example_a":{"in_app":true,"web_push":true}}` |
 | `PATCH /v1/me/preferences` | `{"business_id":"example_a","in_app":false,"web_push":false}`; empresa obligatoria, ambos booleanos predeterminados true | 200 `{"ok":true}` |
+| `GET /v1/push/config` | JWT del perfil actual | 200 `{"enabled":true,"configured":true,"public_key":"base64url-P256","reason":null,"allowed_businesses":["example_a"]}`; apagado/sin claves devuelve `configured:false`, clave null y motivo |
 | `POST /v1/push/subscriptions` | `{"endpoint":"https://proveedor-permitido/...","keys":{"p256dh":"base64url","auth":"base64url"}}` | 201 `{"id":"..."}`; repetir endpoint del mismo perfil conserva ID; 409 si corresponde a otro perfil |
 | `DELETE /v1/push/subscriptions/{item_id}` | JWT, ID propio | 204; desactiva la suscripción |
 
@@ -304,8 +310,16 @@ flag global: staging mantiene notificaciones desactivadas.
 
 La suscripción admite endpoint de hasta 4096 caracteres y claves base64url
 `p256dh` de 80–200 y `auth` de 20–100. Solo permite HTTPS/443 y proveedores de
-`PUSH_ALLOWED_HOSTS`. El formato aceptado no implica un envío push ya verificado.
-No obtener la clave pública VAPID de este API: **no existe ese endpoint**.
+la lista fija `Settings.push_hosts` (FCM, Mozilla, Apple y Windows). No hay una
+variable `PUSH_ALLOWED_HOSTS` implementada. El formato aceptado no implica un envío push ya verificado.
+`GET /v1/push/config` deriva la clave pública desde `VAPID_PRIVATE_KEY`; esa clave
+privada no sale del servidor. Los motivos de falta de disponibilidad son
+`disabled`, `vapid_missing`, `vapid_invalid` y `vapid_subject_missing`. La respuesta
+conserva HTTP 200 para que la UI pueda explicar la configuración pendiente;
+sin JWT válido responde 401. El payload Web Push contiene `id`, `tag`, `title`,
+`url`, `profile` y `subscription_id`, sin contenido del mensaje ni credenciales.
+El service worker debe comparar perfil/suscripción con su vinculación activa
+antes de mostrarlo y sanear el enlace a una ruta local de chats.
 
 ### Sincronización operativa, sin secretos de fuente en API
 
@@ -362,8 +376,6 @@ crea un intento nuevo; una intervención posterior debe usar otra clave.
   o un calendario CRM; solo existen tareas bajo `C/tasks`.
 - Métricas de tiempos de respuesta humana, percentiles, SLA, cohortes históricas
   o embudos de conversión. `waiting_seconds` por conversación no implementa eso.
-- Endpoint público/configuración de clave pública VAPID. La entrega real requiere
-  decidir distribución de esa clave, service worker, consentimiento y revocación.
 - Directorio/autenticación de empleados, invitaciones, alta/baja, roles de empleado,
   logout remoto y revocación de suscripciones por administrador. `/v1/agents` solo
   lista perfiles previamente observados.
@@ -374,7 +386,7 @@ crea un intento nuevo; una intervención posterior debe usar otra clave.
   de auditoría, marcar notificaciones como leídas o búsqueda/paginación global de mensajes.
 - Garantía de entrega única de Web Push ante crash después de aceptación del
   proveedor y antes de commit. La implementación conserva ID/tag para deduplicar
-  en el service worker, pero no reemplaza esa integración pendiente.
+  en el service worker; no promete entrega exactamente una vez del proveedor.
 
 No habilitar pantallas/acciones a partir de esta lista de trabajo futuro. Para el
 primer piloto seguir la guía Briosos: secreto de exportación GET sin credenciales
