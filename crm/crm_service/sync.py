@@ -442,7 +442,7 @@ class Synchronizer:
                 SourceConversation.phone_number.in_(phones) if phones is not None else true(),
                 or_(
                     SourceConversation.dirty.is_(True),
-                    CRMConversation.classification["classification_version"].as_integer().is_distinct_from(2),
+                    CRMConversation.classification["classification_version"].as_integer().is_distinct_from(3),
                 ),
             )
             .order_by(SourceConversation.dirty.desc(), SourceConversation.phone_number)
@@ -476,11 +476,12 @@ class Synchronizer:
                 }
                 for m in rows
             ]
-            result = classify(source.state, messages, source.handoff, now(), warnings)
+            row = session.get(CRMConversation, (business.id, source.phone_number))
+            result = classify(source.state, messages, source.handoff, now(), warnings,
+                              previous=row.classification if row else None)
             source.warnings = result["data_quality_warnings"]
             source.dirty = False
             count += 1
-            row = session.get(CRMConversation, (business.id, source.phone_number))
             previous = row.bucket if row else None
             if row is None:
                 row = CRMConversation(

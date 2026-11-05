@@ -30,6 +30,7 @@ def classify(
     handoff: dict[str, Any],
     at: datetime,
     warnings: list[str] | None = None,
+    previous: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     quality = set(warnings or [])
     # Delivery facts advance the source watermark, but are not conversational
@@ -116,8 +117,15 @@ def classify(
     case_exists = bool(phase == "human" and state.get("crm_control_owner")) if crm else bool(chatwoot)
     status = None if crm else delivery.get("status")
     waiting_customer = bool(paused and humans and not unanswered and case_exists and status not in PENDING)
+    resolved_cycle = bool(
+        closed_at is not None and not incoming and not handoffs
+        and not (delivery and timestamp(delivery.get("created_at")) > closed_at[0])
+        and not (state.get("crm_control_phase") in {"human", "pausing"} and state.get("crm_control_owner"))
+    )
     if paused:
-        bucket = "awaiting_human"
+        # Honor an already recorded operator resolution, even if an old/missing
+        # mutable state still reports paused. This never writes a closure event.
+        bucket = "closed" if resolved_cycle else "awaiting_human"
     else:
         # Technical/control events are not a customer reopening the case.
         bucket = "closed" if closed_at is not None and not incoming else "ai_active"
@@ -149,13 +157,13 @@ def classify(
     latest = max((order(m)[0] for m in incoming), default=None)
     activity_at = max(
         (order(m)[0] for m in ordered if m.get("role") in {"user", "model", "asesor"}),
-        default=timestamp(state.get("last_interaction")),
+        default=EPOCH,
     )
     seconds = max(0, int((timestamp(at) - attention).total_seconds())) if attention else 0
     attention_rank = int(attention.timestamp() * 1000000) if attention else 999999999999999999
     latest_rank = 999999999999999999 - int(latest.timestamp() * 1000000) if latest else 999999999999999999
-    return {
-        "classification_version": 2,
+    result: dict[str, Any] = {
+        "classification_version": 3,
         "bucket": bucket,
         "attention_since": attention.isoformat() if attention else None,
         "waiting_seconds": seconds,
@@ -168,3 +176,40 @@ def classify(
         "data_quality_warnings": sorted(quality),
         "sort_key": f"{priority:02}:{attention_rank:018}:{latest_rank:018}",
     }
+    previous = previous or {}
+    release = previous.get("inbox_release")
+    if release:
+        released_at = timestamp(release["at"])
+        version = state.get("crm_control_version")
+        newer_control = (
+            state.get("is_paused") is True
+            and type(version) is int
+            and release.get("control_version") is not None
+            and version > release["control_version"]
+        )
+        new_request = newer_control or any(
+            m.get("role") == "system"
+            and str(m.get("content", "")).startswith("HANDOFF:")
+            and timestamp(m.get("created_at")) > released_at
+            for m in messages
+        ) or bool(
+            handoff.get("request_id")
+            and handoff.get("request_id") != release.get("handoff_request_id")
+            # A retry/status edit of an old request is not a new human request.
+            and timestamp(handoff.get("created_at")) > released_at
+        )
+        if new_request:
+            result["bucket"] = "awaiting_human"
+        else:
+            result["inbox_release"] = release
+            if release["kind"] == "dismiss":
+                result["bucket"] = previous["bucket"]
+            else:
+                result["bucket"] = "ai_active"
+                result.update(priority=0, priority_reason="no_human_attention_required", attention_since=None,
+                              waiting_seconds=0)
+    elif previous.get("bucket") in {"awaiting_human", "human_active"} and not resolved_cycle:
+        # Reading, replying and source reconciliation never release a human case.
+        result["bucket"] = "awaiting_human"
+    result["in_human_inbox"] = result["bucket"] in {"awaiting_human", "human_active"} and not result.get("inbox_release")
+    return result

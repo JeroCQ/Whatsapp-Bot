@@ -9,7 +9,7 @@ from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from sqlalchemy import and_, case, func, or_, select, text, tuple_
+from sqlalchemy import and_, func, or_, select, text, tuple_
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
@@ -57,6 +57,7 @@ from crm_service.schemas import (
     Bucket,
     ControlInput,
     CRMUpdate,
+    HistoricalDismissInput,
     HumanMessageInput,
     NoteInput,
     PreferencesInput,
@@ -160,6 +161,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         classification.pop("sort_key", None)
         classification.pop("classification_version", None)
+        classification.pop("inbox_release", None)
         read = session.get(ReadState, (source.business_id, source.phone_number, principal.profile))
         return {
             "business_id": source.business_id,
@@ -491,6 +493,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             gateway.close()
 
+    @app.post("/v1/conversations/{business_id}/{phone_number}/dismiss")
+    def dismiss_historical_case(
+        business_id: str, phone_number: str, body: HistoricalDismissInput, principal: Auth
+    ) -> JSONResponse:
+        gateway = bot_gateway(principal, business_id)
+        try:
+            result, status = CommandCoordinator(sessions, gateway).dismiss(
+                principal, phone_number, body.command_id, body.version
+            )
+            return JSONResponse(content=result, status_code=status)
+        except BotGatewayError as error:
+            raise HTTPException(error.status_code, error.code) from None
+        finally:
+            gateway.close()
+
     @app.get("/v1/agents")
     def agents(principal: Auth, session: DB) -> list[dict[str, Any]]:
         return [
@@ -522,7 +539,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         scope = hashlib.sha256(
             json.dumps(
                 [
-                    "activity-v2",
+                    "real-message-v3",
                     principal.profile,
                     principal.businesses,
                     requested,
@@ -553,16 +570,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if bucket in {"awaiting_human", "human_active"}
                 else CRMConversation.bucket == bucket
             )
+            if bucket in {"awaiting_human", "human_active"}:
+                query = query.where(CRMConversation.classification["in_human_inbox"].as_boolean().is_distinct_from(False))
         activity = func.coalesce(
-            CRMConversation.classification["last_activity_at"].as_string(),
-            SourceConversation.state["last_interaction"].as_string(),
-            SourceConversation.customer["created_at"].as_string(),
-            "1970-01-01T00:00:00+00:00",
-        )
-        waiting = bucket in {"awaiting_human", "human_active"}
-        legacy_human_sort = "04:999999999999999999:999999999999999999"
-        waiting_order = case(
-            (CRMConversation.bucket == "human_active", legacy_human_sort), else_=CRMConversation.sort_key
+            select(SourceMessage.created_at)
+            .where(
+                SourceMessage.business_id == CRMConversation.business_id,
+                SourceMessage.phone_number == CRMConversation.phone_number,
+                SourceMessage.role.in_(["user", "model", "asesor"]),
+            )
+            .order_by(SourceMessage.created_at.desc(), SourceMessage.source_id.desc())
+            .limit(1)
+            .correlate(CRMConversation)
+            .scalar_subquery(),
+            timestamp(None),
         )
         if priority is not None:
             query = query.where(CRMConversation.classification["priority"].as_integer() == priority)
@@ -604,42 +625,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 key = (value["sort_key"], value["business_id"], value["phone_number"])
             except KeyError:
                 raise HTTPException(400, "Invalid cursor fields") from None
-            if waiting:
-                query = query.where(
-                    tuple_(waiting_order, CRMConversation.business_id, CRMConversation.phone_number) > key
+            query = query.where(
+                or_(
+                    activity < timestamp(key[0]),
+                    and_(
+                        activity == timestamp(key[0]),
+                        tuple_(CRMConversation.business_id, CRMConversation.phone_number) > key[1:],
+                    ),
                 )
-            else:
-                query = query.where(
-                    or_(
-                        activity < key[0],
-                        and_(
-                            activity == key[0],
-                            tuple_(CRMConversation.business_id, CRMConversation.phone_number) > key[1:],
-                        ),
-                    )
-                )
+            )
         rows = session.execute(
-            query.order_by(
-                waiting_order if waiting else activity.desc(),
-                CRMConversation.business_id,
-                CRMConversation.phone_number,
+            query.add_columns(activity).order_by(
+                activity.desc(), CRMConversation.business_id, CRMConversation.phone_number,
             ).limit(limit + 1)
         ).all()
-        items = [display(session, principal, source, crm) for source, crm in rows[:limit]]
+        items = [
+            {**display(session, principal, source, crm),
+             "last_activity_at": timestamp(activity_at).isoformat() if activity_at != timestamp(None) else None}
+            for source, crm, activity_at in rows[:limit]
+        ]
         next_cursor = None
         if len(rows) > limit:
             last = rows[limit - 1][1]
-            source_last = rows[limit - 1][0]
             next_cursor = encode_cursor(
                 {
-                    "sort_key": (legacy_human_sort if last.bucket == "human_active" else last.sort_key)
-                    if waiting
-                    else (
-                        last.classification.get("last_activity_at")
-                        or source_last.state.get("last_interaction")
-                        or source_last.customer.get("created_at")
-                        or "1970-01-01T00:00:00+00:00"
-                    ),
+                    "sort_key": timestamp(rows[limit - 1][2]).isoformat(),
                     "business_id": last.business_id,
                     "phone_number": last.phone_number,
                 },
