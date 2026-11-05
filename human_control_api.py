@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import tempfile
 from functools import partial
 from typing import Any
@@ -19,6 +20,8 @@ from human_support import uses_crm
 from observability import current_trace, message_trace
 from provider_errors import ProviderError
 from webhook_utils import valid_whatsapp_sender
+
+logger = logging.getLogger(__name__)
 
 
 class ControlCommand(BaseModel):
@@ -106,6 +109,15 @@ def create_router(
     def media_failure(error: Exception) -> HTTPException:
         from crm_media_policy import MediaError
         if isinstance(error, MediaError):
+            if error.diagnostic:
+                # Only bounded codec/stage tokens; never ffmpeg stderr, paths,
+                # request headers, filenames, message content or credentials.
+                logger.warning(
+                    "CRM media rejected: code=%s stage=%s mime=%s codec=%s",
+                    error.code, error.diagnostic.get("stage", "unknown"),
+                    error.diagnostic.get("mime_type", "unknown"),
+                    error.diagnostic.get("audio_codec", "unknown"),
+                )
             return HTTPException(error.status_code, error.code, headers=getattr(error, "headers", None))
         if isinstance(error, ControlError):
             return HTTPException(error.status_code, error.code)
