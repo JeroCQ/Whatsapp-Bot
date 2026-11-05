@@ -1461,11 +1461,21 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
     if uses_crm(config):
         control = get_control_store().get_control(sender_phone)
         if control["version"] != current_trace().get("crm_control_version"):
+            operational_event("RESPONSE_SKIPPED", phone=sender_phone, stage="INBOUND",
+                              reason="control_epoch_changed", result="fenced",
+                              current_control_version=control["version"])
             return {"status": "control_epoch_changed"}
+        if control["phase"] != "ai" or control["is_paused"]:
+            operational_event("RESPONSE_SKIPPED", phone=sender_phone, stage="INBOUND",
+                              reason="crm_human_control_active", result="paused",
+                              control_phase=control["phase"])
+            return {"status": "human_control", "phase": control["phase"]}
     if human_control_active(state_record):
         if not uses_chatwoot(config):
             # A remaining bare pause is an explicit operator/safety pause,
             # rather than a disabled Chatwoot handoff. Do not override it.
+            operational_event("RESPONSE_SKIPPED", phone=sender_phone, stage="INBOUND",
+                              reason="explicit_human_pause", result="paused")
             return
         print("[DEBUG] 4. Bot pausado, derivando mensaje al asesor humano en Chatwoot")
         conv_id = state_record.get("chatwoot_conversation_id")

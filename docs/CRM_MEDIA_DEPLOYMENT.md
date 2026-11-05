@@ -14,6 +14,19 @@ No crea otro CRM, otra base, otra autenticación ni otro emisor de WhatsApp.
 La ampliación a Tanaka, Memo’s y Velvet está autorizada en el código por el
 registro configurado; no se ha activado ni desplegado ningún negocio desde Codex.
 
+Corrección posterior de reanudación de IA: `fix/crm-ai-resume-legacy-chatwoot`,
+con PR hacia `feat/crm-media-delivery`. Un ticket histórico de Chatwoot no
+representa una pausa vigente en una conversación vinculada al control CRM del
+bot. Se conservan las fases humanas, pausas explícitas y versiones de control;
+las conversaciones legacy sin vinculación CRM mantienen su comportamiento.
+Aplica a instalaciones nuevas y existentes, sin SQL, migraciones, variables ni
+cambios frontend adicionales. Tras revisar e integrar el PR, actualizar solo
+el bot autorizado con el arranque existente (y su worker existente si fuera
+separado). Verificar con un mensaje nuevo y una nueva solicitud de asesor;
+no reenviar automáticamente entradas antiguas marcadas como procesadas. La
+validación local usa PostgreSQL desechable y Meta/Gemini simulados, sin despliegue
+ni prueba física en WhatsApp. Para rollback, volver al commit anterior del bot.
+
 ## Versiones y servicios
 
 Código backend validado: **af357d3479c7a715a3beb1bc6c53b687e09cc263**. Código frontend validado:

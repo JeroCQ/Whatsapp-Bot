@@ -2,7 +2,7 @@ import pytest
 
 from commercial_intents import (follow_up_plan, follow_up_suppression_reason, b2b_reason,
     catalog_may_suppress_handoff, unregistered_presentation_reason, follow_up_preference_patch,
-    customer_closes_without_pending_request)
+    customer_closes_without_pending_request, human_control_active)
 
 
 def test_absent_and_intentionally_empty_followup_are_different():
@@ -100,6 +100,50 @@ def test_customer_thanks_does_not_close_an_existing_pending_request(state):
 def test_customer_thanks_cannot_remove_existing_human_control(state):
     assert not customer_closes_without_pending_request("Gracias por la información", state)
     assert follow_up_suppression_reason("Gracias por la información", state=state) == "human_control"
+
+
+@pytest.mark.parametrize("business", ["tanaka", "memos", "velvet", "briosos", "future_business"])
+def test_closed_crm_case_is_not_paused_by_historical_chatwoot_id(business):
+    state = {
+        "crm_control_business_id": business,
+        "crm_control_phase": "ai",
+        "is_paused": False,
+        "current_state": "GREETING",
+        "chatwoot_conversation_id": 44,
+    }
+    assert not human_control_active(state)
+    assert follow_up_suppression_reason("Hola otra vez", state=state) is None
+    assert follow_up_plan("¿En qué puedo ayudarte?", [], state=state) is not None
+
+
+@pytest.mark.parametrize("phase", ["waiting", "pausing", "human"])
+def test_crm_phase_keeps_human_control_without_a_chatwoot_ticket(phase):
+    assert human_control_active({
+        "crm_control_business_id": "future_business",
+        "crm_control_phase": phase,
+        "is_paused": False,
+        "current_state": "GREETING",
+    })
+
+
+@pytest.mark.parametrize("extra", [{"is_paused": True}, {"current_state": "HUMAN_HANDOFF"}])
+def test_crm_ai_phase_never_overrides_an_explicit_pause(extra):
+    assert human_control_active({
+        "crm_control_business_id": "future_business",
+        "crm_control_phase": "ai",
+        **extra,
+    })
+
+
+@pytest.mark.parametrize("binding", [None, ""])
+def test_default_crm_columns_do_not_release_legacy_chatwoot_control(binding):
+    assert human_control_active({
+        "crm_control_business_id": binding,
+        "crm_control_phase": "ai",
+        "is_paused": False,
+        "current_state": "GREETING",
+        "chatwoot_conversation_id": 44,
+    })
 
 
 def test_empty_order_summary_placeholder_does_not_manufacture_a_pending_order():
