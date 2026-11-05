@@ -8,7 +8,7 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from crm_service.bot_gateway import BotGateway, BotGatewayError
-from crm_service.models import AuditEvent, BotCommand, now
+from crm_service.models import AuditEvent, BotCommand, CRMConversation, SourceConversation, now
 from crm_service.security import Actor
 from crm_service.sync import lock_id
 
@@ -37,12 +37,68 @@ class CommandCoordinator:
 
     def _save(self, command_id: str, result: dict[str, Any], http_status: int) -> tuple[dict[str, Any], int]:
         with self.sessions.begin() as session:
+            session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_id(self.gateway.business.id)})
             row = self._row(session, command_id)
             assert row is not None
+            if row.operation == "close" and row.status != "confirmed" and result["status"] == "confirmed":
+                control = result.get("control") or {}
+                if control.get("phase") != "ai" or control.get("is_paused") is not False:
+                    raise BotGatewayError("ai_return_not_confirmed", 502)
+                self._release_projection(session, row, "return", control["version"])
             row.status, row.response, row.http_status = str(result["status"]), result, http_status
             row.updated_at = now()
             self._audit(session, row, "bot.command_result", row.status)
         return result, http_status
+
+    def _release_projection(self, session: Session, command: BotCommand, kind: str, version: int | None) -> None:
+        key = (command.business_id, command.phone_number)
+        crm, source = session.get(CRMConversation, key), session.get(SourceConversation, key)
+        if crm is None or source is None:
+            raise BotGatewayError("crm_conversation_not_found", 404)
+        if kind != "dismiss":
+            crm.bucket = "ai_active"
+        crm.classification = {
+            **crm.classification, "bucket": crm.bucket, "in_human_inbox": False,
+            **({"priority": 0, "priority_reason": "no_human_attention_required", "attention_since": None,
+                "waiting_seconds": 0} if kind != "dismiss" else {}),
+            "inbox_release": {"command_id": command.command_id, "at": now().isoformat(), "kind": kind,
+                              "control_version": version, "handoff_request_id": source.handoff.get("request_id")},
+        }
+        crm.version += 1
+        source.dirty = True
+
+    def dismiss(self, principal: Actor, phone: str, command_id: str, version: int) -> tuple[dict[str, Any], int]:
+        """CRM-only dismissal requires the bot's explicit missing-state response, never a generic 404."""
+        business = self.gateway.business.id
+        principal.authorize(business)
+        digest = hashlib.sha256(json.dumps([business, phone, principal.profile, version]).encode()).hexdigest()
+        with self.sessions.begin() as session:
+            session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_id(business)})
+            row = self._row(session, command_id)
+            if row:
+                if row.operation != "dismiss" or row.phone_number != phone or row.profile != principal.profile or row.request_hash != digest:
+                    raise BotGatewayError("idempotency_key_conflict", 409)
+                return row.response, row.http_status
+            try:
+                self.gateway.control(phone)
+            except BotGatewayError as error:
+                if error.code != "conversation_state_not_found":
+                    raise
+            else:
+                raise BotGatewayError("existing_bot_state_requires_real_return", 409)
+            crm = session.get(CRMConversation, (business, phone))
+            if crm is None:
+                raise BotGatewayError("crm_conversation_not_found", 404)
+            if crm.version != version or crm.bucket not in {"awaiting_human", "human_active"}:
+                raise BotGatewayError("crm_version_or_bucket_changed", 409)
+            result = {"command_id": command_id, "status": "confirmed", "control": None, "crm_only": True}
+            row = BotCommand(business_id=business, command_id=command_id, phone_number=phone,
+                             profile=principal.profile, operation="dismiss", request_hash=digest,
+                             status="confirmed", response=result, http_status=200)
+            session.add(row)
+            self._release_projection(session, row, "dismiss", None)
+            self._audit(session, row, "crm.historical_dismissed", "confirmed")
+            return result, 200
 
     def _recover(
         self, phone: str, command_id: str, cached: dict[str, Any] | None = None, cached_code: int = 202
@@ -70,6 +126,8 @@ class CommandCoordinator:
             row = session.get(BotCommand, (self.gateway.business.id, command_id))
             if row and row.phone_number != phone:
                 raise BotGatewayError("command_not_found", 404)
+            if row and row.operation == "dismiss":
+                return row.response, row.http_status
             cached, code = (row.response, row.http_status) if row else (None, 202)
         return self._recover(phone, command_id, cached, code)
 
@@ -152,10 +210,9 @@ class CommandCoordinator:
             or control.get("owner") != principal.profile
         ):
             error_code = "confirmed_human_control_required"
-        elif operation == "close" and (
-            control["phase"] != "human"
-            or not control["confirmed"]
-            or control.get("owner") != principal.profile
+        elif operation == "close" and not (
+            (control["phase"] == "human" and control["confirmed"] and control.get("owner") == principal.profile)
+            or (control["phase"] in {"waiting", "ai"} and not control.get("owner"))
         ):
             error_code = "confirmed_human_control_required"
         elif operation == "take" and control.get("owner") not in {None, "", principal.profile}:
@@ -172,6 +229,9 @@ class CommandCoordinator:
                 },
                 409,
             )
+        if operation == "close" and control["phase"] == "ai" and control["is_paused"] is False:
+            # Already authoritative AI: persist the operator's inbox decision without fabricating a bot event.
+            return self._save(command_id, {"command_id": command_id, "status": "confirmed", "control": control}, 200)
         with self.sessions.begin() as session:
             row = self._row(session, command_id)
             assert row is not None

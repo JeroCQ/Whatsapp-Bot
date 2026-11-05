@@ -68,6 +68,11 @@ class ControlInput(Input):
     reason: str = Field(default="Operator action", min_length=1, max_length=255)
 
 
+class HistoricalDismissInput(Input):
+    command_id: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
+    version: int = Field(ge=1)
+
+
 class HumanMessageInput(Input):
     command_id: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
     expected_version: int = Field(ge=0)

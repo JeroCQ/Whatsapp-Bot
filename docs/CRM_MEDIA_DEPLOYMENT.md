@@ -496,3 +496,15 @@ de navegador requiere el dev server loopback con `PASSWORD_ADMIN=synthetic-admin
 Intercepta sus APIs y bloquea HTTP externo; usa WebAudio como micrófono ficticio.
 Ninguna de estas cifras acredita recepción física, disponibilidad del bucket real
 o corrección de los valores ocultos en los cuatro servicios de Railway.
+
+### Three-tab inbox follow-up (all configured businesses)
+
+This follow-up changes only inbox membership/order and the existing return-to-AI action. No media/catalog/reset/notification or credential changes. No CRM Alembic migration or new variables.
+
+- Backend API and sync worker must use the same follow-up commit. Existing private bot control endpoints and per-business secrets remain in use.
+- The existing bot `close` operation now also permits a paused, unowned waiting case. For both a fresh install and an existing deployment, the function definition is kept identical in `supabase/bootstrap.sql`, `supabase/upgrade_existing_brand.sql` and `supabase/upgrade_crm_bot_commands.sql`. An operator must review/apply the existing-brand function update separately before enabling that unowned return path; no SQL was executed against real databases here. Ownership/version and unresolved-send checks remain enforced. An already authoritative AI case needs no bot mutation.
+- CRM-only `POST /v1/conversations/{business_id}/{phone_number}/dismiss` accepts `{ "command_id": "unique-operator-command", "version": 1 }`, where version is the CRM detail version. It verifies the authenticated bot's exact missing-state response, persists/audits the dismissal in the current CRM database and keeps the historical source state/messages intact. A generic bot 404, disabled endpoint or unavailable bot is an error, not permission to dismiss. Query its outcome through the existing commands endpoint, without repeating the POST.
+- Update the frontend after the backend. The UI exposes Humano / IA / Todo, explicit take (also without a handoff) and move-to-AI. No opening action takes control. A new human request can restore membership; importing an old handoff cannot cancel a confirmed return. Existing cursor tokens must be refreshed because list ordering changed.
+- Rollback: restore the previous frontend/API/worker revisions. Preserve CRM rows, command ledger and source history; never clear release markers or reset cursors as a rollback step.
+
+Per user instruction, no tests/builds were run for this follow-up. It has not been deployed or verified in production.

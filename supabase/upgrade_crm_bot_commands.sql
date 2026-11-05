@@ -140,7 +140,10 @@ BEGIN
       v_response := jsonb_build_object('command_id',p_request_id,'status',CASE WHEN blocked THEN 'pending' ELSE 'confirmed' END,
                                      'control',public.crm_control_view(p_business_id,p_phone));
     ELSIF p_action='close' THEN
-      IF s.crm_control_phase<>'human' OR NOT s.is_paused OR s.crm_control_owner IS DISTINCT FROM p_actor THEN
+      IF length(trim(p_actor)) NOT BETWEEN 1 AND 200 OR NOT s.is_paused OR NOT (
+        (s.crm_control_phase='human' AND s.crm_control_owner IS NOT DISTINCT FROM p_actor)
+        OR (s.crm_control_phase IN ('ai','waiting') AND s.crm_control_owner IS NULL)
+      ) THEN
         RETURN jsonb_build_object('error','confirmed_owner_required','http_status',409);
       END IF;
       IF EXISTS(SELECT 1 FROM public.crm_send_attempts WHERE business_id=p_business_id AND phone_number=p_phone

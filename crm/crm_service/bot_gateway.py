@@ -64,6 +64,13 @@ class BotGateway:
                 ambiguous=method == "POST",
             ) from None
         if not 200 <= response.status_code < 300:
+            if method == "GET" and path.endswith("/control") and response.status_code == 404:
+                try:
+                    missing = response.json() == {"detail": "conversation_not_found"}
+                except ValueError:
+                    missing = False
+                if missing:
+                    raise BotGatewayError("conversation_state_not_found", 404)
             if response.status_code in {400, 401, 403, 404, 409, 413, 415, 416, 422, 423}:
                 raise BotGatewayError(f"bot_rejected_{response.status_code}", response.status_code)
             raise BotGatewayError(

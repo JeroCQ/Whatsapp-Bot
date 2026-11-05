@@ -27,3 +27,5 @@ Required design rules:
   parity. Avoid one-off fixes that only make the currently failing brand work.
 - Preserve compatibility with Tanaka, Memo's, Velvet and a future arbitrary
   `BUSINESS_ID` unless a task explicitly requires a breaking migration.
+
+- The CRM inbox has three tabs: Humano (default), IA and Todo. Every list uses the last real user/model/asesor message descending, with business/phone ties, before cursor pagination. Do not rank lists by priority or waiting time. A human case stays in Humano across reads/replies/sync until an explicit operator return; honor existing RESOLVED facts for a completed historical cycle without writing closures. Confirmed returns persist a CRM-only release boundary in the existing classification JSON; stale source handoffs cannot undo it, while new handoff events/control versions can. Historical dismissal requires the authenticated bot's exact conversation_not_found response, optimistic CRM version and an audited idempotent command; generic 404s never suffice. It preserves the original historical bucket and all messages, remains visible in Todo, and never creates bot state. No new CRM schema or variables are required.
