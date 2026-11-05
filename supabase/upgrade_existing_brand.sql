@@ -321,7 +321,7 @@ BEGIN
     RETURN v_response || jsonb_build_object('control',public.crm_control_view(p_business_id,p_phone));
   END IF;
 
-  IF p_action IN ('take','close','handoff','begin_send') THEN
+  IF p_action IN ('take','close','handoff','reset','begin_send') THEN
     IF p_request_id IS NULL OR length(p_request_id) NOT BETWEEN 1 AND 160 THEN
       RETURN jsonb_build_object('error','invalid_command_id','http_status',400);
     END IF;
@@ -362,11 +362,29 @@ BEGIN
           'crm-handoff:'||p_business_id||':'||p_request_id) ON CONFLICT(event_key) DO NOTHING;
     END IF;
     v_response := jsonb_build_object('command_id',p_request_id,'status','confirmed','control',public.crm_control_view(p_business_id,p_phone));
-  ELSIF p_action IN ('take','close','begin_send') THEN
+  ELSIF p_action IN ('take','close','reset','begin_send') THEN
     IF p_expected_version IS NULL OR p_expected_version<>s.crm_control_version THEN
       RETURN jsonb_build_object('error','control_version_conflict','http_status',409);
     END IF;
-    IF p_action='take' THEN
+    IF p_action='reset' THEN
+      IF COALESCE(p_actor,'')<>'bot' OR COALESCE(s.is_paused,true) OR s.crm_control_phase<>'ai' THEN
+        RETURN jsonb_build_object('error','active_ai_required_for_reset','http_status',409);
+      END IF;
+      IF EXISTS(SELECT 1 FROM public.crm_send_attempts WHERE business_id=p_business_id AND phone_number=p_phone
+                  AND status IN ('sending','unknown')) THEN
+        RETURN jsonb_build_object('error','unsettled_send_blocks_reset','http_status',409);
+      END IF;
+      UPDATE public.conversation_states SET current_state='GREETING',customer_data='{}'::jsonb,order_summary=NULL,
+        handoff_reason=NULL,chatwoot_conversation_id=NULL,crm_control_owner=NULL,
+        crm_control_version=crm_control_version+1,follow_up_token=NULL,follow_up_not_before=NULL
+        WHERE phone_number=p_phone;
+      -- Keep the CRM's incremental history/audit; reset only the bot's context.
+      INSERT INTO public.message_logs(phone_number,role,content,metadata,event_key)
+        VALUES(p_phone,'system','RESOLVED: Conversation reset; AI context cleared.',
+          jsonb_build_object('business_id',p_business_id,'source','crm_reset','source_event_id',p_request_id,'actor','bot'),
+          'crm-reset:'||p_business_id||':'||p_request_id) ON CONFLICT(event_key) DO NOTHING;
+      v_response := jsonb_build_object('command_id',p_request_id,'status','confirmed','control',public.crm_control_view(p_business_id,p_phone));
+    ELSIF p_action='take' THEN
       IF length(trim(p_actor)) NOT BETWEEN 1 AND 200 THEN RETURN jsonb_build_object('error','actor_required','http_status',400); END IF;
       IF s.crm_control_phase IN ('human','pausing') AND s.crm_control_owner IS DISTINCT FROM p_actor THEN
         RETURN jsonb_build_object('error','controlled_by_another_actor','http_status',409);
@@ -400,7 +418,24 @@ BEGIN
     ELSE
       control := public.crm_control_view(p_business_id,p_phone);
       IF p_payload->>'kind' NOT IN ('auto','human') THEN RETURN jsonb_build_object('error','invalid_send_kind','http_status',400); END IF;
-      IF p_payload->>'kind'='auto' AND (s.is_paused OR s.crm_control_phase<>'ai') THEN
+      IF p_payload->>'kind'='auto' AND p_payload->>'purpose'='handoff_ack' THEN
+        -- One text acknowledgement of this exact bot-created handoff. This is
+        -- still an auto attempt, so takeover waits for its sending/unknown state.
+        IF COALESCE(p_actor,'')<>'bot' OR NOT COALESCE(s.is_paused,false) OR s.crm_control_phase<>'waiting' OR s.crm_control_owner IS NOT NULL
+           OR length(COALESCE(p_payload->>'text','')) NOT BETWEEN 1 AND 4096 OR p_payload ? 'attachments' THEN
+          RETURN jsonb_build_object('error','automatic_send_fenced','http_status',409);
+        END IF;
+        SELECT * INTO cmd FROM public.crm_control_commands WHERE business_id=p_business_id
+          AND phone_number=p_phone AND command_id=p_payload->>'handoff_request_id' AND operation='handoff';
+        IF NOT FOUND OR NOT COALESCE((cmd.response#>>'{control,version}')::bigint=s.crm_control_version,false) THEN
+          RETURN jsonb_build_object('error','handoff_notice_not_authorized','http_status',409);
+        END IF;
+        IF EXISTS(SELECT 1 FROM public.crm_send_attempts WHERE business_id=p_business_id AND phone_number=p_phone
+            AND request#>>'{payload,purpose}'='handoff_ack'
+            AND request#>>'{payload,handoff_request_id}'=p_payload->>'handoff_request_id') THEN
+          RETURN jsonb_build_object('error','handoff_notice_already_reserved','http_status',409);
+        END IF;
+      ELSIF p_payload->>'kind'='auto' AND (s.is_paused OR s.crm_control_phase<>'ai') THEN
         RETURN jsonb_build_object('error','automatic_send_fenced','http_status',409);
       END IF;
       IF p_payload->>'kind'='human' THEN

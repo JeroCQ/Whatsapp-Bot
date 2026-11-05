@@ -2,6 +2,10 @@
 
 from pathlib import Path
 
+from test_bot_audit_contract import routed_bot as _routed_bot_fixture
+
+routed_bot = _routed_bot_fixture
+
 
 def test_config_has_one_generic_catalog_variable():
     source = Path("config.py").read_text(encoding="utf-8")
@@ -15,14 +19,17 @@ def test_bot_uses_deployment_business_for_prompt_and_catalog():
     assert 'load_file_catalog(config.PRESAVED_FILES_JSON, "PRESAVED_FILES_JSON")' in source
     assert 'config.BUSINESS_ID / "system_instruction.txt"' in source
     assert "link=config.catalog_public_url()" in source
-    assert "delivered_catalogs" in source
     assert "has_successful_file_delivery(phone, file_id)" in source
 
 
-def test_catalog_selection_is_instruction_driven_and_deduplicates_deliveries():
-    source = Path("bot.py").read_text(encoding="utf-8")
-    assert "requested_files = [file_id for file_id in requested_files if file_id not in delivered_catalogs]" in source
-    assert 'requested_files.insert(0, "catalogo_pdf")' not in source
+def test_catalog_selection_is_instruction_driven_and_deduplicates_deliveries(routed_bot, monkeypatch):
+    route, _ = routed_bot
+    monkeypatch.setattr(route.module, "has_successful_file_delivery", lambda *_: True)
+    result = route("Recomiéndame algo", {
+        "response": "Opciones para tu pedido", "trigger_handoff": False,
+        "requested_files": ["catalogo_memos", "catalogo_memos", "unconfigured-file"],
+    })
+    assert result.requested_files == []
 
 
 def test_main_only_logs_successful_file_delivery():

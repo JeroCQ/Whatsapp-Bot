@@ -1,6 +1,71 @@
 # CRM multimedia: actualización coordinada y manual
 
 Esta es la guía única de esta entrega para el bot, CRM y frontend real de Lovable.
+La entrega consolidada actual está en backend `fix/crm-bot-behavior-regressions`
+(PR hacia `feat/crm-media-delivery`) y frontend `fix/crm-chat-refresh` (PR hacia
+`main`). Conserva los arreglos anteriores de reanudación, imágenes y notificaciones;
+no hace falta reconstruirlos ni aplicarlos por separado. Las ramas/versiones
+anteriores de este documento son antecedentes.
+
+## Correcciones del bot y acceso de los negocios
+
+El código sigue siendo común a todos los negocios. Se corrige la respuesta que
+prometía una transferencia después de descartarla por ser un saludo, la supresión
+de un catálogo solicitado por una entrega histórica y la exclusión de `/reset`
+en CRM. Los pedidos simples de catálogo usan los archivos configurados sin
+esperar a Gemini. Se reducen lecturas/escrituras redundantes de estado. No se
+cambian modelo, tarifas, cuentas bancarias, instrucciones comerciales ni límites
+de Meta; un timeout real de Gemini aún puede demorar otras respuestas.
+El worker reprograma cada empresa al terminar su propia lectura: ya no espera
+que acabe la más lenta para iniciar otra consulta de las empresas rápidas.
+
+`/reset` con IA activa reinicia memoria/contexto mediante una orden atómica del
+bot, invalida trabajos antiguos y conserva historial/auditoría CRM. No libera
+control humano ni ignora envíos pendientes/desconocidos. El aviso de handoff solo
+se permite para el handoff real de ese mensaje, una vez y antes de que un humano
+tome control. Sigue siendo un envío automático reservado: takeover espera si
+está en vuelo; no autoriza catálogos ni otras respuestas durante una pausa.
+
+Los perfiles de los cuatro negocios usan el mismo compositor con alcance propio
+y las contraseñas existentes. Admin conserva su actor técnico; los actores de
+negocio se derivan en servidor. Un caso tomado por Admin debe ser cerrado/devuelto
+a IA por su propietario antes de que otra cuenta lo tome; cambiar login no
+transfiere propiedad. Los perfiles compartidos no identifican empleados.
+
+### Orden manual de esta entrega
+
+1. Revisar los PR. Para cada bot que ya usa control CRM, hacer backup de su
+   Supabase aislado y revisar/aplicar **`supabase/upgrade_crm_bot_commands.sql`**
+   antes de actualizar el bot. Cambia solo la función y conserva datos/permisos.
+   Si aún no tiene esquema CRM, usar el upgrade canónico completo revisado; una
+   instalación nueva usa `bootstrap.sql`. No aplicar este SQL al PostgreSQL CRM.
+2. Actualizar primero el bot de pruebas y comprobar el ciclo; después actualizar
+   los negocios autorizados. Mantener root `/`, `railway.json` y
+   `python run_railway.py`, incluido su worker existente. No crear colas ni cambiar
+   números/webhooks/secretos de Meta ni reutilizar credenciales entre negocios.
+3. Actualizar `crm-staging-api` y `crm-staging-sync` al mismo commit consolidado,
+   root `/crm` y sus arranques actuales. No hay Alembic nuevo: permanece
+   `0004_delivery_receipts`. Conservar datos y empresas. Usar
+   `SYNC_INTERVAL_SECONDS=5` si el worker aún tiene 30 explícitamente.
+4. Integrar/publicar el frontend por Git/Lovable. Comprobar el aviso
+   `App en desarrollo, reporta los errores.` y los dos botones de actualizar.
+   Probar toma/respuesta/cierre también con cada cuenta de negocio, no solo Admin.
+5. Completar la configuración privada de notificaciones del apartado siguiente.
+   No se configuró ni activó automáticamente desde este entorno. Los botones de
+   actualizar solo leen: no repiten envíos ni comandos con resultado incierto.
+
+Prueba física posterior: saludo, catálogo y recepción del archivo, reset con IA
+activa, asesor/handoff, pausa, texto/audio/PDF humano, recibos, cierre y siguiente
+respuesta IA. Probar también que reset no libere control humano, que las empresas
+estén aisladas y que doble clic/timeout no duplique envíos. Los ensayos locales
+usan PostgreSQL y proveedores simulados; no demuestran producción/dispositivos.
+Rollback: commits anteriores de cada servicio. La función ampliada conserva firma
+y operaciones previas; no borrar datos ni reenviar mensajes históricos.
+
+La suite completa detectó dos expectativas antiguas sobre instrucciones de
+Memo’s/Velvet (cuenta/precios), reproducidas también en `9f22e311` sin estos cambios.
+No se alteraron instrucciones ni datos comerciales para ocultar esos fallos.
+
 La corrección posterior de nombres/orden/actualización de bandeja se entrega en
 `fix/crm-inbox-freshness` de ambos repositorios, con PR backend hacia
 `feat/crm-media-delivery` y frontend hacia `main`. Para esa corrección, actualizar
@@ -21,6 +86,45 @@ los valores `NOTIFICATIONS_ENABLED=false` de los ejemplos inferiores **solo al
 activar expresamente este flujo**; las fuentes sintéticas siguen apagadas.
 Backend: `fix/crm-web-push` de Whatsapp-Bot, PR hacia `feat/crm-media-delivery`.
 Frontend: `fix/crm-preview-refresh-notifications` de chatty-bot-command-center,
+PR hacia `main`. Los commits exactos se entregan con los PR; no se ha hecho merge,
+despliegue ni cambio de secretos desde Codex.
+
+1. Revisar e integrar el backend y actualizar primero `crm-staging-api` y
+   `crm-staging-sync`, conservando root `/crm`, Dockerfile, arranques y base actuales.
+   No modificar variables, ramas ni despliegues de ningún bot para Web Push.
+2. Configurar privadamente **en esos dos servicios CRM** el mismo par existente:
+   `VAPID_PRIVATE_KEY` (P-256 privado base64url o PEM completo),
+   `VAPID_SUBJECT=mailto:<correo-operativo-real>` y `NOTIFICATIONS_ENABLED=true`.
+   Si aún no existe el par VAPID, generar uno una sola vez fuera de Git y conservar
+   su privado en el canal de secretos; no pegarlo en chat/logs. No reutilizar
+   secretos de Meta, bots, Supabase, JWT ni control como clave VAPID.
+3. Publicar el frontend revisado por el flujo actual de Lovable después del backend.
+   El código llega por Git; no hace falta gastar créditos de la IA de Lovable para
+   reimplementarlo. No hay variable VAPID pública nueva en Lovable: su proxy
+   autenticado consulta `/v1/push/config` y recibe solo la clave pública derivada.
+   `configured:false` significa que falta completar la configuración; un permiso
+   concedido no equivale a entrega de notificaciones.
+4. En el dominio HTTPS final, iniciar sesión y aceptar la invitación de avisos.
+   El permiso nativo requiere una acción explícita del usuario. En iPhone/iPad,
+   probar desde la app agregada a pantalla de inicio en iOS/iPadOS 16.4 o posterior.
+   Comprobar un handoff nuevo tras baseline, una sola alerta, apertura de su
+   empresa/conversación y que cerrar/cambiar cuenta desactive ese dispositivo.
+
+No requiere SQL, migraciones, servicios ni infraestructura nuevos. El worker
+existente conserva la sincronización y entrega push en un hilo separado para que
+un proveedor lento no detenga la ingesta. Se mantiene el perfil de acceso existente;
+Admin compartido no acredita identidad individual de un empleado. Para rollback de
+avisos, volver a `NOTIFICATIONS_ENABLED=false` en API y sync sin tocar los bots.
+La entrega física en el hosting final y en iPhone/Android sigue pendiente: las
+pruebas locales usan proveedores simulados y no envían notificaciones reales.
+
+## Activación coordinada de notificaciones web
+
+Esta sección amplía únicamente las notificaciones del CRM existente y sustituye
+los valores `NOTIFICATIONS_ENABLED=false` de los ejemplos inferiores **solo al
+activar expresamente este flujo**; las fuentes sintéticas siguen apagadas.
+Backend: `fix/crm-bot-behavior-regressions` de Whatsapp-Bot, PR hacia `feat/crm-media-delivery`.
+Frontend: `fix/crm-chat-refresh` de chatty-bot-command-center,
 PR hacia `main`. Los commits exactos se entregan con los PR; no se ha hecho merge,
 despliegue ni cambio de secretos desde Codex.
 
