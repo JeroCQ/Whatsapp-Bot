@@ -71,6 +71,7 @@ OPERATIONS = {
     ("GET", "/v1/notifications"),
     ("GET", "/v1/me/preferences"),
     ("PATCH", "/v1/me/preferences"),
+    ("GET", "/v1/push/config"),
     ("POST", "/v1/push/subscriptions"),
     ("DELETE", "/v1/push/subscriptions/{item_id}"),
     ("GET", "/v1/sync-status"),
@@ -310,7 +311,6 @@ def test_scope_is_not_selected_by_query(contract_client, settings):
     [
         "/v1/tasks",
         "/v1/analytics/response-times",
-        "/v1/push/config",
         "/v1/vapid-public-key",
         "/v1/agents/employee-007/revoke",
     ],

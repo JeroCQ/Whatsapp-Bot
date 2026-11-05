@@ -3,7 +3,7 @@ import json
 import logging
 import signal
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 
 from crm_service.db import database
 from crm_service.notifications import dispatch
@@ -30,6 +30,11 @@ def main() -> None:
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     signal.signal(signal.SIGINT, lambda *_: stop.set())
     worker = Synchronizer(settings, sessions)
+    # Push providers can stall independently from source reads. One local
+    # background dispatcher keeps the existing sync process responsive and
+    # prevents overlapping push batches in that process.
+    push_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="crm-push")
+    push_run: Future[int] | None = None
     try:
         if args.once:
             result = worker.run(args.business)
@@ -49,11 +54,18 @@ def main() -> None:
                 # no longer delays all other brands before their first read.
                 with ThreadPoolExecutor(max_workers=max(1, min(4, len(pending)))) as pool:
                     list(pool.map(worker.run, pending))
-                dispatch(settings, sessions)
+                if push_run is None or push_run.done():
+                    if push_run is not None:
+                        try:
+                            push_run.result()
+                        except Exception as error:
+                            logging.error("push_dispatch_failed code=%s", type(error).__name__)
+                    push_run = push_pool.submit(dispatch, settings, sessions)
             except Exception as error:
                 logging.error("worker_iteration_failed code=%s", type(error).__name__)
             stop.wait(settings.sync_interval)
     finally:
+        push_pool.shutdown(wait=True)
         engine.dispose()
 
 

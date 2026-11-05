@@ -54,9 +54,15 @@ No usa default_transaction_read_only como barrera. No se cambian roles/política
 de Supabase actuales. PUBLIC impide afirmar privilegios acotados en un Supabase
 compartido sin revisión externa o una fachada aislada endurecida.
 
-NOTIFICATIONS_ENABLED=false es obligatorio al cargar configuración en esta rama.
-No hay endpoint de clave pública VAPID, revocación/administración de identidades,
-tareas globales o métricas de tiempos/SLA. Un profile compartido por marca comparte
+Las notificaciones están apagadas por defecto y son opcionales mediante
+`NOTIFICATIONS_ENABLED=true`, `VAPID_PRIVATE_KEY` y `VAPID_SUBJECT` privados en
+API y sync. `GET /v1/push/config` autentica al perfil actual y expone solo la clave
+pública derivada y el estado real de configuración. Sin claves válidas no anuncia
+que Web Push esté listo ni contacta al proveedor. El dispatcher usa un hilo local
+separado dentro del worker existente para no bloquear la ingesta de mensajes.
+Ver [activación y rollback](docs/RUNBOOK.md#activación-web-push).
+No hay revocación/administración global de identidades, tareas globales o métricas
+de tiempos/SLA. Un profile compartido por marca o Admin comparte
 leído y preferencias; no identifica individualmente a cada empleado. No hay
 envío Meta independiente: el compositor se conecta a comandos del bot mediante
 CRM; tomar control, responder, cerrar y reanudar existen bajo flags por negocio.

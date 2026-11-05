@@ -14,18 +14,44 @@ No crea otro CRM, otra base, otra autenticación ni otro emisor de WhatsApp.
 La ampliación a Tanaka, Memo’s y Velvet está autorizada en el código por el
 registro configurado; no se ha activado ni desplegado ningún negocio desde Codex.
 
-Corrección posterior de reanudación de IA: `fix/crm-ai-resume-legacy-chatwoot`,
-con PR hacia `feat/crm-media-delivery`. Un ticket histórico de Chatwoot no
-representa una pausa vigente en una conversación vinculada al control CRM del
-bot. Se conservan las fases humanas, pausas explícitas y versiones de control;
-las conversaciones legacy sin vinculación CRM mantienen su comportamiento.
-Aplica a instalaciones nuevas y existentes, sin SQL, migraciones, variables ni
-cambios frontend adicionales. Tras revisar e integrar el PR, actualizar solo
-el bot autorizado con el arranque existente (y su worker existente si fuera
-separado). Verificar con un mensaje nuevo y una nueva solicitud de asesor;
-no reenviar automáticamente entradas antiguas marcadas como procesadas. La
-validación local usa PostgreSQL desechable y Meta/Gemini simulados, sin despliegue
-ni prueba física en WhatsApp. Para rollback, volver al commit anterior del bot.
+## Activación coordinada de notificaciones web
+
+Esta sección amplía únicamente las notificaciones del CRM existente y sustituye
+los valores `NOTIFICATIONS_ENABLED=false` de los ejemplos inferiores **solo al
+activar expresamente este flujo**; las fuentes sintéticas siguen apagadas.
+Backend: `fix/crm-web-push` de Whatsapp-Bot, PR hacia `feat/crm-media-delivery`.
+Frontend: `fix/crm-preview-refresh-notifications` de chatty-bot-command-center,
+PR hacia `main`. Los commits exactos se entregan con los PR; no se ha hecho merge,
+despliegue ni cambio de secretos desde Codex.
+
+1. Revisar e integrar el backend y actualizar primero `crm-staging-api` y
+   `crm-staging-sync`, conservando root `/crm`, Dockerfile, arranques y base actuales.
+   No modificar variables, ramas ni despliegues de ningún bot para Web Push.
+2. Configurar privadamente **en esos dos servicios CRM** el mismo par existente:
+   `VAPID_PRIVATE_KEY` (P-256 privado base64url o PEM completo),
+   `VAPID_SUBJECT=mailto:<correo-operativo-real>` y `NOTIFICATIONS_ENABLED=true`.
+   Si aún no existe el par VAPID, generar uno una sola vez fuera de Git y conservar
+   su privado en el canal de secretos; no pegarlo en chat/logs. No reutilizar
+   secretos de Meta, bots, Supabase, JWT ni control como clave VAPID.
+3. Publicar el frontend revisado por el flujo actual de Lovable después del backend.
+   El código llega por Git; no hace falta gastar créditos de la IA de Lovable para
+   reimplementarlo. No hay variable VAPID pública nueva en Lovable: su proxy
+   autenticado consulta `/v1/push/config` y recibe solo la clave pública derivada.
+   `configured:false` significa que falta completar la configuración; un permiso
+   concedido no equivale a entrega de notificaciones.
+4. En el dominio HTTPS final, iniciar sesión y aceptar la invitación de avisos.
+   El permiso nativo requiere una acción explícita del usuario. En iPhone/iPad,
+   probar desde la app agregada a pantalla de inicio en iOS/iPadOS 16.4 o posterior.
+   Comprobar un handoff nuevo tras baseline, una sola alerta, apertura de su
+   empresa/conversación y que cerrar/cambiar cuenta desactive ese dispositivo.
+
+No requiere SQL, migraciones, servicios ni infraestructura nuevos. El worker
+existente conserva la sincronización y entrega push en un hilo separado para que
+un proveedor lento no detenga la ingesta. Se mantiene el perfil de acceso existente;
+Admin compartido no acredita identidad individual de un empleado. Para rollback de
+avisos, volver a `NOTIFICATIONS_ENABLED=false` en API y sync sin tocar los bots.
+La entrega física en el hosting final y en iPhone/Android sigue pendiente: las
+pruebas locales usan proveedores simulados y no envían notificaciones reales.
 
 ## Versiones y servicios
 

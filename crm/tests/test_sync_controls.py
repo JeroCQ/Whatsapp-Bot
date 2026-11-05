@@ -242,8 +242,14 @@ def test_admin_source_keys_cannot_activate_worker(monkeypatch):
         Settings.from_env(service="worker")
 
 
-def test_notifications_cannot_be_activated_in_staging(monkeypatch):
+def test_notifications_require_explicit_activation_and_load_private_vapid(monkeypatch, vapid_key):
     basic_env(monkeypatch)
+    assert not Settings.from_env().notifications_enabled
     monkeypatch.setenv("NOTIFICATIONS_ENABLED", "true")
-    with pytest.raises(ValueError, match="NOTIFICATIONS_ENABLED=false"):
-        Settings.from_env()
+    monkeypatch.setenv("VAPID_PRIVATE_KEY", vapid_key)
+    monkeypatch.setenv("VAPID_SUBJECT", "mailto:tests@example.invalid")
+    configured = Settings.from_env()
+    assert configured.notifications_enabled
+    assert configured.vapid_private_key == vapid_key
+    assert configured.vapid_subject == "mailto:tests@example.invalid"
+    assert vapid_key not in repr(configured)
