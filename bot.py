@@ -282,7 +282,6 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
 
     # Recuperar el historial
     history = get_message_logs(phone, limit=50)
-    delivered_catalogs = {file_id for file_id in FILE_CATALOG if has_successful_file_delivery(phone, file_id)}
     remembered_data = dict(state_record.get("customer_data") or {})
     remembered_data.update(supplied_customer_data(history))
     remembered_order = compact_order_summary(history)
@@ -348,6 +347,19 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
                 "Tu solicitud requiere atención de un asesor.", [],
                 follow_up_message="", handoff_requested=True, handoff_reason=keyword_reason,
             )
+        if not is_image and catalog_may_suppress_handoff(text):
+            # A direct request for a configured catalog is deterministic. It
+            # must not wait for inference or disappear because a different
+            # cycle once sent this file. Combined/human/B2B requests retain the
+            # existing model and escalation path.
+            requested_files = catalogs_for_customer_request(text, FILE_CATALOG, history)
+            if requested_files:
+                operational_event("CATALOG_REQUEST_RESOLVED", phone=phone, stage="DIRECT_RESPONSE",
+                                  reason="explicit_catalog_request", result="files_selected")
+                return BotTurn(
+                    "¿Qué producto te interesa o qué te gustaría pedir?", requested_files,
+                    send_files_before_response=True,
+                )
         response = _call_gemini(
             "message_logic",
             lambda http_options: client.models.generate_content(
@@ -408,6 +420,10 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
             print(f"[IA HANDOFF SUPPRESSED] Saludo simple no requiere asesor: {text!r}")
             trigger_handoff = False
             reason = ""
+            # The discarded action and its customer-facing text must agree.
+            # A stale image/context must not leave a promise of human review.
+            response_text = "¡Hola! 😊 Cuéntame qué necesitas y te ayudo por aquí."
+            ai_data["follow_up_message"] = ""
 
         requested_files = list(dict.fromkeys(
             file_id for file_id in ai_data.get("requested_files", []) if file_id in FILE_CATALOG
@@ -431,6 +447,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
             print("[IA HANDOFF SUPPRESSED] Solicitud de catálogo disponible se resuelve automáticamente")
             trigger_handoff = False
             reason = ""
+            response_text = "¿Qué producto te interesa o qué te gustaría pedir?"
         if not resend_requested:
             requested_files = [file_id for file_id in requested_files
                                if file_id in deterministic_files or file_id not in delivered_catalogs]
@@ -465,7 +482,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
         )
 
     except Exception as e:
-        print(f"[ERROR GEMINI] Falló la inferencia con Gemini:")
+        print("[ERROR GEMINI] Falló la inferencia con Gemini:")
         handoff_reason = _record_gemini_failure(e, "message_logic", started_at, phone)
 
         if not handoffs_enabled:

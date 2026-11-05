@@ -202,14 +202,14 @@ class Settings:
                 raise ValueError("Each business needs a distinct source database and dedicated login")
             sources.add(identity)
             readers.add(parsed.username)
-        enabled = os.environ.get("NOTIFICATIONS_ENABLED", "false").lower() == "true"
-        if enabled:
-            raise ValueError("This staging branch requires NOTIFICATIONS_ENABLED=false")
         return cls(
             database_url=database,
             jwt_secret=jwt_secret,
             sync_secret=sync_secret,
             businesses=businesses,
+            notifications_enabled=flag("NOTIFICATIONS_ENABLED"),
+            vapid_private_key=os.environ.get("VAPID_PRIVATE_KEY", "").strip(),
+            vapid_subject=os.environ.get("VAPID_SUBJECT", "").strip(),
             sync_interval=int(os.environ.get("SYNC_INTERVAL_SECONDS", "5")),
             page_size=int(os.environ.get("SYNC_PAGE_SIZE", "500")),
             max_pages=int(os.environ.get("SYNC_MAX_PAGES", "20")),

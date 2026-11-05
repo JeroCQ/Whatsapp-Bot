@@ -74,7 +74,21 @@ def normalize_follow_up_message(message: str) -> str:
 
 
 def human_control_active(state):
-    return bool(state and (state.get("is_paused") or state.get("chatwoot_conversation_id") or state.get("current_state") == "HUMAN_HANDOFF"))
+    if not state:
+        return False
+    # The bot's control RPC binds CRM conversations to their business. An old
+    # Chatwoot ticket can survive a migration/CRM close; it is history, not a
+    # current pause. Fresh legacy deployments have the same phase column with a
+    # default of 'ai', so that column alone must never bypass Chatwoot control.
+    crm_bound = bool(state.get("crm_control_business_id")) and state.get(
+        "crm_control_phase"
+    ) in {"ai", "waiting", "pausing", "human"}
+    return bool(
+        state.get("is_paused")
+        or state.get("current_state") == "HUMAN_HANDOFF"
+        or (crm_bound and state.get("crm_control_phase") != "ai")
+        or (not crm_bound and state.get("chatwoot_conversation_id"))
+    )
 
 
 def customer_closes_without_pending_request(customer_message, state=None):

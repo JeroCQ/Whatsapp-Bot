@@ -9,6 +9,7 @@ import pytest
 
 @pytest.fixture
 def profiles():
+    calls = []
     customers = {
         "573001": {"phone_number": "573001", "name": "Cliente"},
         "573002": {"phone_number": "573002", "name": "Otro"},
@@ -17,6 +18,7 @@ def profiles():
 
     class Query:
         def __init__(self, table):
+            self.table = table
             self.rows = customers if table == "customers" else states
             self.filters, self.values, self.mode = {}, {}, "select"
             self.placeholder = False
@@ -43,6 +45,7 @@ def profiles():
             return self
 
         def execute(self):
+            calls.append((self.table, self.mode))
             if self.mode == "insert_ignore":
                 self.rows.setdefault(self.values["phone_number"], dict(self.values))
             selected = [
@@ -80,6 +83,7 @@ def profiles():
         {"config": config, "supabase": supabase, "observability": observation},
     ):
         spec.loader.exec_module(module)
+    module.test_calls = calls
     return module, customers
 
 
@@ -100,3 +104,16 @@ def test_recovery_default_does_not_erase_existing_profile(profiles):
     database.get_or_create_customer_state("573001")
     database.get_or_create_customer_state("573001", "Otro nombre entrante")
     assert rows["573001"]["name"] == "Nombre existente"
+
+
+def test_existing_state_read_does_not_repeat_customer_and_state_upserts(profiles):
+    database, _ = profiles
+    assert database.get_or_create_customer_state("573001")["is_paused"]
+    assert database.test_calls == [("conversation_states", "select")]
+
+
+def test_first_message_still_creates_customer_and_state_safely(profiles):
+    database, rows = profiles
+    state = database.get_or_create_customer_state("573009", "Nombre nuevo")
+    assert state["phone_number"] == "573009" and not state["is_paused"]
+    assert rows["573009"]["name"] == "Nombre nuevo"

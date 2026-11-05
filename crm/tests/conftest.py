@@ -1,8 +1,10 @@
+import base64
 import os
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric import ec
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 
@@ -64,8 +66,19 @@ def sessions(settings):
 
 
 @pytest.fixture
-def notifications_settings(settings):
-    return replace(settings, notifications_enabled=True, vapid_private_key="synthetic-vapid")
+def vapid_key():
+    private = ec.generate_private_key(ec.SECP256R1()).private_numbers().private_value
+    return base64.urlsafe_b64encode(private.to_bytes(32, "big")).decode().rstrip("=")
+
+
+@pytest.fixture
+def notifications_settings(settings, vapid_key):
+    return replace(
+        settings,
+        notifications_enabled=True,
+        vapid_private_key=vapid_key,
+        vapid_subject="mailto:tests@example.invalid",
+    )
 
 
 @pytest.fixture

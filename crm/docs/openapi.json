@@ -1825,6 +1825,26 @@
         }
       }
     },
+    "/v1/push/config": {
+      "get": {
+        "summary": "Notification Config",
+        "operationId": "notification_config_v1_push_config_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Notification Config V1 Push Config Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/push/subscriptions": {
       "post": {
         "summary": "Subscribe",

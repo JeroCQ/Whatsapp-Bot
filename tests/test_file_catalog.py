@@ -129,6 +129,17 @@ def test_catalog_request_uses_generic_asset_without_brand_specific_id():
     ]
 
 
+def test_general_catalog_request_does_not_choose_a_shorter_wholesale_asset():
+    catalog = {
+        "catalogo_general": PresavedFile(
+            "catalogo_general", "Nuestro catálogo completo con todos los productos y precios para clientes", "document"
+        ),
+        "catalogo_b2b": PresavedFile("catalogo_b2b", "Mayorista", "document"),
+    }
+    assert catalogs_for_customer_request("Tienes catálogo?", catalog) == ["catalogo_general"]
+    assert catalogs_for_customer_request("Quiero el catálogo mayorista", catalog) == ["catalogo_b2b"]
+
+
 def test_catalog_retry_prefers_last_successful_asset_across_brands():
     catalog = {
         "catalogo_actual": PresavedFile("catalogo_actual", "Catálogo general", "document"),

@@ -590,7 +590,19 @@ def _command_status(pilot, command_id):
     return response.json()
 
 
-def test_client_handoff_pause_human_receipt_close_and_ai_resume(pilot):
+@pytest.mark.parametrize("legacy_chatwoot_id", [None, 44])
+def test_client_handoff_pause_human_receipt_close_and_ai_resume(pilot, legacy_chatwoot_id):
+    if legacy_chatwoot_id is not None:
+        # A migrated business keeps its old ticket reference after a CRM close.
+        # That reference must neither hold AI control nor swallow a new handoff.
+        import database as bot_database
+
+        bot_database.get_or_create_customer_state(PHONE, "SYNTHETIC contact")
+        with psycopg.connect(pilot.bot_dsn, autocommit=True) as connection:
+            connection.execute(
+                "UPDATE conversation_states SET chatwoot_conversation_id=%s WHERE phone_number=%s",
+                (legacy_chatwoot_id, PHONE),
+            )
     _post_incoming(pilot)
     control = _control(pilot)
     assert control["phase"] == "waiting" and control["is_paused"]
@@ -632,6 +644,16 @@ def test_client_handoff_pause_human_receipt_close_and_ai_resume(pilot):
     )
     assert len(pilot.meta.sent) == count + 1
     assert pilot.meta.sent[-1]["payload"]["text"]["body"] == "SYNTHETIC AI response"
+    assert "Hola otra vez" in pilot.llm_calls
+    _post_incoming(
+        pilot, message_id="wamid.SYNTHETIC.handoff-again", body="Necesito un asesor"
+    )
+    assert _control(pilot)["phase"] == "waiting"
+    if legacy_chatwoot_id is not None:
+        row = pilot.repository.table("conversation_states").select("chatwoot_conversation_id").eq(
+            "phone_number", PHONE
+        ).execute().data[0]
+        assert row["chatwoot_conversation_id"] == legacy_chatwoot_id
 
 
 def test_double_click_and_retry_send_once_and_cross_business_rejected(pilot):
@@ -795,7 +817,9 @@ def test_real_bot_export_populates_crm_and_tracks_cycle(pilot):
         ).json()["status"]
         == "accepted"
     )
-    assert sync()["bucket"] == "human_active"
+    answered = sync()
+    assert answered["bucket"] == "awaiting_human"
+    assert answered["priority_reason"] == "human_waiting_customer"
     human = (
         pilot.repository.table("message_logs")
         .select("*")
@@ -1055,12 +1079,24 @@ def test_failed_delivery_updates_inbox_incrementally_and_late_sent_cannot_erase_
     )
     assert response.json()["status"] == "accepted"
     provider_message = pilot.meta.sent[-1]
-    assert sync()["bucket"] == "human_active"
+    answered = sync()
+    assert answered["bucket"] == "awaiting_human"
+    assert answered["priority_reason"] == "human_waiting_customer"
     accepted = (
         sync()
     )  # Advance the ordinary rolling-reconciliation deadline before the callback.
-    with pilot.app.state.sessions() as session:
+    with pilot.app.state.sessions.begin() as session:
         cursor = session.get(SyncCursor, (BUSINESS, "message_reconciliation"))
+        if cursor is None:
+            # The bot API's live lane need not initialize the legacy historical
+            # sweep. Explicitly postpone it to prove the new receipt arrives
+            # incrementally rather than depending on a historical reread.
+            from datetime import timedelta
+
+            cursor = SyncCursor(business_id=BUSINESS, resource="message_reconciliation", value={
+                "id": 0, "next_at": (datetime.now(timezone.utc) + timedelta(minutes=1)).isoformat(),
+            })
+            session.add(cursor)
         assert cursor and datetime.fromisoformat(
             cursor.value["next_at"]
         ) > datetime.now(timezone.utc)

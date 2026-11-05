@@ -152,6 +152,77 @@ def test_simple_catalog_request_still_resolves_automatically(routed_bot):
     assert pauses == []
 
 
+@pytest.mark.parametrize("routed_bot", ["tanaka", "memos", "velvet", "briosos"], indirect=True)
+@pytest.mark.parametrize("text", ["Tienes catálogo?", "¿Tienen catálogos?"])
+def test_explicit_catalog_request_sends_again_without_inference_or_historic_delivery_queries(
+    routed_bot, monkeypatch, text
+):
+    from file_catalog import PresavedFile
+
+    route, pauses = routed_bot
+    module = route.module
+    module.FILE_CATALOG.clear()
+    module.FILE_CATALOG.update({
+        "catalogo_general": PresavedFile(
+            "catalogo_general", "Catálogo completo con productos y precios para clientes", "document"
+        ),
+        "catalogo_b2b": PresavedFile("catalogo_b2b", "Mayorista", "document"),
+    })
+    monkeypatch.setattr(module, "_call_gemini", lambda *a: pytest.fail("An explicit catalog request needs no inference"))
+    monkeypatch.setattr(module, "has_successful_file_delivery", lambda *a: pytest.fail("A historic send cannot cancel the customer's new request"))
+
+    turn = module.process_message_logic("57300", text)
+
+    assert turn.requested_files == ["catalogo_general"]
+    assert turn.send_files_before_response
+    assert not turn.handoff_requested
+    assert pauses == []
+
+
+def test_ordinary_response_does_not_query_every_catalog_delivery(routed_bot, monkeypatch):
+    route, _ = routed_bot
+    monkeypatch.setattr(route.module, "has_successful_file_delivery", lambda *a: pytest.fail("No selected file needs a delivery lookup"))
+
+    turn = route("Hola", {"response": "Hola, ¿cómo te ayudo?", "trigger_handoff": False})
+
+    assert turn.response == "Hola, ¿cómo te ayudo?"
+    assert turn.requested_files == []
+
+
+def test_incidental_model_file_selection_keeps_durable_duplicate_protection(routed_bot, monkeypatch):
+    route, pauses = routed_bot
+    calls = []
+    monkeypatch.setattr(route.module, "has_successful_file_delivery", lambda *a: calls.append(a) or True)
+
+    turn = route("Cuéntame más de esta opción", {
+        "response": "¿Qué te gustaría conocer?", "trigger_handoff": False,
+        "requested_files": ["catalogo_memos"],
+    })
+
+    assert turn.requested_files == []
+    assert calls == [("57300", "catalogo_memos")]
+    assert pauses == []
+
+
+@pytest.mark.parametrize("routed_bot", ["tanaka", "memos", "velvet", "briosos"], indirect=True)
+def test_suppressed_historical_image_handoff_cannot_leave_a_transfer_promise(routed_bot):
+    route, pauses = routed_bot
+    turn = route("Hola", {
+        "response": "Voy a revisar la imagen con el equipo. Ya dejé tu solicitud.",
+        "trigger_handoff": True,
+        "handoff_reason": "Imagen anterior necesita revisión",
+        "follow_up_message": "Un asesor revisará tu solicitud",
+    })
+
+    assert not turn.handoff_requested
+    assert turn.handoff_reason == ""
+    assert "imagen" not in turn.response.lower()
+    assert "solicitud" not in turn.response.lower()
+    assert "equipo" not in turn.response.lower()
+    assert turn.follow_up_message == ""
+    assert pauses == []
+
+
 def test_genuine_human_request_is_not_cancelled_by_available_catalog(routed_bot):
     route, pauses = routed_bot
     turn = route("Necesito asesor y el catálogo", {"response": "Lo revisa un asesor", "trigger_handoff": True,
