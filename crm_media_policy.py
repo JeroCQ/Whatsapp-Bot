@@ -66,8 +66,15 @@ SUPPORTED_MIMES = tuple(MIMES)
 
 
 class PolicyError(ValueError):
-    def __init__(self, code: str, status_code: int = 422):
+    def __init__(
+        self,
+        code: str,
+        status_code: int = 422,
+        *,
+        diagnostic: dict[str, str] | None = None,
+    ):
         self.code, self.status_code = code, status_code
+        self.diagnostic = diagnostic or {}
         super().__init__(code)
 
 
@@ -206,8 +213,14 @@ def _input(path: str, mime: str) -> list[str]:
     ]
 
 
-def _probe(path: str, mime: str) -> str:
-    text = _run_ffmpeg([*_input(path, mime), "-map", "0", "-t", "0", "-f", "null", "-"])
+def _probe(path: str, mime: str, *, allow_mp4_opus: bool = False) -> str:
+    try:
+        text = _run_ffmpeg(
+            [*_input(path, mime), "-map", "0", "-t", "0", "-f", "null", "-"]
+        )
+    except PolicyError as error:
+        error.diagnostic = {"stage": "probe", "mime_type": mime}
+        raise
     if "Stream #" not in text:
         raise PolicyError("invalid_attachment_content", 415)
     if mime.startswith("video/"):
@@ -221,13 +234,30 @@ def _probe(path: str, mime: str) -> str:
         required = {
             "audio/ogg": "opus",
             "audio/webm": "opus",
-            "audio/mp4": "aac",
+            # Chromium MediaRecorder can produce Opus inside MP4. Accept it
+            # only as input to voice-note normalization, never as a Meta file.
+            "audio/mp4": r"(?:aac|opus)" if allow_mp4_opus else "aac",
             "audio/aac": "aac",
             "audio/amr": r"amr(?:_nb|_wb)?",
             "audio/mpeg": "mp3",
         }[mime]
-        if not re.search(rf"Audio:\s*{required}\b", text):
-            raise PolicyError("unsupported_audio_codec", 415)
+        # Read the actual input stream, not codec-like text in MP4 metadata or
+        # the null output's PCM stream. Metadata must not authorize a codec.
+        codec = re.search(
+            r"^\s*Stream #0:\d+[^\r\n]*?: Audio:\s*([A-Za-z0-9_]+)\b",
+            text,
+            re.MULTILINE,
+        )
+        if not codec or not re.fullmatch(required, codec.group(1)):
+            raise PolicyError(
+                "unsupported_audio_codec",
+                415,
+                diagnostic={
+                    "stage": "probe",
+                    "mime_type": mime,
+                    "audio_codec": codec.group(1) if codec else "unknown",
+                },
+            )
     if mime.startswith("image/"):
         _run_ffmpeg(
             [
@@ -462,28 +492,35 @@ def _convert_audio(path: str, mime: str, target: str, *, playback: bool) -> None
         if playback
         else ["-c:a", "libopus", "-b:a", "32k", "-f", "ogg"]
     )
-    _run_ffmpeg(
-        [
-            "-y",
-            "-loglevel",
-            "error",
-            *_input(path, mime),
-            "-vn",
-            "-map_metadata",
-            "-1",
-            "-ac",
-            "1",
-            "-ar",
-            "48000",
-            "-threads",
-            "1",
-            *output,
-            "-fs",
-            str(LIMITS["audio"] + 1),
-            str(target),
-        ],
-        timeout=30,
-    )
+    try:
+        _run_ffmpeg(
+            [
+                "-y",
+                "-loglevel",
+                "error",
+                *_input(path, mime),
+                "-vn",
+                "-map_metadata",
+                "-1",
+                "-ac",
+                "1",
+                "-ar",
+                "48000",
+                "-threads",
+                "1",
+                *output,
+                "-fs",
+                str(LIMITS["audio"] + 1),
+                str(target),
+            ],
+            timeout=30,
+        )
+    except PolicyError as error:
+        error.diagnostic = {
+            "stage": "playback_conversion" if playback else "voice_note_conversion",
+            "mime_type": mime,
+        }
+        raise
     if os.path.getsize(target) > LIMITS["audio"]:
         raise PolicyError("attachment_too_large", 413)
 
@@ -681,7 +718,7 @@ def inspect_media(
                 and (brand.startswith(b"3gp") if mime == "video/3gpp" else True)
             )
         if valid:
-            probe = _probe(path, mime)
+            probe = _probe(path, mime, allow_mp4_opus=voice_note and normalize)
             if (
                 normalize
                 and voice_note

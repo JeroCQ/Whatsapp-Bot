@@ -215,6 +215,136 @@ def test_safari_mp4_voice_note_converts_to_provider_format(samples):
         Path(converted.path).unlink()
 
 
+@pytest.fixture(scope="module")
+def browser_mp4_recordings(tmp_path_factory):
+    folder = tmp_path_factory.mktemp("browser-mp4-recordings")
+    recordings = {}
+    for codec in ("aac", "libopus", "alac"):
+        for fragmented in (False, True):
+            path = folder / f"{codec}-{fragmented}.m4a"
+            ffmpeg(
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=0.2",
+                "-c:a",
+                codec,
+                "-ac",
+                "2",
+                "-metadata",
+                "comment=Audio: aac synthetic-private-metadata",
+                *(
+                    ["-movflags", "+frag_keyframe+empty_moov+default_base_moof"]
+                    if fragmented
+                    else []
+                ),
+                "-f",
+                "mp4",
+                str(path),
+            )
+            recordings[codec, fragmented] = path
+    return recordings
+
+
+@pytest.mark.parametrize("codec", ["aac", "libopus"])
+@pytest.mark.parametrize("fragmented", [False, True])
+def test_mp4_browser_voice_note_converts_real_codec(
+    browser_mp4_recordings,
+    codec,
+    fragmented,
+):
+    from crm_media_policy import _probe
+
+    path = browser_mp4_recordings[codec, fragmented]
+    original = path.read_bytes()
+    # Chromium's audio/mp4 MediaRecorder produces Opus, unlike Safari's AAC.
+    mime = "audio/mp4;codecs=opus" if codec == "libopus" else "audio/mp4"
+    converted = inspect_media(path, mime, "recording.m4a", voice_note=True)
+    try:
+        assert converted.mime_type == "audio/ogg"
+        assert converted.filename == "recording.ogg"
+        assert converted.voice_note
+        assert converted.path != str(path)
+        assert Path(converted.path).read_bytes().startswith(b"OggS")
+        probe = _probe(converted.path, "audio/ogg")
+        assert "Audio: opus" in probe and "mono" in probe
+        assert path.read_bytes() == original
+    finally:
+        Path(converted.path).unlink()
+
+
+@pytest.mark.parametrize("voice_note,normalize", [(False, True), (True, False)])
+def test_mp4_opus_still_requires_voice_note_conversion(
+    browser_mp4_recordings,
+    voice_note,
+    normalize,
+):
+    with pytest.raises(PolicyError, match="unsupported_audio_codec") as error:
+        inspect_media(
+            browser_mp4_recordings["libopus", True],
+            "audio/mp4",
+            "recording.m4a",
+            voice_note=voice_note,
+            normalize=normalize,
+        )
+    assert error.value.status_code == 415
+
+
+def test_mp4_voice_note_rejects_other_codecs_with_safe_diagnostic(
+    browser_mp4_recordings,
+):
+    with pytest.raises(PolicyError, match="unsupported_audio_codec") as error:
+        inspect_media(
+            browser_mp4_recordings["alac", True],
+            "audio/mp4;codecs=opus",
+            "private-filename.m4a",
+            voice_note=True,
+        )
+    assert error.value.status_code == 415
+    assert error.value.diagnostic == {
+        "stage": "probe",
+        "mime_type": "audio/mp4",
+        "audio_codec": "alac",
+    }
+
+
+def test_mp4_voice_note_rejects_truncated_content(browser_mp4_recordings, tmp_path):
+    path = tmp_path / "truncated.m4a"
+    path.write_bytes(browser_mp4_recordings["libopus", True].read_bytes()[:80])
+    with pytest.raises(PolicyError) as error:
+        inspect_media(path, "audio/mp4", "recording.m4a", voice_note=True)
+    assert error.value.status_code == 415
+
+
+def test_mp4_voice_note_conversion_failure_cleans_output_and_preserves_diagnostic(
+    browser_mp4_recordings,
+    monkeypatch,
+):
+    import crm_media_policy
+
+    run = crm_media_policy._run_ffmpeg
+    targets = []
+
+    def fail_conversion(arguments, **kwargs):
+        if "libopus" in arguments:
+            targets.append(Path(arguments[-1]))
+            raise PolicyError("invalid_attachment_content", 415)
+        return run(arguments, **kwargs)
+
+    monkeypatch.setattr(crm_media_policy, "_run_ffmpeg", fail_conversion)
+    source = browser_mp4_recordings["libopus", True]
+    original = source.read_bytes()
+    with pytest.raises(PolicyError) as error:
+        inspect_media(source, "audio/mp4", "recording.m4a", voice_note=True)
+    assert error.value.code == "invalid_attachment_content"
+    assert error.value.diagnostic == {
+        "stage": "voice_note_conversion",
+        "mime_type": "audio/mp4",
+    }
+    assert targets and all(not target.exists() for target in targets)
+    assert source.read_bytes() == original
+
+
 def test_webm_without_recording_is_an_opaque_document_not_unsupported_audio(samples):
     result = inspect_media(samples / "sound.webm", "audio/webm", "sound.webm")
     assert result.kind == "document"
@@ -270,9 +400,15 @@ def test_video_codec_policy_rejects_non_h264(samples):
         inspect_media(samples / "bad-video.mp4", "video/mp4", "video.mp4")
 
 
-def test_audio_mime_rejects_a_video_container(samples):
+@pytest.mark.parametrize("voice_note", [False, True])
+def test_audio_mime_rejects_a_video_container(samples, voice_note):
     with pytest.raises(PolicyError, match="invalid_audio_content"):
-        inspect_media(samples / "video.mp4", "audio/mp4", "voice.m4a")
+        inspect_media(
+            samples / "video.mp4",
+            "audio/mp4",
+            "voice.m4a",
+            voice_note=voice_note,
+        )
 
 
 def test_unknown_types_use_opaque_upload_limit_and_known_type_caps_remain(tmp_path):

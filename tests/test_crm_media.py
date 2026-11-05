@@ -18,9 +18,11 @@ from crm_media import MediaService, media_enabled
 from crm_media_policy import LIMITS
 from human_control_store import ControlError
 from provider_errors import ProviderError
+from test_crm_media_policy import browser_mp4_recordings as _browser_mp4_fixture
 from test_crm_media_policy import samples as _samples_fixture
 
 samples = _samples_fixture
+browser_mp4_recordings = _browser_mp4_fixture
 
 PHONE = "573000000001"
 ACTOR = "synthetic.operator"
@@ -316,7 +318,15 @@ def media(monkeypatch):
     )
 
 
-def upload(media, path, mime="application/pdf", *, identity=None, headers=None):
+def upload(
+    media,
+    path,
+    mime="application/pdf",
+    *,
+    identity=None,
+    headers=None,
+    voice_note=False,
+):
     data = path.read_bytes()
     return media.client.post(
         media.base + "/attachments",
@@ -324,6 +334,7 @@ def upload(media, path, mime="application/pdf", *, identity=None, headers=None):
             "upload_id": identity or str(uuid4()),
             "filename": path.name,
             "expected_version": media.store.version,
+            "voice_note": voice_note,
         },
         content=data,
         headers={
@@ -333,6 +344,90 @@ def upload(media, path, mime="application/pdf", *, identity=None, headers=None):
             **(headers or {}),
         },
     )
+
+
+@pytest.mark.parametrize("codec", ["aac", "libopus"])
+def test_mp4_voice_note_upload_preserves_original_without_sending(
+    media,
+    browser_mp4_recordings,
+    codec,
+):
+    path = browser_mp4_recordings[codec, True]
+    identity = str(uuid4())
+    response = upload(media, path, "audio/mp4", identity=identity, voice_note=True)
+    assert response.status_code == 200, response.text
+    attachment = response.json()
+    assert attachment["mime_type"] == "audio/ogg" and attachment["voice_note"]
+    assert attachment["filename"].endswith(".ogg")
+    row = media.db.rows["briosos", identity]
+    assert row["source_mime_type"] == "audio/mp4"
+    assert row["source_sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+    original = media.http.objects["crm-private-media/" + row["original_storage_key"]]
+    assert original == (path.read_bytes(), "audio/mp4")
+    assert (
+        upload(
+            media,
+            path,
+            "audio/mp4",
+            identity=identity,
+            voice_note=True,
+        ).json()["id"]
+        == identity
+    )
+    assert len(media.db.rows) == 1
+    assert not media.sent
+    assert not any("graph.facebook.com" in url for _, url, _ in media.http.calls)
+
+
+def test_mp4_voice_note_rejection_logs_only_safe_diagnostic(
+    media,
+    browser_mp4_recordings,
+    caplog,
+):
+    with caplog.at_level("WARNING", logger="human_control_api"):
+        response = upload(
+            media,
+            browser_mp4_recordings["alac", True],
+            "audio/mp4",
+            voice_note=True,
+        )
+    assert response.status_code == 415
+    assert response.json()["detail"] == "unsupported_audio_codec"
+    assert "stage=probe mime=audio/mp4 codec=alac" in caplog.text
+    for private in (
+        SECRET,
+        ACTOR,
+        PHONE,
+        "synthetic-storage-secret",
+        "synthetic-meta-secret",
+        "synthetic-private-metadata",
+        ".m4a",
+    ):
+        assert private not in caplog.text
+    assert not media.db.rows and not media.http.calls and not media.sent
+
+
+def test_mp4_voice_note_upload_still_requires_confirmed_human_owner(
+    media,
+    browser_mp4_recordings,
+    monkeypatch,
+):
+    import crm_media
+
+    def must_not_inspect(*_args, **_kwargs):
+        pytest.fail("Unauthorized voice notes must not reach conversion")
+
+    monkeypatch.setattr(crm_media, "inspect_media", must_not_inspect)
+    response = upload(
+        media,
+        browser_mp4_recordings["libopus", True],
+        "audio/mp4",
+        voice_note=True,
+        headers={"X-CRM-Actor": "another.operator"},
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "confirmed_human_control_required"
+    assert not media.db.rows and not media.http.calls and not media.sent
 
 
 def test_media_default_disabled_and_no_brand_is_hardcoded(media):
