@@ -21,6 +21,8 @@ from file_catalog import (
     is_explicit_file_resend_request,
     load_file_catalog,
     merge_managed_catalogs,
+    promises_file,
+    without_unsent_file_claims,
 )
 from conversation_summary import compact_order_summary, supplied_customer_data
 from gemini_errors import (
@@ -430,7 +432,10 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
             trigger_handoff = False
             reason = ""
         if not resend_requested:
-            requested_files = [file_id for file_id in requested_files if file_id not in delivered_catalogs]
+            requested_files = [file_id for file_id in requested_files
+                               if file_id in deterministic_files or file_id not in delivered_catalogs]
+        if not requested_files:
+            response_text = without_unsent_file_claims(response_text)
         print(
             "[FILE CATALOG] Decision "
             f"available={list(FILE_CATALOG)} requested={requested_files} resend={resend_requested}"
@@ -452,7 +457,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
         return BotTurn(
             response_text,
             requested_files,
-            bool(ai_data.get("send_files_before_response", False)),
+            bool(ai_data.get("send_files_before_response", False)) or bool(requested_files and promises_file(response_text)),
             follow_up_message,
             follow_up_delay_minutes,
             trigger_handoff,

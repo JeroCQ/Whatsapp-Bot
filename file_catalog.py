@@ -10,6 +10,24 @@ from typing import Callable, Optional
 SUPPORTED_MEDIA_TYPES = {"audio", "document", "image", "video"}
 
 
+def promises_file(text: str) -> bool:
+    normalized = unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode().lower()
+    return bool(
+        re.search(r"\b(?:catalogo|archivo|pdf|adjunto)\b", normalized)
+        and (re.search(r"\b(?:te\s+(?:comparto|envio|mando|adjunto|dejo)|aqui\s+tienes|he\s+enviado)\b", normalized)
+             or re.match(r"^\s*adjunto\b", normalized))
+    )
+
+
+def without_unsent_file_claims(text: str) -> str:
+    """Keep business answers, removing only claims for an attachment not sent."""
+    if not promises_file(text):
+        return text
+    sentences = re.split(r"(?<=[.!?])\s+|\n+|(?=¿)", text or "")
+    kept = [sentence for sentence in sentences if not promises_file(sentence)]
+    return " ".join(kept).strip() or "¿Qué producto te interesa o qué te gustaría conocer?"
+
+
 def is_explicit_file_resend_request(text: str) -> bool:
     """Recognize a customer's direct request to retry a previously offered file."""
     normalized = unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode().lower()
