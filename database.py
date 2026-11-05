@@ -41,6 +41,16 @@ def get_or_create_customer_state(phone_number: str, name: str = "Cliente"):
             on_conflict="phone_number",
             ignore_duplicates=True,
         ).execute()
+        # Control/handoff recovery can create the contact before Meta supplies
+        # its profile. Replace only that placeholder, never an existing name.
+        actual_name = name.strip() if isinstance(name, str) else ""
+        if actual_name and actual_name.casefold() not in {"cliente", "client", "customer"}:
+            try:
+                supabase.table("customers").update({"name": actual_name}).eq(
+                    "phone_number", phone_number
+                ).or_('name.is.null,name.eq."",name.ilike.cliente,name.ilike.client,name.ilike.customer').execute()
+            except Exception:
+                print("[CUSTOMER_PROFILE] Placeholder update unavailable", flush=True)
         supabase.table("conversation_states").upsert(
             {
                 "phone_number": phone_number,

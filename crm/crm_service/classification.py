@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from typing import Any
 
-BUCKETS = {"awaiting_human", "human_active", "ai_active", "closed"}
+BUCKETS = {"awaiting_human", "ai_active", "closed"}
 PENDING = {"pending", "reserved", "sending", "unknown", "exhausted"}
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 DELIVERY_RANK = {"accepted": 0, "failed": 1, "delivered": 2, "read": 3}
@@ -115,18 +115,18 @@ def classify(
     phase = state.get("crm_control_phase")
     case_exists = bool(phase == "human" and state.get("crm_control_owner")) if crm else bool(chatwoot)
     status = None if crm else delivery.get("status")
+    waiting_customer = bool(paused and humans and not unanswered and case_exists and status not in PENDING)
     if paused:
-        bucket = (
-            "awaiting_human"
-            if (unanswered or not humans or status in PENDING or not case_exists)
-            else "human_active"
-        )
+        bucket = "awaiting_human"
     else:
-        bucket = "closed" if closed_at is not None and not cycle else "ai_active"
+        # Technical/control events are not a customer reopening the case.
+        bucket = "closed" if closed_at is not None and not incoming else "ai_active"
     priority = 4
     reason = "waiting_for_response"
     if bucket == "awaiting_human":
-        if status in {"unknown", "exhausted"}:
+        if waiting_customer:
+            reason = "human_waiting_customer"
+        elif status in {"unknown", "exhausted"}:
             priority, reason = 1, "handoff_delivery_uncertain"
         elif crm and phase == "pausing":
             priority, reason = 1, "crm_pause_pending_inflight_send"
@@ -139,18 +139,23 @@ def classify(
     else:
         priority, reason = 0, "no_human_attention_required"
     attention = min((order(m)[0] for m in unanswered), default=None)
-    if bucket == "awaiting_human" and attention is None:
+    if bucket == "awaiting_human" and attention is None and not waiting_customer:
         attention = boundary[0] if boundary else timestamp(state.get("last_interaction"))
         if attention == EPOCH:
             attention = order(cycle[0])[0] if cycle else None
             quality.add("missing_attention_timestamp")
-    if bucket != "awaiting_human":
+    if bucket != "awaiting_human" or waiting_customer:
         attention = None
     latest = max((order(m)[0] for m in incoming), default=None)
+    activity_at = max(
+        (order(m)[0] for m in ordered if m.get("role") in {"user", "model", "asesor"}),
+        default=timestamp(state.get("last_interaction")),
+    )
     seconds = max(0, int((timestamp(at) - attention).total_seconds())) if attention else 0
     attention_rank = int(attention.timestamp() * 1000000) if attention else 999999999999999999
     latest_rank = 999999999999999999 - int(latest.timestamp() * 1000000) if latest else 999999999999999999
     return {
+        "classification_version": 2,
         "bucket": bucket,
         "attention_since": attention.isoformat() if attention else None,
         "waiting_seconds": seconds,
@@ -158,6 +163,7 @@ def classify(
         "priority": priority,
         "priority_reason": reason,
         "last_incoming_at": latest.isoformat() if latest else None,
+        "last_activity_at": activity_at.isoformat() if activity_at != EPOCH else None,
         "last_message_id": max((int(m.get("id", 0)) for m in ordered), default=0),
         "data_quality_warnings": sorted(quality),
         "sort_key": f"{priority:02}:{attention_rank:018}:{latest_rank:018}",

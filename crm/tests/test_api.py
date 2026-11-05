@@ -34,6 +34,41 @@ def client(settings, sessions):
     app.state.engine.dispose()
 
 
+def test_all_inbox_orders_by_actual_activity_across_buckets_and_paginates(client, settings, sessions):
+    for identity, hour in ((2, "13"), (3, "14")):
+        rows = data(paused=False, message_id=identity)
+        for table, values in rows.items():
+            for row in values:
+                row["phone_number"] = f"57300{identity}"
+                if "created_at" in row:
+                    row["created_at"] = f"2026-11-01T{hour}:00:00+00:00"
+        assert Synchronizer(settings, sessions, lambda _: FakeSource(rows)).run("tanaka") == {"tanaka": "ok"}
+    result, cursor = [], None
+    for _ in range(3):
+        params = {"bucket": "all", "limit": 1}
+        if cursor:
+            params["cursor"] = cursor
+        response = client.get("/v1/inbox", params=params)
+        assert response.status_code == 200
+        page = response.json()
+        result.extend(item["phone_number"] for item in page["items"])
+        cursor = page["next_cursor"]
+    assert result == ["573003", "573002", "573001"]
+    client.post("/v1/conversations/tanaka/573001/read", json={})
+    assert [item["phone_number"] for item in client.get("/v1/inbox?bucket=all").json()["items"]] == result
+
+
+def test_legacy_human_active_is_folded_into_remaining_human_inbox(client, sessions):
+    from crm_service.models import CRMConversation
+
+    with sessions.begin() as session:
+        row = session.get(CRMConversation, ("tanaka", "573001"))
+        row.bucket = "human_active"
+        row.classification = {**row.classification, "bucket": "human_active"}
+    items = client.get("/v1/inbox?bucket=awaiting_human").json()["items"]
+    assert len(items) == 1 and items[0]["bucket"] == "awaiting_human"
+
+
 def test_health_ready_and_capabilities(client):
     assert client.get("/health").status_code == 200
     assert client.get("/ready").status_code == 200

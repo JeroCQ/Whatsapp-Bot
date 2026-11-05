@@ -70,7 +70,7 @@ class Settings:
         "web.push.apple.com",
         "wns.windows.com",
     )
-    sync_interval: int = 30
+    sync_interval: int = 5
     page_size: int = 500
     max_pages: int = 20
     jwt_max_lifetime: int = 300
@@ -210,7 +210,7 @@ class Settings:
             jwt_secret=jwt_secret,
             sync_secret=sync_secret,
             businesses=businesses,
-            sync_interval=int(os.environ.get("SYNC_INTERVAL_SECONDS", "30")),
+            sync_interval=int(os.environ.get("SYNC_INTERVAL_SECONDS", "5")),
             page_size=int(os.environ.get("SYNC_PAGE_SIZE", "500")),
             max_pages=int(os.environ.get("SYNC_MAX_PAGES", "20")),
             sync_max_seconds=float(os.environ.get("SYNC_MAX_SECONDS", "15")),
