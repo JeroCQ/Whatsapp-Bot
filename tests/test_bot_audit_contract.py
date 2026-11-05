@@ -55,6 +55,43 @@ def routed_bot(monkeypatch, request):
     return route, pauses
 
 
+@pytest.mark.parametrize("routed_bot", ["tanaka", "memos", "velvet", "briosos"], indirect=True)
+@pytest.mark.parametrize("question", ["Qué productos tienes?", "Tienes catálogo?"])
+def test_new_customer_request_is_not_cancelled_by_historical_delivery(routed_bot, monkeypatch, question):
+    from file_catalog import PresavedFile
+
+    route, _ = routed_bot
+    identity = "catalogo_" + route.module.config.BUSINESS_ID
+    route.module.FILE_CATALOG.clear()
+    route.module.FILE_CATALOG[identity] = PresavedFile(identity, "Catálogo general", "document", link="https://example.test/catalog.pdf")
+    monkeypatch.setattr(route.module, "has_successful_file_delivery", lambda *_: True)
+    turn = route(question, {"response": "Te comparto nuestro catálogo. ¿Qué producto te interesa?",
+                            "requested_files": [identity], "trigger_handoff": False})
+    assert turn.requested_files == [identity]
+    assert turn.send_files_before_response
+
+
+def test_no_attachment_claim_remains_when_an_incidental_file_is_not_sent(routed_bot, monkeypatch):
+    route, _ = routed_bot
+    monkeypatch.setattr(route.module, "has_successful_file_delivery", lambda *_: True)
+    turn = route("Hola", {"response": "Te comparto el catálogo. El producto cuesta $10.000.",
+                          "requested_files": ["catalogo_memos"], "trigger_handoff": False})
+    assert turn.requested_files == []
+    assert "Te comparto" not in turn.response and "$10.000" in turn.response
+
+
+def test_new_catalog_request_uses_a_future_business_configured_asset(routed_bot, monkeypatch):
+    from file_catalog import PresavedFile
+
+    route, _ = routed_bot
+    monkeypatch.setattr(route.module.config, "BUSINESS_ID", "future_business")
+    route.module.FILE_CATALOG.clear()
+    route.module.FILE_CATALOG["catalogo_future"] = PresavedFile("catalogo_future", "Catálogo", "document", link="https://example.test/future.pdf")
+    monkeypatch.setattr(route.module, "has_successful_file_delivery", lambda *_: True)
+    turn = route("Qué productos tienes?", {"response": "Te comparto el catálogo.", "requested_files": []})
+    assert turn.requested_files == ["catalogo_future"]
+
+
 def test_wholesale_handoff_survives_catalog_fallback(routed_bot):
     route, pauses = routed_bot
     turn = route("Eso es precios al por mayor", {"response": "Aquí tienes opciones", "trigger_handoff": False, "requested_files": []})

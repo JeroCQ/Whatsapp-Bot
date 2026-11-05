@@ -609,6 +609,46 @@ def test_meta_upload_failure_is_confirmed_not_sent(media, samples):
     assert not media.sent
 
 
+@pytest.mark.parametrize("mode,expected", [
+    ("none_with_ack", "accepted"), ("error_after_ack", "accepted"),
+    ("media_error_after_ack", "accepted"), ("timeout", "unknown"),
+    ("true_without_ack", "unknown"), ("rejected", "failed"), ("before_send", "failed"),
+    ("started_without_ack", "unknown"),
+])
+def test_command_confirmation_uses_provider_evidence_not_wrapper_outcome(media, samples, monkeypatch, mode, expected):
+    from crm_media_policy import MediaError
+    from observability import update_trace
+
+    identity = upload(media, samples / "document.pdf").json()["id"]
+    calls = []
+
+    def send(*args):
+        calls.append(True)
+        if mode == "started_without_ack":
+            args[-1](PHONE, "synthetic-media", "document", None, "synthetic.pdf")
+            update_trace(provider_message_id="")
+            raise MediaError("synthetic_unconfirmed_after_dispatch", 503)
+        if mode.endswith("with_ack") or mode.endswith("after_ack"):
+            update_trace(provider_message_id="wamid.SYNTHETIC.accepted")
+        if mode == "error_after_ack":
+            raise RuntimeError("SYNTHETIC local bookkeeping failure")
+        if mode in {"media_error_after_ack", "before_send"}:
+            raise MediaError("synthetic_storage_failure", 503)
+        if mode == "timeout":
+            raise ProviderError("meta", "send_document", None)
+        if mode == "rejected":
+            raise ProviderError("meta", "send_document", 400)
+        return True if mode == "true_without_ack" else None
+
+    monkeypatch.setattr(media.service, "send_attachment", send)
+    response = media.client.post(media.base + "/messages", headers=media.headers, json={
+        "actor": ACTOR, "command_id": "evidence-" + mode, "expected_version": 3, "attachment_id": identity,
+    })
+    assert response.json()["status"] == expected
+    queried = media.client.get(media.base + "/commands/evidence-" + mode, headers=media.headers)
+    assert queried.json()["status"] == expected and calls == [True]
+
+
 def test_message_timeout_is_unknown_and_never_repeated(media, samples, monkeypatch):
     identity = upload(media, samples / "document.pdf").json()["id"]
     calls = []

@@ -308,34 +308,48 @@ def create_router(
                 source_event_id=body.command_id,
                 inbound_message_ids=snapshot.get("inbound_message_ids") or [],
                 crm_reserved_attempt=body.command_id,
+                provider_message_id="",
                 meta_window_expires_at=snapshot.get("window_expires_at"),
             ):
+                send_started = False
+
+                def media_sender(*args: Any) -> Any:
+                    nonlocal send_started
+                    send_started = True
+                    return send_media(*args)
+
                 try:
-                    accepted = (service.send_attachment(phone, attachment, body.text, send_media)
-                                if attachment else send_text(phone, body.text))
+                    if attachment:
+                        service.send_attachment(phone, attachment, body.text, media_sender)
+                    else:
+                        send_started = True
+                        send_text(phone, body.text)
                     provider_id = str(current_trace().get("provider_message_id") or "")
-                    status = "accepted" if accepted and provider_id else "unknown"
+                    # Meta's message identity, not a wrapper's truthy return,
+                    # proves acceptance. It never proves delivered/read.
+                    status = "accepted" if provider_id else "unknown"
                     detail = (
                         ""
                         if status == "accepted"
                         else "provider_acknowledgement_missing"
                     )
                 except ProviderError as error:
-                    status = (
+                    provider_id = str(current_trace().get("provider_message_id") or "")
+                    status = "accepted" if provider_id else (
                         "failed"
                         if error.confirmed_not_sent
                         or (error.status is not None and 400 <= error.status < 500)
                         else "unknown"
                     )
-                    provider_id, detail = (
-                        "",
-                        "provider_rejected"
-                        if status == "failed"
-                        else "provider_outcome_unknown",
+                    detail = "" if provider_id else (
+                        "provider_rejected" if status == "failed" else "provider_outcome_unknown"
                     )
                 except Exception as error:
                     from crm_media_policy import MediaError
-                    if isinstance(error, MediaError):
+                    provider_id = str(current_trace().get("provider_message_id") or "")
+                    if provider_id:
+                        status, detail = "accepted", ""
+                    elif isinstance(error, MediaError) and not send_started:
                         status, provider_id, detail = "failed", "", error.code
                     else:
                         status, provider_id, detail = "unknown", "", "provider_outcome_unknown"

@@ -102,6 +102,17 @@ def test_audio_failure_keeps_customer_active_and_offers_text(bot_only, monkeypat
     assert bot_only.customer["is_paused"] is False
 
 
+@pytest.mark.parametrize("delivered", [False, True])
+def test_catalog_claim_is_conditioned_on_actual_send(bot_only, monkeypatch, delivered):
+    monkeypatch.setattr(main, "process_message_logic", lambda *_: types.SimpleNamespace(
+        response="Te comparto el catálogo. ¿Qué producto te interesa?", requested_files=["catalogo_prueba"],
+        send_files_before_response=True, follow_up_message="", handoff_requested=False,
+    ))
+    monkeypatch.setattr(main, "deliver_presaved_file", lambda *_: (delivered, None if delivered else "synthetic failure"))
+    process_current()
+    assert any("Te comparto el catálogo" in text for _, text in bot_only.sent) == delivered
+
+
 def test_file_failure_does_not_promise_a_nonexistent_advisor(bot_only, monkeypatch):
     monkeypatch.setattr(main, "process_message_logic", lambda *a: types.SimpleNamespace(
         response="Aquí tienes el archivo", requested_files=["catalogo_prueba"], send_files_before_response=False,

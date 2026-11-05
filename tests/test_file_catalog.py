@@ -11,7 +11,15 @@ from file_catalog import (
     last_delivered_file,
     load_file_catalog,
     merge_managed_catalogs,
+    without_unsent_file_claims,
 )
+
+
+def test_unsent_claim_filter_preserves_business_answers_and_intentional_silence():
+    assert without_unsent_file_claims("") == ""
+    assert without_unsent_file_claims("El precio es $10.000.") == "El precio es $10.000."
+    assert without_unsent_file_claims("¿Puedes enviar el archivo adjunto?") == "¿Puedes enviar el archivo adjunto?"
+    assert without_unsent_file_claims("Te envío el PDF. El precio es $10.000.") == "El precio es $10.000."
 
 
 def test_advisor_catalog_command_accepts_only_exact_catalog_ids():

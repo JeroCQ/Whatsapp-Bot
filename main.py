@@ -94,7 +94,7 @@ def get_control_store():
 def get_source_reader():
     import database
     return SupabaseSourceReader(database.supabase, config.BUSINESS_ID, human_provider(config))
-from file_catalog import advisor_file_command, advisor_file_notes
+from file_catalog import advisor_file_command, advisor_file_notes, without_unsent_file_claims
 from dashboard_api import admin_auth, router as dashboard_router, validate_deployment_client
 
 app = FastAPI()
@@ -1633,6 +1633,8 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
                     save_message_log(sender_phone, "model", f"[Archivo enviado: {file_id}]")
                 elif technical_error:
                     file_errors.append(technical_error)
+        if ai_turn.send_files_before_response and ai_turn.requested_files and not delivered_files:
+            ai_turn.response = without_unsent_file_claims(ai_turn.response)
         if ai_turn.response:
             send_whatsapp_message(sender_phone, ai_turn.response)
             save_message_log(sender_phone, "model", ai_turn.response)
