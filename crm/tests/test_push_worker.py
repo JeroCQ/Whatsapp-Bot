@@ -4,6 +4,8 @@ import threading
 import time
 from types import SimpleNamespace
 
+import pytest
+
 from crm_service import worker
 
 
@@ -53,9 +55,11 @@ def test_slow_push_runs_once_while_next_sync_cycle_proceeds(monkeypatch):
     assert push_runs == [True] and finished.is_set()
 
 
-def test_one_slow_business_does_not_hold_the_next_read_of_another(monkeypatch):
+@pytest.mark.parametrize("queued_backfill", [False, True])
+def test_one_slow_business_does_not_hold_the_next_read_of_another(monkeypatch, queued_backfill):
     slow_started, release, fast_finished = threading.Event(), threading.Event(), threading.Event()
     calls, clock = [], [0.0]
+    queued_calls = []
 
     class Stop:
         cycles = 0
@@ -75,17 +79,28 @@ def test_one_slow_business_does_not_hold_the_next_read_of_another(monkeypatch):
             self.cycles += 1
             clock[0] += 5
             if self.cycles == 3:
-                assert calls.count("fast") >= 2 and calls.count("slow") == 1
+                assert calls.count("fast") >= 2
+                if queued_backfill:
+                    assert len(queued_calls) == 1
+                else:
+                    assert calls.count("slow") == 1
                 release.set()
 
     def synchronize(business):
         calls.append(business)
-        if business == "slow":
+        if business == "slow" and not queued_backfill:
             slow_started.set()
             assert release.wait(3)
         else:
             fast_finished.set()
         return {business: "ok"}
+
+    def backfill(*_):
+        if queued_backfill:
+            queued_calls.append(True)
+            slow_started.set()
+            assert release.wait(3)
+        return None
 
     settings = SimpleNamespace(businesses={"slow": object(), "fast": object()}, sync_interval=5)
     monkeypatch.setattr(worker, "Settings", SimpleNamespace(from_env=lambda **_: settings))
@@ -93,7 +108,7 @@ def test_one_slow_business_does_not_hold_the_next_read_of_another(monkeypatch):
     monkeypatch.setattr(worker, "threading", SimpleNamespace(Event=Stop))
     monkeypatch.setattr(worker.signal, "signal", lambda *_: None)
     monkeypatch.setattr(worker, "Synchronizer", lambda *_: SimpleNamespace(run=synchronize))
-    monkeypatch.setattr(worker, "consume_one", lambda *_: None)
+    monkeypatch.setattr(worker, "consume_one", backfill)
     monkeypatch.setattr(worker, "dispatch", lambda *_: 0)
     monkeypatch.setattr(worker.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr("sys.argv", ["crm-worker"])

@@ -39,6 +39,7 @@ def main() -> None:
     sync_pool = ThreadPoolExecutor(max_workers=max(1, min(4, len(settings.businesses))))
     sync_runs: dict[str, Future[dict[str, str]]] = {}
     next_sync: dict[str, float] = {}
+    queued_run: Future[str | None] | None = None
     try:
         if args.once:
             result = worker.run(args.business)
@@ -48,7 +49,17 @@ def main() -> None:
             return
         while not stop.is_set():
             try:
-                queued_business = consume_one(worker, sessions, args.business)
+                queued_business = None
+                if queued_run is not None and queued_run.done():
+                    try:
+                        queued_business = queued_run.result()
+                    except Exception as error:
+                        logging.error("queued_sync_failed code=%s", type(error).__name__)
+                    queued_run = None
+                if queued_run is None:
+                    # Explicit backfill jobs use the same bounded pool. They
+                    # must not block the loop scheduling unrelated businesses.
+                    queued_run = sync_pool.submit(consume_one, worker, sessions, args.business)
                 # Finish/schedule each brand separately. Waiting for a whole
                 # sweep made a slow brand delay even the next read of fast ones.
                 for business_id in settings.businesses:
