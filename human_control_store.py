@@ -65,7 +65,7 @@ class ControlStore:
         expected_version: int | None = None,
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        if operation not in {"take", "close", "handoff"}:
+        if operation not in {"take", "close", "handoff", "reset"}:
             raise ControlError("unsupported_control_operation", 400)
         return self._call(
             phone, operation, command_id, actor, expected_version, payload
@@ -82,6 +82,7 @@ class ControlStore:
         text: str = "",
         inbound_message_ids: list[str] | None = None,
         attachments: list[dict[str, Any]] | None = None,
+        handoff_request_id: str = "",
     ) -> dict[str, Any]:
         return self._call(
             phone,
@@ -95,6 +96,8 @@ class ControlStore:
                 "text": text,
                 "inbound_message_ids": inbound_message_ids or [],
                 **({"attachments": attachments} if attachments else {}),
+                **({"purpose": "handoff_ack", "handoff_request_id": handoff_request_id}
+                   if handoff_request_id else {}),
             },
         )
 

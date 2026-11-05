@@ -104,21 +104,23 @@ def catalogs_for_customer_request(
             return [previous]
 
     catalog_intent = re.search(
-        r"\b(catalogo|portafolio|lista\s+de\s+(?:productos|precios)|"
+        r"\b(catalogos?|portafolio|lista\s+de\s+(?:productos|precios)|"
         r"precios?|productos|opciones|presentaciones|sabores)\b",
         normalized,
     )
     ingredient_intent = re.search(r"\b(ingredientes?|alergenos?|composicion|ficha\s+tecnica)\b", normalized)
+    wholesale_intent = bool(re.search(r"mayorista|mayoreo|por\s+mayor|distrib|distibu|b2b|maquila", normalized))
     if not catalog_intent and not ingredient_intent:
         return []
 
-    def specialization(item: PresavedFile) -> tuple[int, int, str]:
+    def specialization(item: PresavedFile) -> tuple[int, int, int, str]:
         metadata = f"{item.id} {item.description} {item.filename or ''} {item.default_caption or ''}"
         metadata = unicodedata.normalize("NFKD", metadata).encode("ascii", "ignore").decode().lower()
         ingredient_asset = bool(re.search(r"ingred|alergen|composicion|ficha", metadata))
+        wholesale_asset = bool(re.search(r"mayorista|mayoreo|por\s+mayor|distrib|distibu|b2b|maquila", metadata))
         # Prefer a specialised asset only when the customer explicitly asks for it.
         mismatch = int(ingredient_asset != bool(ingredient_intent))
-        return mismatch, len(metadata), item.id
+        return mismatch, int(wholesale_asset != wholesale_intent), len(metadata), item.id
 
     return [min(catalog.values(), key=specialization).id]
 

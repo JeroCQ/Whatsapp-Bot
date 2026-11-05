@@ -817,7 +817,9 @@ def test_real_bot_export_populates_crm_and_tracks_cycle(pilot):
         ).json()["status"]
         == "accepted"
     )
-    assert sync()["bucket"] == "human_active"
+    answered = sync()
+    assert answered["bucket"] == "awaiting_human"
+    assert answered["priority_reason"] == "human_waiting_customer"
     human = (
         pilot.repository.table("message_logs")
         .select("*")
@@ -1077,12 +1079,24 @@ def test_failed_delivery_updates_inbox_incrementally_and_late_sent_cannot_erase_
     )
     assert response.json()["status"] == "accepted"
     provider_message = pilot.meta.sent[-1]
-    assert sync()["bucket"] == "human_active"
+    answered = sync()
+    assert answered["bucket"] == "awaiting_human"
+    assert answered["priority_reason"] == "human_waiting_customer"
     accepted = (
         sync()
     )  # Advance the ordinary rolling-reconciliation deadline before the callback.
-    with pilot.app.state.sessions() as session:
+    with pilot.app.state.sessions.begin() as session:
         cursor = session.get(SyncCursor, (BUSINESS, "message_reconciliation"))
+        if cursor is None:
+            # The bot API's live lane need not initialize the legacy historical
+            # sweep. Explicitly postpone it to prove the new receipt arrives
+            # incrementally rather than depending on a historical reread.
+            from datetime import timedelta
+
+            cursor = SyncCursor(business_id=BUSINESS, resource="message_reconciliation", value={
+                "id": 0, "next_at": (datetime.now(timezone.utc) + timedelta(minutes=1)).isoformat(),
+            })
+            session.add(cursor)
         assert cursor and datetime.fromisoformat(
             cursor.value["next_at"]
         ) > datetime.now(timezone.utc)

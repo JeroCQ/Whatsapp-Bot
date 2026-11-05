@@ -3,6 +3,7 @@ import json
 import logging
 import signal
 import threading
+import time
 from concurrent.futures import Future, ThreadPoolExecutor
 
 from crm_service.db import database
@@ -35,6 +36,9 @@ def main() -> None:
     # prevents overlapping push batches in that process.
     push_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="crm-push")
     push_run: Future[int] | None = None
+    sync_pool = ThreadPoolExecutor(max_workers=max(1, min(4, len(settings.businesses))))
+    sync_runs: dict[str, Future[dict[str, str]]] = {}
+    next_sync: dict[str, float] = {}
     try:
         if args.once:
             result = worker.run(args.business)
@@ -45,15 +49,25 @@ def main() -> None:
         while not stop.is_set():
             try:
                 queued_business = consume_one(worker, sessions, args.business)
-                pending = [
-                    business_id
-                    for business_id in settings.businesses
-                    if business_id != queued_business and (not args.business or args.business == business_id)
-                ]
-                # Each business keeps its own budget/lock/reader; a slow brand
-                # no longer delays all other brands before their first read.
-                with ThreadPoolExecutor(max_workers=max(1, min(4, len(pending)))) as pool:
-                    list(pool.map(worker.run, pending))
+                # Finish/schedule each brand separately. Waiting for a whole
+                # sweep made a slow brand delay even the next read of fast ones.
+                for business_id in settings.businesses:
+                    if args.business and args.business != business_id:
+                        continue
+                    previous = sync_runs.get(business_id)
+                    if previous is not None:
+                        if not previous.done():
+                            continue
+                        try:
+                            previous.result()
+                        except Exception as error:
+                            logging.error("business_sync_failed code=%s", type(error).__name__)
+                        del sync_runs[business_id]
+                    if business_id == queued_business:
+                        next_sync[business_id] = time.monotonic() + settings.sync_interval
+                    elif time.monotonic() >= next_sync.get(business_id, 0):
+                        sync_runs[business_id] = sync_pool.submit(worker.run, business_id)
+                        next_sync[business_id] = time.monotonic() + settings.sync_interval
                 if push_run is None or push_run.done():
                     if push_run is not None:
                         try:
@@ -63,8 +77,9 @@ def main() -> None:
                     push_run = push_pool.submit(dispatch, settings, sessions)
             except Exception as error:
                 logging.error("worker_iteration_failed code=%s", type(error).__name__)
-            stop.wait(settings.sync_interval)
+            stop.wait(min(1, settings.sync_interval))
     finally:
+        sync_pool.shutdown(wait=True)
         push_pool.shutdown(wait=True)
         engine.dispose()
 

@@ -1339,13 +1339,30 @@ def _recover_whatsapp_processing_error(sender_phone, sender_name, message_body, 
         # A failed POST can already have reached Meta. Do not send the original
         # reply or a second fallback through the failing channel automatically.
         if not text_delivery_failed and meta_window_is_open(expiry):
-            send_whatsapp_message(sender_phone,
+            (_send_crm_handoff_notice if uses_crm(config) else send_whatsapp_message)(sender_phone,
                 "Tuve un problema técnico y tu solicitud necesita revisión del equipo. La atención humana puede seguir pendiente.")
     except Exception as recovery_error:
         print(f"[ERROR RECOVERY] {sanitize_text(recovery_error, (config.WA_TOKEN, config.SUPABASE_KEY, config.CHATWOOT_API_TOKEN))}")
         operational_event("RESPONSE_RECOVERY_FAILED", phone=sender_phone, stage="DIRECT_RESPONSE",
                           reason="recovery_failed", result=type(recovery_error).__name__)
     return technical
+
+
+def _send_crm_handoff_notice(phone: str, text: str) -> bool:
+    """Acknowledge one actual handoff, never bypass an operator's control."""
+    source_id = str(current_trace().get("source_event_id") or "")
+    if not text:
+        return False
+    if not source_id:
+        raise ControlError("automatic_send_fenced")
+    control = get_control_store().get_control(phone)
+    if control["phase"] != "waiting" or not control["is_paused"] or control.get("owner"):
+        raise ControlError("automatic_send_fenced")
+    with message_trace(crm_control_version=control["version"],
+                       crm_handoff_ack_request_id=f"handoff:{source_id}"):
+        send_whatsapp_message(phone, text)
+        save_message_log(phone, "model", text)
+    return True
 
 
 def process_whatsapp_message(sender_phone: str, sender_name: str, message_body: str, is_image: bool = False, media_id: str = None, is_audio: bool = False, audio_media_id: str = None, media_type: str = None, mime_type: str = None, filename: str = None, event_id: str = None, customer_message_received_at=None, crm_control_version=None):
@@ -1465,6 +1482,28 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
                               reason="control_epoch_changed", result="fenced",
                               current_control_version=control["version"])
             return {"status": "control_epoch_changed"}
+        if is_restart_command(message_body):
+            if control["phase"] != "ai" or control["is_paused"]:
+                save_message_log(sender_phone, "system", "RESET_IGNORED: Human control remains active.")
+                return {"status": "human_control", "phase": control["phase"]}
+            command = "reset:" + hashlib.sha256(
+                str(current_trace().get("source_event_id") or "").encode()
+            ).hexdigest()
+            try:
+                reset = get_control_store().apply_control(
+                    sender_phone, "reset", command, actor="bot", expected_version=control["version"]
+                )
+            except ControlError as failure:
+                operational_event("RESET_SKIPPED", phone=sender_phone, stage="INBOUND",
+                                  reason=failure.code, result="not_reset")
+                save_message_log(sender_phone, "system", "RESET_NOT_APPLIED: " + failure.code)
+                return {"status": "reset_not_applied"}
+            update_trace(crm_control_version=reset["control"]["version"])
+            invalidate_follow_up(sender_phone)
+            notice = "🔄 Conversación reiniciada. El bot está activo y empezamos de cero."
+            send_whatsapp_message(sender_phone, notice)
+            save_message_log(sender_phone, "model", notice)
+            return {"status": "reset"}
         if control["phase"] != "ai" or control["is_paused"]:
             operational_event("RESPONSE_SKIPPED", phone=sender_phone, stage="INBOUND",
                               reason="crm_human_control_active", result="paused",
@@ -1538,7 +1577,7 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
             reason = "No fue posible transcribir la nota de voz. Requiere revisión humana."
             save_message_log(sender_phone, "system", "ERROR procesando audio: transcription_failed")
             pause_bot_for_handoff(sender_phone, reason)
-            send_whatsapp_message(
+            (_send_crm_handoff_notice if uses_crm(config) else send_whatsapp_message)(
                 sender_phone,
                 ("Perdón, no pude procesar bien tu nota de voz. Tu solicitud necesita revisión del equipo."
                  if human_handoffs_enabled(config) else
@@ -1571,6 +1610,8 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
             # Handoff or a takeover during inference fences stale answers/files.
             control = get_control_store().get_control(sender_phone)
             if control["phase"] != "ai" or control["version"] != current_trace().get("crm_control_version"):
+                if getattr(ai_turn, "handoff_requested", False):
+                    _send_crm_handoff_notice(sender_phone, ai_turn.response)
                 return {"status": "human_control", "phase": control["phase"]}
         # Creating the case precedes any assertion to the customer that an
         # advisor was notified. A catalog never overrides this paused state.
@@ -1620,7 +1661,7 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
             )
             pause_bot_for_handoff(sender_phone, reason)
             try:
-                send_whatsapp_message(
+                (_send_crm_handoff_notice if uses_crm(config) else send_whatsapp_message)(
                     sender_phone,
                     ("Perdón, no pude adjuntar el catálogo. Se necesita revisión del equipo para enviártelo manualmente."
                      if human_handoffs_enabled(config) else

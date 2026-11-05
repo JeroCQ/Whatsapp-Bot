@@ -36,11 +36,14 @@ def _first(data):
 def get_or_create_customer_state(phone_number: str, name: str = "Cliente"):
     """Create customer/state rows safely and return the current state."""
     try:
-        supabase.table("customers").upsert(
-            {"phone_number": phone_number, "name": name},
-            on_conflict="phone_number",
-            ignore_duplicates=True,
-        ).execute()
+        state = _first(supabase.table("conversation_states").select("*").eq(
+            "phone_number", phone_number).execute().data)
+        if state is None:
+            supabase.table("customers").upsert(
+                {"phone_number": phone_number, "name": name},
+                on_conflict="phone_number",
+                ignore_duplicates=True,
+            ).execute()
         # Control/handoff recovery can create the contact before Meta supplies
         # its profile. Replace only that placeholder, never an existing name.
         actual_name = name.strip() if isinstance(name, str) else ""
@@ -51,6 +54,8 @@ def get_or_create_customer_state(phone_number: str, name: str = "Cliente"):
                 ).or_('name.is.null,name.eq."",name.ilike.cliente,name.ilike.client,name.ilike.customer').execute()
             except Exception:
                 print("[CUSTOMER_PROFILE] Placeholder update unavailable", flush=True)
+        if state is not None:
+            return state
         supabase.table("conversation_states").upsert(
             {
                 "phone_number": phone_number,
@@ -319,7 +324,12 @@ def get_message_logs(phone_number: str, limit: int = 6):
             .order("id", desc=True) \
             .limit(bounded_limit) \
             .execute()
-        return list(reversed(res.data)) if res.data else []
+        rows = list(reversed(res.data)) if res.data else []
+        # A CRM reset keeps source/audit rows intact but starts new bot context.
+        reset = max((i for i, row in enumerate(rows)
+                     if isinstance(row.get("metadata"), dict)
+                     and row["metadata"].get("source") == "crm_reset"), default=-1)
+        return rows[reset + 1:]
     except Exception as e:
         print(f"Error obteniendo logs de mensajes: {e}")
         return []

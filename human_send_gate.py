@@ -32,13 +32,24 @@ def automatic_send_gate(settings, store_factory, phone, payload):
             message="missing_control_epoch",
             confirmed_not_sent=True,
         )
-    attempt_id = "auto-" + uuid.uuid4().hex
+    handoff_id = str(trace.get("crm_handoff_ack_request_id") or "")
+    if handoff_id and payload.get("type") != "text":
+        raise ProviderError("meta", "control_validation", 409,
+                            message="handoff_notice_text_only", confirmed_not_sent=True)
+    attempt_id = (
+        "handoff-ack-" + hashlib.sha256(
+            json.dumps([settings.BUSINESS_ID, phone, handoff_id]).encode()
+        ).hexdigest()
+        if handoff_id else "auto-" + uuid.uuid4().hex
+    )
     digest = hashlib.sha256(
         json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()
     ).hexdigest()
     store = store_factory()
     result = store.begin_send(
-        phone, attempt_id, "auto", expected_version=int(version), request_digest=digest
+        phone, attempt_id, "auto", expected_version=int(version), request_digest=digest,
+        **({"actor": "bot", "handoff_request_id": handoff_id,
+            "text": payload.get("text", {}).get("body", "")} if handoff_id else {}),
     )
     if result.get("status") != "reserved":
         raise ProviderError(
