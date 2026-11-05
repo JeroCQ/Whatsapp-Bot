@@ -392,3 +392,7 @@ No habilitar pantallas/acciones a partir de esta lista de trabajo futuro. Para e
 primer piloto seguir la guía Briosos: secreto de exportación GET sin credenciales
 administrativas, control por otro secreto, identidad individual, aprobación del
 proxy y prueba aislada. Sintético sigue disponible y NOTIFICATIONS_ENABLED=false.
+
+### Missing command receipt recovery
+
+A typed bot `404 {"detail":"command_not_found"}` makes CRM query the current authoritative control, never repeat the original mutation. An outstanding take can become `confirmed` only if that bot currently confirms a paused human conversation owned by the ledger actor; the result has `reconciled_from_control=true`. This confirms the control state, not a provider message. It does not bypass the WhatsApp window (`can_send` may still be false). Message outcomes remain unknown without provider evidence, with `error=command_result_missing_no_resend` and current control when available. Generic 404s do not establish command absence. Existing cached acceptance/delivery evidence is preserved. No SQL, migration, new configuration or infrastructure changes.

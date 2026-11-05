@@ -105,7 +105,20 @@ class CommandCoordinator:
     ) -> tuple[dict[str, Any], int]:
         try:
             result = self.gateway.command(phone, command_id)
-        except BotGatewayError:
+        except BotGatewayError as error:
+            if error.code == "bot_command_not_found":
+                # A missing receipt is not proof that a message was never sent.
+                # Read current authority; never repeat the original POST.
+                try:
+                    control = self.gateway.control(phone)
+                except BotGatewayError:
+                    control = None
+                result = {
+                    **(cached or {}), "command_id": command_id,
+                    "status": (cached or {}).get("status", "unknown"),
+                    "control": control, "error": "command_result_missing_no_resend",
+                }
+                return self._reconcile_recovery(phone, command_id, result)
             if cached:
                 return cached, cached_code
             return {
@@ -115,9 +128,31 @@ class CommandCoordinator:
                 "provider_message_id": None,
                 "error": "query_command_until_resolved",
             }, 202
-        code = 202 if result["status"] in {"pending", "unknown"} else 200
+        return self._reconcile_recovery(phone, command_id, result)
+
+    def _reconcile_recovery(
+        self, phone: str, command_id: str, result: dict[str, Any]
+    ) -> tuple[dict[str, Any], int]:
         with self.sessions() as session:
-            exists = session.get(BotCommand, (self.gateway.business.id, command_id)) is not None
+            row = session.get(BotCommand, (self.gateway.business.id, command_id))
+            if row and row.phone_number != phone:
+                raise BotGatewayError("command_not_found", 404)
+            control = result.get("control") or {}
+            if row and result["status"] in {"pending", "unknown"}:
+                took = (
+                    row.operation == "take" and control.get("phase") == "human"
+                    and control.get("confirmed") is True and control.get("is_paused") is True
+                    and control.get("owner") == row.profile
+                )
+                returned = (
+                    row.operation == "close" and control.get("phase") == "ai"
+                    and control.get("is_paused") is False and not control.get("owner")
+                )
+                if took or returned:
+                    result = {**result, "status": "confirmed", "reconciled_from_control": True}
+                    result.pop("error", None)
+            exists = row is not None
+        code = 202 if result["status"] in {"pending", "unknown"} else 200
         return self._save(command_id, result, code) if exists else (result, code)
 
     def status(self, principal: Actor, phone: str, command_id: str) -> tuple[dict[str, Any], int]:
