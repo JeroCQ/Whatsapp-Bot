@@ -46,7 +46,7 @@ def test_old_handoff_and_response_do_not_cross_cycles():
     "paused,roles,bucket",
     [
         (True, ["user", "system", "asesor", "user"], "awaiting_human"),
-        (True, ["user", "system", "asesor"], "human_active"),
+        (True, ["user", "system", "asesor"], "awaiting_human"),
         (False, ["user", "system", "asesor"], "ai_active"),
     ],
 )
@@ -85,7 +85,7 @@ def test_historical_delivery_does_not_override_current_cycle():
         ],
         handoff={"status": "unknown", "created_at": AT.isoformat()},
     )
-    assert result["bucket"] == "human_active"
+    assert result["bucket"] == "awaiting_human"
 
 
 def test_reused_handoff_row_uses_updated_at_for_current_request():
@@ -121,9 +121,9 @@ def test_closed_current_cycle():
 @pytest.mark.parametrize(
     "role,content", [("system", "HANDOFF: new cycle"), ("model", "new activity"), ("asesor", "new activity")]
 )
-def test_activity_after_close_is_a_new_cycle(role, content):
+def test_non_customer_activity_after_close_does_not_reopen(role, content):
     result = classify_messages([msg(1, "system", "RESOLVED: done"), msg(2, role, content)], paused=False)
-    assert result["bucket"] == "ai_active"
+    assert result["bucket"] == "closed"
 
 
 def test_modern_metadata_precedes_timestamp():
@@ -135,7 +135,11 @@ def test_modern_metadata_precedes_timestamp():
     assert result["unanswered_customer_count"] == 1
     assert result["bucket"] == "awaiting_human"
     messages[1]["metadata"]["inbound_message_ids"] = ["a"]
-    assert classify_messages(messages)["bucket"] == "human_active"
+    answered = classify_messages(messages)
+    assert answered["bucket"] == "awaiting_human"
+    assert answered["unanswered_customer_count"] == 0
+    assert answered["priority_reason"] == "human_waiting_customer"
+    assert answered["attention_since"] is None and answered["waiting_seconds"] == 0
 
 
 def test_modern_response_answers_clock_skewed_incoming():
@@ -149,7 +153,8 @@ def test_modern_response_answers_clock_skewed_incoming():
 def test_legacy_same_timestamp_uses_id():
     messages = [msg(2, "asesor", seconds=0), msg(1, "user", seconds=0)]
     result = classify_messages(messages)
-    assert result["bucket"] == "human_active"
+    assert result["bucket"] == "awaiting_human"
+    assert result["unanswered_customer_count"] == 0
     assert "legacy_response_order_fallback" in result["data_quality_warnings"]
 
 
@@ -233,7 +238,7 @@ def test_receipt_for_different_command_does_not_invalidate_human_response():
         ),
         receipt(3, "other-reply", "failed"),
     ]
-    assert classify_messages(messages)["bucket"] == "human_active"
+    assert classify_messages(messages)["bucket"] == "awaiting_human"
 
 
 @pytest.mark.parametrize("status", ["accepted", "delivered", "read", "failed"])
@@ -260,4 +265,4 @@ def test_receipts_and_reconciled_metadata_preserve_monotonic_delivery():
     ]
     assert classify_messages(messages)["bucket"] == "awaiting_human"
     messages.extend([receipt(4, "reply-one", "delivered"), receipt(5, "reply-one", "accepted")])
-    assert classify_messages(messages)["bucket"] == "human_active"
+    assert classify_messages(messages)["bucket"] == "awaiting_human"

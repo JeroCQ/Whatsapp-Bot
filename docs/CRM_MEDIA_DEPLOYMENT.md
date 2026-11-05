@@ -1,6 +1,15 @@
 # CRM multimedia: actualización coordinada y manual
 
 Esta es la guía única de esta entrega para el bot, CRM y frontend real de Lovable.
+La corrección posterior de nombres/orden/actualización de bandeja se entrega en
+`fix/crm-inbox-freshness` de ambos repositorios, con PR backend hacia
+`feat/crm-media-delivery` y frontend hacia `main`. Para esa corrección, actualizar
+primero el exportador del bot del negocio autorizado, después API y sync al mismo
+commit y finalmente el frontend. No requiere SQL ni migraciones nuevas; conserva
+`0004_delivery_receipts`. En el worker, usar `SYNC_INTERVAL_SECONDS=5` si había
+un valor explícito de 30. No aplicar cambios pendientes de variables de otros
+negocios. Las versiones y ramas de la entrega multimedia original se mantienen
+abajo como referencia histórica, no como el commit de esta corrección.
 No crea otro CRM, otra base, otra autenticación ni otro emisor de WhatsApp.
 La ampliación a Tanaka, Memo’s y Velvet está autorizada en el código por el
 registro configurado; no se ha activado ni desplegado ningún negocio desde Codex.

@@ -3,6 +3,7 @@ import json
 import logging
 import signal
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 from crm_service.db import database
 from crm_service.notifications import dispatch
@@ -39,9 +40,15 @@ def main() -> None:
         while not stop.is_set():
             try:
                 queued_business = consume_one(worker, sessions, args.business)
-                for business_id in settings.businesses:
-                    if business_id != queued_business and (not args.business or args.business == business_id):
-                        worker.run(business_id)
+                pending = [
+                    business_id
+                    for business_id in settings.businesses
+                    if business_id != queued_business and (not args.business or args.business == business_id)
+                ]
+                # Each business keeps its own budget/lock/reader; a slow brand
+                # no longer delays all other brands before their first read.
+                with ThreadPoolExecutor(max_workers=max(1, min(4, len(pending)))) as pool:
+                    list(pool.map(worker.run, pending))
                 dispatch(settings, sessions)
             except Exception as error:
                 logging.error("worker_iteration_failed code=%s", type(error).__name__)

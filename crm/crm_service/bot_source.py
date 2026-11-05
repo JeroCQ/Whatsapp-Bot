@@ -49,6 +49,7 @@ class BotSourceAdapter:
             raise SourceFailure("invalid_bot_source_origin") from None
         self.business, self.budget = business, budget
         self.warnings: set[str] = set()
+        self.phone_filter_supported = False
         self.client = ReadOnlyBotClient(
             origin=origin,
             business_id=business.id,
@@ -62,10 +63,17 @@ class BotSourceAdapter:
     def close(self) -> None:
         self.client.close()
 
-    def page(self, table: str, *, after: str | int | None, limit: int) -> list[dict[str, Any]]:
+    def conversation(self, table: str, phone: str) -> list[dict[str, Any]]:
+        return self.page(table, after=None, limit=1, phone_number=phone)
+
+    def page(
+        self, table: str, *, after: str | int | None, limit: int, phone_number: str | None = None
+    ) -> list[dict[str, Any]]:
         if table not in FIELDS or not 1 <= limit <= 1000:
             raise SourceFailure("invalid_bot_source_page")
         params = {"limit": str(limit)}
+        if phone_number is not None:
+            params["phone_number"] = phone_number
         if after is not None:
             params["after"] = str(after)
         path = f"/internal/crm/v1/businesses/{quote(self.business.id, safe='')}/source/{table}"
@@ -82,6 +90,9 @@ class BotSourceAdapter:
             raise SourceFailure("bot_source_network_error") from None
         if response.status_code != 200:
             raise SourceFailure(f"bot_source_http_{response.status_code}")
+        self.phone_filter_supported = response.headers.get("X-CRM-Phone-Filter") == "1"
+        if phone_number is not None and not self.phone_filter_supported:
+            raise SourceFailure("bot_source_phone_filter_unavailable")
         try:
             result = response.json()
         except ValueError:

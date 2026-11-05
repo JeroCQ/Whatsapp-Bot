@@ -6,7 +6,7 @@ from datetime import timedelta
 from typing import Any, Protocol
 from urllib.parse import urlencode
 
-from sqlalchemy import select, text
+from sqlalchemy import or_, select, text, true
 from sqlalchemy.orm import Session, sessionmaker
 
 from crm_service.budget import BudgetExhausted, ReadBudget
@@ -63,8 +63,37 @@ class Synchronizer:
                     results[business.id] = "backoff"
                     continue
             budget = ReadBudget(self.settings, self.clock)
+            live_committed = False
             try:
+                if prior and prior.baseline_complete and self.settings.source_mode == "bot_api":
+                    try:
+                        live = self.live_business(business, budget)
+                        live_committed = live == "ok"
+                    except SourceFailure as error:
+                        if str(error) != "bot_source_phone_filter_unavailable":
+                            raise
+                        live = "ok"  # Compatible periodic reconciliation for older exporters.
+                    if live != "ok":
+                        results[business.id] = live
+                        continue
+                    # Mutable tables still get a resumable full reconciliation,
+                    # but never in front of the committed incremental live pass.
+                    with self.sessions() as session:
+                        sweep = session.get(SyncCursor, (business.id, "mutable_refresh"))
+                        due = not sweep or timestamp(sweep.value.get("next_at")) <= now()
+                    if not due:
+                        results[business.id] = live
+                        continue
+                    try:
+                        budget.check()
+                    except BudgetExhausted:
+                        results[business.id] = "partial"
+                        continue
                 results[business.id] = self.business(business, budget)
+                if results[business.id] == "ok":
+                    with self.sessions.begin() as session:
+                        sweep = self.cursor(session, business.id, "mutable_refresh")
+                        sweep.value = {"next_at": (now() + timedelta(seconds=60)).isoformat()}
             except Exception as error:
                 safe = str(error) if isinstance(error, SourceFailure) else type(error).__name__
                 # Never log exception bodies, URLs, phone numbers, message text or credentials.
@@ -80,10 +109,108 @@ class Synchronizer:
                         self.settings.backoff_max_seconds,
                         self.settings.backoff_base_seconds * 2 ** min(status.failures - 1, 12),
                     )
-                    status.next_retry_at = now() + timedelta(seconds=delay)
-                    status.run_state, status.metrics = "failed", budget.metrics()
-                results[business.id] = "failed"
+                    if live_committed:
+                        # Historical reconciliation failed after current messages
+                        # were committed. Back off that sweep, not live traffic.
+                        sweep = self.cursor(session, business.id, "mutable_refresh")
+                        sweep.value = {"next_at": (now() + timedelta(seconds=delay)).isoformat()}
+                        status.next_retry_at = None
+                        status.run_state = "partial"
+                    else:
+                        status.next_retry_at = now() + timedelta(seconds=delay)
+                        status.run_state = "failed"
+                    status.metrics = budget.metrics()
+                results[business.id] = "partial" if live_committed else "failed"
         return results
+
+    def reader(self, business: Business, budget: ReadBudget) -> Reader:
+        if self.factory:
+            return self.factory(business)
+        if self.settings.source_mode == "disabled":
+            raise SourceFailure("source_access_disabled")
+        if self.settings.source_mode == "bot_api":
+            from crm_service.bot_source import BotSourceAdapter
+
+            return BotSourceAdapter(business, budget=budget, test_mode=self.settings.bot_test_mode)
+        require_disposable_source(business.readonly_database_url)
+        from crm_service.source_postgres import PostgresSourceAdapter
+
+        return PostgresSourceAdapter(business, budget=budget)
+
+    def live_business(self, business: Business, budget: ReadBudget) -> str:
+        """Commit new messages + their own fresh contact/state before broad scans."""
+        adapter = self.reader(business, budget)
+        try:
+            with self.sessions.begin() as session:
+                self.local_timeout(session, budget)
+                if not session.scalar(
+                    text("SELECT pg_try_advisory_xact_lock(:key)"), {"key": lock_id(business.id)}
+                ):
+                    return "already_running"
+                status = session.get(SyncStatus, business.id)
+                if status is None or not status.baseline_complete:
+                    return "partial"
+                try:
+                    live = self.cursor(session, business.id, "live_cycle")
+                    if not live.value.get("phase"):
+                        self.messages(session, business, adapter, budget)
+                        live.value = {"phase": 1}
+                    pending = session.scalars(
+                        select(SourceConversation)
+                        .where(
+                            SourceConversation.business_id == business.id,
+                            SourceConversation.dirty.is_(True),
+                        )
+                        .order_by(SourceConversation.phone_number)
+                        .limit(self.settings.sync_max_projections)
+                    ).all()
+                    for source in pending:
+                        start = (
+                            int(live.value.get("table", 0))
+                            if live.value.get("phone") == source.phone_number
+                            else 0
+                        )
+                        tables = ("customers", "handoff_deliveries", "conversation_states")
+                        for index in range(start, len(tables)):
+                            table = tables[index]
+                            budget.before_page()
+                            read = getattr(adapter, "conversation", None)
+                            if not callable(read):
+                                raise SourceFailure("bot_source_phone_filter_unavailable")
+                            if self.factory:
+                                with budget.request():
+                                    rows = read(table, source.phone_number)
+                                    budget.record_rows(len(rows))
+                            else:
+                                rows = read(table, source.phone_number)
+                            for item in rows:
+                                if item.get("phone_number") != source.phone_number:
+                                    raise SourceFailure("source_conversation_mismatch")
+                                if table == "customers":
+                                    source.customer, source.name = item, str(item.get("name") or "")
+                                elif table == "conversation_states":
+                                    source.state = item
+                                else:
+                                    if item.get("business_id") != business.id:
+                                        raise SourceFailure("source_business_mismatch")
+                                    source.handoff = item
+                            live.value = {"phase": 1, "phone": source.phone_number, "table": index + 1}
+                        self.project(
+                            session, business, sorted(adapter.warnings), True, budget, [source.phone_number]
+                        )
+                        live.value = {"phase": 1}
+                    live.value = {"phase": 0}
+                    status.run_state = "ok"
+                except BudgetExhausted:
+                    status.run_state = "partial"
+                status.last_attempt = now()
+                if status.run_state == "ok":
+                    status.last_success = now()
+                status.last_error, status.failures, status.next_retry_at = None, 0, None
+                status.metrics, status.warnings = budget.metrics(), sorted(adapter.warnings)
+            return status.run_state
+        finally:
+            adapter.close()
 
     def business(self, business: Business, budget: ReadBudget | None = None) -> str:
         budget = budget or ReadBudget(self.settings, self.clock)
@@ -103,22 +230,7 @@ class Synchronizer:
                 cycle = self.cursor(session, business.id, "cycle")
                 phase = int(cycle.value.get("phase", 0))
                 try:
-                    if self.factory:
-                        adapter = self.factory(business)
-                    else:
-                        if self.settings.source_mode == "disabled":
-                            raise SourceFailure("source_access_disabled")
-                        if self.settings.source_mode == "bot_api":
-                            from crm_service.bot_source import BotSourceAdapter
-
-                            adapter = BotSourceAdapter(
-                                business, budget=budget, test_mode=self.settings.bot_test_mode
-                            )
-                        else:
-                            require_disposable_source(business.readonly_database_url)
-                            from crm_service.source_postgres import PostgresSourceAdapter
-
-                            adapter = PostgresSourceAdapter(business, budget=budget)
+                    adapter = self.reader(business, budget)
                     stages = ("customers", "conversation_states", "handoff_deliveries", "message_logs")
                     while phase < 4:
                         self.local_timeout(session, budget)
@@ -309,13 +421,31 @@ class Synchronizer:
         cursor.updated_at = now()
 
     def project(
-        self, session: Session, business: Business, warnings: list[str], baseline: bool, budget: ReadBudget
+        self,
+        session: Session,
+        business: Business,
+        warnings: list[str],
+        baseline: bool,
+        budget: ReadBudget,
+        phones: list[str] | None = None,
     ) -> None:
         count = 0
         for source in session.scalars(
             select(SourceConversation)
-            .where(SourceConversation.business_id == business.id, SourceConversation.dirty.is_(True))
-            .order_by(SourceConversation.phone_number)
+            .outerjoin(
+                CRMConversation,
+                (CRMConversation.business_id == SourceConversation.business_id)
+                & (CRMConversation.phone_number == SourceConversation.phone_number),
+            )
+            .where(
+                SourceConversation.business_id == business.id,
+                SourceConversation.phone_number.in_(phones) if phones is not None else true(),
+                or_(
+                    SourceConversation.dirty.is_(True),
+                    CRMConversation.classification["classification_version"].as_integer().is_distinct_from(2),
+                ),
+            )
+            .order_by(SourceConversation.dirty.desc(), SourceConversation.phone_number)
             .limit(self.settings.sync_max_projections + 1)
         ):
             budget.check()
@@ -357,7 +487,10 @@ class Synchronizer:
                     business_id=business.id, phone_number=source.phone_number, transition=0, version=1
                 )
                 session.add(row)
-            entering = result["bucket"] == "awaiting_human" and previous != "awaiting_human"
+            entering = result["bucket"] == "awaiting_human" and previous not in {
+                "awaiting_human",
+                "human_active",
+            }
             if entering:
                 row.transition += 1
             row.bucket, row.classification, row.sort_key = result["bucket"], result, result["sort_key"]

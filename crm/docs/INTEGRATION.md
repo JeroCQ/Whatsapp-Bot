@@ -127,7 +127,7 @@ No existe un total global de resultados en las respuestas paginadas.
 | Campo | Tipo / semántica |
 | --- | --- |
 | `business_id`, `phone_number`, `name` | strings; nombre puede estar vacío |
-| `bucket` | `awaiting_human`, `human_active`, `ai_active` o `closed` |
+| `bucket` | `awaiting_human`, `ai_active` o `closed`; `human_active` es un alias de consulta legado |
 | `attention_since` | fecha o null; primer mensaje pendiente o inicio inferido de atención |
 | `waiting_seconds` | entero no negativo, calculado por el backend al responder |
 | `unanswered_customer_count` | entero; mensajes del ciclo actual sin respuesta humana identificada |
@@ -141,6 +141,7 @@ No existe un total global de resultados en las respuestas paginadas.
 | `assigned_to` | perfil de agente o null |
 | `version` | entero para control optimista del PATCH CRM |
 | `read` | booleano por perfil, empresa y conversación; nunca cambia el bucket |
+| `last_activity_at` | fecha UTC de la última actividad conversacional; no cambia por leído o recibos técnicos |
 | `chatwoot_url` | deep link calculado o null; no significa que el CRM haya contactado Chatwoot |
 
 Ejemplo sintético abreviado de una página (el objeto `Conversation` completo
@@ -223,14 +224,27 @@ son verdaderos si esa lista no está vacía; comprobar la pertenencia por negoci
 | `cursor` | string opaco opcional de la respuesta anterior |
 | `limit` | entero 1–200; predeterminado 50 |
 
-El backend ordena por prioridad y espera según su clasificación. No recalcular
+En `awaiting_human` el backend ordena por prioridad y espera; en `all`, IA y
+cerradas ordena por `last_activity_at` descendente (actividad conversacional,
+no leído, consulta de control ni recibos técnicos). No recalcular
 el bucket en el frontend a partir de eventos históricos. El cursor dura 15
 minutos y queda vinculado al perfil, alcance y filtros. Conservar los mismos
 filtros al solicitar la siguiente página. No proporciona snapshot entre llamadas;
 si una sync cambia clasificación durante la navegación, refrescar desde la primera
 página. El resultado no incluye `total` ni `has_more`.
-Para la cola de atención, consultar `bucket=awaiting_human`: los demás buckets
-usan prioridad 0 y pueden aparecer primero cuando se consulta `bucket=all`.
+Para la cola humana, consultar `bucket=awaiting_human`: incluye conversaciones
+pausadas hasta cierre/devolución a IA, aunque el asesor ya haya contestado.
+`priority_reason=human_waiting_customer`, cero mensajes pendientes y
+`attention_since=null` distinguen la espera del cliente. Ya no existe una
+categoría visible «En gestión». Eventos de sistema posteriores al cierre no
+reabren la conversación; un nuevo mensaje del cliente sí.
+
+El worker prioriza mensajes incrementales y consulta únicamente el contacto y
+estado de los teléfonos afectados, mediante GET del exportador autenticado.
+La reconciliación completa sigue siendo acotada y reanudable. El exportador
+anuncia `X-CRM-Phone-Filter: 1`; versiones anteriores conservan el camino de
+reconciliación, sin confiar en un filtro ignorado. `SYNC_INTERVAL_SECONDS`
+predetermina 5 segundos; una configuración explícita anterior se respeta.
 
 `GET C` admite `limit` 1–200 (predeterminado 100) y `cursor` opcional. Devuelve
 200 `ConversationDetail`. La primera página contiene los mensajes más recientes,

@@ -17,6 +17,7 @@ from crm_service.models import CRMConversation, SourceConversation, SourceMessag
 CONVERSATION = "/v1/conversations/{business_id}/{phone_number}"
 DOCUMENT = Path(__file__).parents[1] / "docs" / "openapi.json"
 SUMMARY_KEYS = {
+    "last_activity_at",
     "business_id",
     "phone_number",
     "name",

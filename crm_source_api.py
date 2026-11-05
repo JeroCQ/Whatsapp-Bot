@@ -55,7 +55,7 @@ class SupabaseSourceReader:
     def __init__(self, client, business_id, provider):
         self.client, self.business_id, self.provider = client, business_id, provider
 
-    def page(self, table, *, after, limit):
+    def page(self, table, *, after, limit, phone_number=None):
         if table not in SOURCE_FIELDS:
             raise ValueError("Unsupported source table")
         fields, warnings = list(SOURCE_FIELDS[table]), []
@@ -69,6 +69,8 @@ class SupabaseSourceReader:
             )
             if after is not None:
                 query = query.gt(key, after)
+            if phone_number is not None:
+                query = query.eq("phone_number", phone_number)
             if table == "handoff_deliveries":
                 query = query.eq("business_id", self.business_id)
             try:
@@ -116,6 +118,7 @@ def create_source_router(settings, reader_factory):
         response: Response,
         after: str | None = Query(None, max_length=200),
         limit: int = Query(500, ge=1, le=1000),
+        phone_number: str | None = Query(None, min_length=1, max_length=200),
     ):
         if not getattr(settings, "CRM_SOURCE_READ_ENABLED", False):
             raise HTTPException(404, "Source export is disabled")
@@ -137,12 +140,16 @@ def create_source_router(settings, reader_factory):
                 )
             after = int(after)
         try:
-            rows, warnings = reader_factory().page(table, after=after, limit=limit)
+            kwargs = {"phone_number": phone_number} if phone_number is not None else {}
+            rows, warnings = reader_factory().page(
+                table, after=after, limit=limit, **kwargs
+            )
         except Exception:
             raise HTTPException(503, "Source export unavailable") from None
         response.headers["X-CRM-Data-Quality"] = json.dumps(
             warnings, separators=(",", ":")
         )
+        response.headers["X-CRM-Phone-Filter"] = "1"
         return rows
 
     return router

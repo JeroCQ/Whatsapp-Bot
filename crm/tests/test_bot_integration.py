@@ -65,6 +65,31 @@ def test_source_secret_has_no_command_or_other_tenant_destination(business):
         reader.close()
 
 
+def test_targeted_source_reads_require_explicit_filter_support(business):
+    calls = []
+
+    def respond(request):
+        calls.append(request)
+        assert request.method == "GET"
+        assert request.url.params["phone_number"] == "573000000001"
+        return httpx.Response(
+            200, json=[{"phone_number": "573000000001"}], headers={"X-CRM-Phone-Filter": "1"}
+        )
+
+    reader = BotSourceAdapter(business, transport=httpx.MockTransport(respond))
+    try:
+        assert reader.conversation("customers", "573000000001") == [{"phone_number": "573000000001"}]
+        assert len(calls) == 1
+    finally:
+        reader.close()
+    reader = BotSourceAdapter(business, transport=httpx.MockTransport(lambda _: httpx.Response(200, json=[])))
+    try:
+        with pytest.raises(SourceFailure, match="bot_source_phone_filter_unavailable"):
+            reader.conversation("customers", "573000000001")
+    finally:
+        reader.close()
+
+
 def test_gateway_never_retries_ambiguous_post_or_follows_redirect(business):
     calls = []
 

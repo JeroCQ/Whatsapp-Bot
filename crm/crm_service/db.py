@@ -8,7 +8,7 @@ def database(settings: Settings) -> tuple[Engine, sessionmaker[Session]]:
     engine = create_engine(
         settings.database_url,
         pool_pre_ping=True,
-        pool_size=2,
+        pool_size=max(2, min(4, len(settings.businesses))),
         max_overflow=0,
         pool_timeout=5,
         hide_parameters=True,
