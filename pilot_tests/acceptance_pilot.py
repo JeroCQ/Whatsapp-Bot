@@ -590,7 +590,19 @@ def _command_status(pilot, command_id):
     return response.json()
 
 
-def test_client_handoff_pause_human_receipt_close_and_ai_resume(pilot):
+@pytest.mark.parametrize("legacy_chatwoot_id", [None, 44])
+def test_client_handoff_pause_human_receipt_close_and_ai_resume(pilot, legacy_chatwoot_id):
+    if legacy_chatwoot_id is not None:
+        # A migrated business keeps its old ticket reference after a CRM close.
+        # That reference must neither hold AI control nor swallow a new handoff.
+        import database as bot_database
+
+        bot_database.get_or_create_customer_state(PHONE, "SYNTHETIC contact")
+        with psycopg.connect(pilot.bot_dsn, autocommit=True) as connection:
+            connection.execute(
+                "UPDATE conversation_states SET chatwoot_conversation_id=%s WHERE phone_number=%s",
+                (legacy_chatwoot_id, PHONE),
+            )
     _post_incoming(pilot)
     control = _control(pilot)
     assert control["phase"] == "waiting" and control["is_paused"]
@@ -632,6 +644,16 @@ def test_client_handoff_pause_human_receipt_close_and_ai_resume(pilot):
     )
     assert len(pilot.meta.sent) == count + 1
     assert pilot.meta.sent[-1]["payload"]["text"]["body"] == "SYNTHETIC AI response"
+    assert "Hola otra vez" in pilot.llm_calls
+    _post_incoming(
+        pilot, message_id="wamid.SYNTHETIC.handoff-again", body="Necesito un asesor"
+    )
+    assert _control(pilot)["phase"] == "waiting"
+    if legacy_chatwoot_id is not None:
+        row = pilot.repository.table("conversation_states").select("chatwoot_conversation_id").eq(
+            "phone_number", PHONE
+        ).execute().data[0]
+        assert row["chatwoot_conversation_id"] == legacy_chatwoot_id
 
 
 def test_double_click_and_retry_send_once_and_cross_business_rejected(pilot):
