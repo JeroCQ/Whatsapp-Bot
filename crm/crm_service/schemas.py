@@ -73,6 +73,10 @@ class HistoricalDismissInput(Input):
     version: int = Field(ge=1)
 
 
+class TransferInput(ControlInput):
+    target_queue: Literal["retail", "wholesale"]
+
+
 class HumanMessageInput(Input):
     command_id: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
     expected_version: int = Field(ge=0)

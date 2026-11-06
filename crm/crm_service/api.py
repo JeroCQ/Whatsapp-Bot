@@ -9,7 +9,7 @@ from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from sqlalchemy import and_, func, or_, select, text, tuple_
+from sqlalchemy import and_, func, or_, select, text, tuple_, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
@@ -53,6 +53,7 @@ from crm_service.models import (
     now,
 )
 from crm_service.notifications import endpoint_allowed, endpoint_hash, preference, push_config
+from crm_service.routing import authorize_case, queue_clause
 from crm_service.schemas import (
     Bucket,
     ControlInput,
@@ -66,6 +67,7 @@ from crm_service.schemas import (
     SyncInput,
     TaskInput,
     TaskUpdate,
+    TransferInput,
 )
 from crm_service.security import Actor, authenticate, decode_cursor, encode_cursor
 from crm_service.settings import Settings
@@ -98,9 +100,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             agent = session.get(Agent, principal.profile)
             if agent is None:
-                session.add(Agent(profile=principal.profile, allowed_businesses=list(principal.businesses)))
-            else:
-                agent.allowed_businesses = list(principal.businesses)
+                agent = Agent(profile=principal.profile, allowed_businesses=list(principal.businesses), preferences={})
+                session.add(agent)
+            agent.allowed_businesses = list(principal.businesses)
+            old = agent.preferences.get("_crm_operator", {})
+            agent.preferences = {**agent.preferences, "_crm_operator": {
+                **old, "role": "admin" if principal.is_admin else "operator",
+                "queue": principal.attention_queue, "aliases": list(principal.aliases),
+                "since": old.get("since") or now().isoformat(),
+            }}
+            for retired in principal.retired_profiles:
+                if retired == principal.profile:
+                    continue
+                previous = session.get(Agent, retired)
+                if previous:
+                    previous.preferences = {**previous.preferences, "_crm_operator": {"role": "retired"}}
+                    session.execute(update(PushSubscription).where(PushSubscription.profile == retired).values(active=False))
         return principal
 
     Auth = Annotated[Actor, Depends(actor)]
@@ -136,6 +151,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         source = session.get(SourceConversation, (business, phone))
         if not source or not crm:
             raise HTTPException(404, "Conversation not found")
+        authorize_case(principal, crm)
         return source, crm
 
     def check_assignment(session: Session, principal: Actor, business: str, assignee: str | None) -> None:
@@ -171,6 +187,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "stage": crm.stage,
             "tags": crm.tags,
             "assigned_to": crm.assigned_to,
+            "attention_queue": classification.get("attention_queue"),
+            "queue_needs_classification": classification.get("queue_needs_classification", False),
             "version": crm.version,
             "read": bool(read and read.last_message_id >= classification.get("last_message_id", 0)),
             "chatwoot_url": settings.businesses[source.business_id].deep_link(
@@ -252,8 +270,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def businesses(principal: Auth) -> list[dict[str, str]]:
         return [{"business_id": name} for name in principal.businesses]
 
-    def bot_gateway(principal: Actor, business_id: str) -> BotGateway:
+    def bot_gateway(principal: Actor, business_id: str, phone: str | None = None) -> BotGateway:
         principal.authorize(business_id)
+        if phone and business_id == "memos" and not principal.is_admin:
+            with sessions() as session:
+                conversation(session, principal, business_id, phone)
         try:
             return BotGateway(
                 settings.businesses[business_id],
@@ -266,7 +287,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/v1/conversations/{business_id}/{phone_number}/control")
     def authoritative_control(business_id: str, phone_number: str, principal: Auth) -> dict[str, Any]:
-        gateway = bot_gateway(principal, business_id)
+        gateway = bot_gateway(principal, business_id, phone_number)
         try:
             return gateway.control(phone_number)
         except BotGatewayError as error:
@@ -277,7 +298,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def execute_bot_command(
         business_id: str, phone_number: str, operation: str, payload: dict[str, Any], principal: Actor
     ) -> JSONResponse:
-        gateway = bot_gateway(principal, business_id)
+        with sessions() as session:
+            from crm_service.models import BotCommand
+            known = session.get(BotCommand, (business_id, str(payload["command_id"])))
+            replay = bool(known and known.profile == principal.profile and known.phone_number == phone_number and known.operation == operation)
+        gateway = bot_gateway(principal, business_id, None if replay else phone_number)
         try:
             result, status = CommandCoordinator(sessions, gateway).execute(
                 principal, phone_number, operation, payload
@@ -294,6 +319,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> JSONResponse:
         return execute_bot_command(business_id, phone_number, "take", body.model_dump(), principal)
 
+    @app.post("/v1/conversations/{business_id}/{phone_number}/transfer")
+    def transfer_attention(business_id: str, phone_number: str, body: TransferInput, principal: Auth) -> JSONResponse:
+        if business_id != "memos" or body.target_queue not in principal.queue_actors:
+            principal.authorize(business_id)
+            raise HTTPException(403, "Queue transfer is not authorized")
+        return execute_bot_command(business_id, phone_number, "transfer", body.model_dump(), principal)
+
     @app.post("/v1/conversations/{business_id}/{phone_number}/messages")
     def human_message(
         business_id: str, phone_number: str, body: HumanMessageInput, principal: Auth
@@ -305,13 +337,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             business_id, phone_number, "messages", body.model_dump(exclude_none=True), principal
         )
 
-    def media_gateway(principal: Actor, business_id: str) -> BotGateway:
+    def media_gateway(principal: Actor, business_id: str, phone: str) -> BotGateway:
         principal.authorize(business_id)
         if not settings.media_allowed(business_id):
             raise HTTPException(404, "CRM media is not enabled for this business")
-        return bot_gateway(principal, business_id)
+        return bot_gateway(principal, business_id, phone)
 
-    def require_upload_control(gateway: BotGateway, phone: str, principal: Actor, version: int) -> None:
+    def require_upload_control(gateway: BotGateway, phone: str, principal: Actor, version: int) -> str:
         control = gateway.control(phone)
         if (
             control["version"] != version
@@ -319,9 +351,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             or not control["is_paused"]
             or not control["confirmed"]
             or not control["can_send"]
-            or control.get("owner") != principal.profile
+            or not principal.owns(control.get("owner"))
         ):
             raise BotGatewayError("confirmed_human_control_required", 409)
+        return str(control["owner"])
 
     @app.post("/v1/conversations/{business_id}/{phone_number}/attachments")
     async def upload_attachment(
@@ -340,7 +373,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         mime, size = upload_parameters(
             request.headers.get("content-type", ""), request.headers.get("x-upload-size", ""), voice_note
         )
-        gateway = media_gateway(principal, business_id)
+        gateway = media_gateway(principal, business_id, phone_number)
         try:
             await run_in_threadpool(
                 require_upload_control, gateway, phone_number, principal, expected_version
@@ -356,7 +389,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     raise HTTPException(422, "Attachment length differs from X-Upload-Size")
                 spool.seek(0)
                 # A completed upload is not authority to send; recheck after it took time.
-                await run_in_threadpool(
+                upload_actor = await run_in_threadpool(
                     require_upload_control, gateway, phone_number, principal, expected_version
                 )
                 result = await run_in_threadpool(
@@ -365,7 +398,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     asset_id,
                     name,
                     expected_version,
-                    principal.profile,
+                    upload_actor,
                     mime,
                     size,
                     voice_note,
@@ -398,7 +431,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         principal: Auth,
     ) -> dict[str, Any]:
         asset_id = attachment_id(asset_id)
-        gateway = media_gateway(principal, business_id)
+        gateway = media_gateway(principal, business_id, phone_number)
         try:
             return gateway.attachment(phone_number, asset_id, principal.profile)
         except BotGatewayError as error:
@@ -417,7 +450,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> StreamingResponse:
         asset_id = attachment_id(asset_id)
         headers = range_headers(request.headers)
-        gateway = media_gateway(principal, business_id)
+        gateway = media_gateway(principal, business_id, phone_number)
         try:
             # Validate identity and safe media type before streaming any bytes.
             metadata = gateway.attachment(phone_number, asset_id, principal.profile)
@@ -482,6 +515,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def bot_command_status(
         business_id: str, phone_number: str, command_id: str, principal: Auth
     ) -> JSONResponse:
+        with sessions() as session:
+            from crm_service.models import BotCommand
+            known = session.get(BotCommand, (business_id, command_id))
+            if not known or known.phone_number != phone_number or not principal.owns(known.profile):
+                conversation(session, principal, business_id, phone_number)
         gateway = bot_gateway(principal, business_id)
         try:
             if not command_id or len(command_id) > 100 or any(c in "/\\" for c in command_id):
@@ -497,7 +535,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def dismiss_historical_case(
         business_id: str, phone_number: str, body: HistoricalDismissInput, principal: Auth
     ) -> JSONResponse:
-        gateway = bot_gateway(principal, business_id)
+        gateway = bot_gateway(principal, business_id, phone_number)
         try:
             result, status = CommandCoordinator(sessions, gateway).dismiss(
                 principal, phone_number, body.command_id, body.version
@@ -562,7 +600,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     SourceConversation.phone_number == CRMConversation.phone_number,
                 ),
             )
-            .where(CRMConversation.business_id.in_(requested))
+            .where(CRMConversation.business_id.in_(requested), queue_clause(principal))
         )
         if bucket != "all":
             query = query.where(
@@ -736,6 +774,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if crm.version != body.version:
             raise HTTPException(409, "CRM version changed; reload before updating")
         values = body.model_dump(exclude_unset=True, exclude={"version"})
+        if business_id == "memos" and "assigned_to" in values and values["assigned_to"] != crm.assigned_to:
+            raise HTTPException(409, "Use the authoritative queue transfer operation")
         if any(values.get(k, "") is None for k in ("stage", "tags")):
             raise HTTPException(422, "Stage and tags cannot be null")
         check_assignment(session, principal, business_id, body.assigned_to)
@@ -908,7 +948,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def pipeline(principal: Auth, session: DB) -> dict[str, Any]:
         rows = session.execute(
             select(CRMConversation.business_id, CRMConversation.stage, func.count())
-            .where(CRMConversation.business_id.in_(principal.businesses))
+            .where(CRMConversation.business_id.in_(principal.businesses), queue_clause(principal))
             .group_by(CRMConversation.business_id, CRMConversation.stage)
         )
         return {"items": [{"business_id": b, "stage": s, "count": c} for b, s, c in rows]}
@@ -917,7 +957,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def analytics(principal: Auth, session: DB) -> dict[str, Any]:
         rows = session.execute(
             select(CRMConversation.business_id, CRMConversation.bucket, func.count())
-            .where(CRMConversation.business_id.in_(principal.businesses))
+            .where(CRMConversation.business_id.in_(principal.businesses), queue_clause(principal))
             .group_by(CRMConversation.business_id, CRMConversation.bucket)
         )
         return {
@@ -933,11 +973,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allowed = [b for b in principal.businesses if agent and preference(agent, b, "in_app")]
         query = (
             select(NotificationEvent)
+            .join(CRMConversation, and_(CRMConversation.business_id == NotificationEvent.business_id,
+                                       CRMConversation.phone_number == NotificationEvent.phone_number,
+                                       CRMConversation.transition == NotificationEvent.transition))
             .where(NotificationEvent.business_id.in_(allowed))
+            .where(queue_clause(principal), CRMConversation.classification["in_human_inbox"].as_boolean().is_distinct_from(False))
+            .where(NotificationEvent.created_at >= timestamp(agent.preferences.get("_crm_operator", {}).get("since") if agent else None))
             .order_by(NotificationEvent.created_at.desc(), NotificationEvent.id)
             .offset(offset)
             .limit(limit)
         )
+        if not principal.is_admin:
+            query = query.where(or_(CRMConversation.assigned_to.is_(None), CRMConversation.assigned_to.in_([principal.profile, *principal.aliases])))
         return {
             "items": [
                 {
@@ -955,7 +1002,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def preferences(principal: Auth, session: DB) -> dict[str, Any]:
         row = session.get(Agent, principal.profile)
         return (
-            {b: row.preferences.get(b, {"in_app": True, "web_push": True}) for b in principal.businesses}
+            {b: {channel: preference(row, b, channel) for channel in ("in_app", "web_push")} for b in principal.businesses}
             if row
             else {}
         )
@@ -969,6 +1016,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             **row.preferences,
             body.business_id: {"in_app": body.in_app, "web_push": body.web_push},
         }
+        if principal.is_admin:
+            routing = row.preferences.get("_crm_operator", {})
+            row.preferences = {**row.preferences, "_crm_operator": {**routing, "admin_opt_in": {
+                **routing.get("admin_opt_in", {}), body.business_id: body.in_app or body.web_push,
+            }}}
         audit(session, principal, body.business_id, "", "preferences.update")
         return {"ok": True}
 
@@ -990,14 +1042,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         row = session.scalar(
             select(PushSubscription).where(PushSubscription.endpoint_hash == digest).with_for_update()
         )
-        if row and row.profile != principal.profile:
+        if row and row.profile != principal.profile and not (row.profile in principal.retired_profiles and not row.active):
             raise HTTPException(409, "Subscription already registered to another profile")
         if row is None:
             row = PushSubscription(profile=principal.profile, endpoint_hash=digest)
             session.add(row)
         elif not row.active:
             row.created_at = now()
-        row.subscription, row.active = body.model_dump(), True
+        row.profile = principal.profile
+        row.subscription, row.active = {**body.model_dump(), "_login_profile": principal.login_profile or principal.profile}, True
         session.flush()
         audit(session, principal, "", "", "push.subscribe", {"id": row.id})
         return {"id": row.id}
