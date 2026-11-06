@@ -23,7 +23,7 @@ from crm_service.models import (
     SyncStatus,
     now,
 )
-from crm_service.routing import customer_queue
+from crm_service.routing import QUEUE_ROUTING_VERSION, project_queue
 from crm_service.settings import Business, Settings
 from crm_service.source import SourceFailure
 
@@ -445,7 +445,7 @@ class Synchronizer:
                 or_(
                     SourceConversation.dirty.is_(True),
                     CRMConversation.classification["classification_version"].as_integer().is_distinct_from(3),
-                    (SourceConversation.business_id == "memos") & CRMConversation.classification["attention_queue"].as_string().is_(None),
+                    (SourceConversation.business_id == "memos") & CRMConversation.classification["queue_routing_version"].as_integer().is_distinct_from(QUEUE_ROUTING_VERSION),
                 ),
             )
             .order_by(SourceConversation.dirty.desc(), SourceConversation.phone_number)
@@ -485,13 +485,12 @@ class Synchronizer:
             prior_human = bool(row and row.bucket in {"awaiting_human", "human_active"} and row.classification.get("in_human_inbox") is not False)
             entering = result["bucket"] == "awaiting_human" and result.get("in_human_inbox", True) and not prior_human
             if business.id == "memos":
-                queue, unknown = customer_queue(source.state)
-                if row and not entering and row.classification.get("attention_queue"):
-                    queue = row.classification["attention_queue"]
-                    unknown = row.classification.get("queue_needs_classification", False)
-                result.update(attention_queue=queue, queue_needs_classification=unknown)
-                if row and not entering and row.classification.get("queue_transferred"):
-                    result["queue_transferred"] = True
+                routing = project_queue(source.state, row.classification if row else {}, entering)
+                queue = routing["attention_queue"]
+                result.update(routing)
+                if row and row.classification.get("attention_queue") != queue:
+                    row.version += 1
+                    row.assigned_to = None
                 if row and entering:
                     row.assigned_to = None
                 if row and not row.assigned_to:

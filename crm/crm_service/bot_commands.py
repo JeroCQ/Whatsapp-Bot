@@ -61,7 +61,8 @@ class CommandCoordinator:
                     assert crm is not None
                     crm.assigned_to = str(result["target_actor"])
                     crm.classification = {**crm.classification, "attention_queue": result["target_queue"],
-                                          "queue_needs_classification": False, "queue_transferred": True}
+                                          "queue_needs_classification": False, "queue_transferred": True,
+                                          "queue_control_version": control["version"]}
                     crm.version += 1
                     crm.transition += 1
                     events = select(NotificationEvent.id).where(NotificationEvent.business_id == row.business_id,
@@ -72,6 +73,9 @@ class CommandCoordinator:
                     self._audit(session, row, "crm.queue_transferred", "confirmed")
             if row.operation == "take" and result["status"] == "confirmed":
                 crm = session.get(CRMConversation, (row.business_id, row.phone_number))
+                control = result.get("control") or {}
+                if crm and row.business_id == "memos" and control.get("owner") and type(control.get("version")) is int:
+                    crm.classification = {**crm.classification, "queue_control_version": control["version"]}
                 if crm and crm.assigned_to != row.profile:
                     crm.assigned_to = row.profile
                     crm.version += 1
