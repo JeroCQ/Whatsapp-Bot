@@ -204,6 +204,46 @@ def test_incidental_model_file_selection_keeps_durable_duplicate_protection(rout
     assert pauses == []
 
 
+@pytest.mark.parametrize("already_delivered", [False, True])
+def test_successful_gemini_catalog_selection_has_no_undefined_delivery_reference(routed_bot, monkeypatch, already_delivered):
+    from file_catalog import PresavedFile
+
+    route, pauses = routed_bot
+    module = route.module
+    module.FILE_CATALOG["unused_catalog"] = PresavedFile("unused_catalog", "Not selected", "document")
+    calls = []
+    monkeypatch.setattr(module, "has_successful_file_delivery", lambda *args: calls.append(args) or already_delivered)
+    # Successful SDK result (equivalent to HTTP 200), followed by real response routing.
+    turn = route("Cuéntame más de esta opción", {
+        "response": "¿Qué te gustaría conocer?", "trigger_handoff": False,
+        "requested_files": ["catalogo_memos", "catalogo_memos", "not_available"],
+    })
+    assert pauses == []
+    assert turn.response == "¿Qué te gustaría conocer?"
+    assert turn.requested_files == ([] if already_delivered else ["catalogo_memos"])
+    assert calls == [("57300", "catalogo_memos")]
+
+
+def test_internal_failure_after_successful_gemini_response_is_not_a_provider_error(routed_bot, monkeypatch, capsys):
+    from observability import message_trace
+
+    route, pauses = routed_bot
+    def processing_bug(*args, **kwargs):
+        raise NameError("PRIVATE_INTERNAL_DIAGNOSTIC")
+    monkeypatch.setattr(route.module, "b2b_actions", processing_bug)
+    with message_trace(source_event_id="synthetic-inbound", job_id="synthetic-job"):
+        route("Cuéntame más de esta opción", {"response": "Successful Gemini response", "trigger_handoff": False})
+    assert pauses == [("57300", "Fallo interno del bot al procesar la respuesta. Requiere revisión técnica")]
+    output = capsys.readouterr().out
+    assert "Gemini no respondió" not in output and "GEMINI_OPERATION_FAILED" not in output
+    assert "PRIVATE_INTERNAL_DIAGNOSTIC" not in output
+    event = next(json.loads(line.split("] ", 1)[1]) for line in output.splitlines()
+                 if line.startswith("[OPERATIONAL_EVENT]") and '"BOT_PROCESSING_FAILED"' in line)
+    assert event["error_type"] == "NameError" and event["reason"] == "internal_error"
+    assert event["stage"] == "RESPONSE_PROCESSING"
+    assert event["source_event_id"] == "synthetic-inbound" and event["job_id"] == "synthetic-job"
+
+
 @pytest.mark.parametrize("routed_bot", ["tanaka", "memos", "velvet", "briosos"], indirect=True)
 def test_suppressed_historical_image_handoff_cannot_leave_a_transfer_promise(routed_bot):
     route, pauses = routed_bot
