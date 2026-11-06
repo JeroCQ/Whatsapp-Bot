@@ -75,8 +75,15 @@ def _call_gemini(operation: str, generate):
     )
 
 
-def _record_gemini_failure(error: Exception, operation: str, started_at: float, phone: str = "") -> str:
+def _record_gemini_failure(error: Exception, operation: str, started_at: float, phone: str = "", *, provider_failure: bool = True) -> str:
     """Keep terminal errors actionable without logging provider bodies or prompts."""
+    if not provider_failure or isinstance(error, (NameError, AttributeError, TypeError)):
+        operational_event(
+            "BOT_PROCESSING_FAILED", phone=phone, stage="RESPONSE_PROCESSING", reason="internal_error",
+            result="failed", operation=operation, error_type=type(error).__name__,
+            duration_ms=max(0, int((time.perf_counter() - started_at) * 1000)),
+        )
+        return "Fallo interno del bot al procesar la respuesta. Requiere revisión técnica"
     category = "operation_timeout" if isinstance(error, GeminiOperationTimeout) else gemini_failure_category(error)
     status = gemini_error_status_code(error)
     operational_event(
@@ -333,6 +340,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
 
     """
 
+    failure_stage = "processing"
     try:
         started_at = time.perf_counter()
         policy = load_business_policy(config.BUSINESS_ID)
@@ -360,6 +368,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
                     "¿Qué producto te interesa o qué te gustaría pedir?", requested_files,
                     send_files_before_response=True,
                 )
+        failure_stage = "provider"
         response = _call_gemini(
             "message_logic",
             lambda http_options: client.models.generate_content(
@@ -374,6 +383,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
                 ),
             ),
         )
+        failure_stage = "processing"
         duration_ms = int((time.perf_counter() - started_at) * 1000)
         print(f"[METRIC] gemini_message_logic phone={phone} duration_ms={duration_ms}")
         
@@ -450,7 +460,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
             response_text = "¿Qué producto te interesa o qué te gustaría pedir?"
         if not resend_requested:
             requested_files = [file_id for file_id in requested_files
-                               if file_id in deterministic_files or file_id not in delivered_catalogs]
+                               if file_id in deterministic_files or not has_successful_file_delivery(phone, file_id)]
         if not requested_files:
             response_text = without_unsent_file_claims(response_text)
         print(
@@ -482,8 +492,11 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
         )
 
     except Exception as e:
-        print("[ERROR GEMINI] Falló la inferencia con Gemini:")
-        handoff_reason = _record_gemini_failure(e, "message_logic", started_at, phone)
+        provider_failure = isinstance(e, GeminiResponseError) or (
+            failure_stage == "provider" and not isinstance(e, (NameError, AttributeError, TypeError))
+        )
+        print("[ERROR GEMINI] Falló la inferencia con Gemini:" if provider_failure else "[ERROR BOT] Falló el procesamiento de la respuesta:")
+        handoff_reason = _record_gemini_failure(e, "message_logic", started_at, phone, provider_failure=provider_failure)
 
         if not handoffs_enabled:
             return BotTurn(
@@ -493,7 +506,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
                 follow_up_message="",
             )
 
-        if is_depleted_prepaid_credits(e):
+        if provider_failure and is_depleted_prepaid_credits(e):
             print("[CRITICAL GEMINI] Créditos prepagados agotados; revisa facturación en AI Studio.")
             pause_bot_for_handoff(phone, "Gemini no respondió: no hay créditos prepagados")
             return BotTurn(
