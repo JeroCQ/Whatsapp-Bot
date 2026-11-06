@@ -263,7 +263,7 @@ class BotGateway:
         return safe
 
     def execute(self, operation: str, phone: str, body: dict[str, Any]) -> dict[str, Any]:
-        if operation not in {"take", "messages", "close"}:
+        if operation not in {"take", "messages", "close", "transfer"}:
             raise BotGatewayError("unsupported_bot_operation", 422)
         result = self._request("POST", self._conversation_path(phone) + "/" + operation, body=body)
         try:

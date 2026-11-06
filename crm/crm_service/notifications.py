@@ -14,7 +14,9 @@ from pywebpush import WebPushException, webpush
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from crm_service.models import Agent, NotificationEvent, PushDelivery, PushSubscription, now
+from crm_service.classification import timestamp
+from crm_service.models import Agent, CRMConversation, NotificationEvent, PushDelivery, PushSubscription, now
+from crm_service.routing import attention_lock, attention_queue
 from crm_service.settings import Settings
 
 
@@ -90,9 +92,30 @@ def endpoint_hash(endpoint: str) -> str:
 
 
 def preference(agent: Agent, business: str, channel: str) -> bool:
+    routing = agent.preferences.get("_crm_operator", {})
+    if routing.get("role") not in {"operator", "admin"}:
+        return False
+    if routing.get("role") == "admin" and not routing.get("admin_opt_in", {}).get(business, False):
+        return False
     return business in agent.allowed_businesses and bool(
         agent.preferences.get(business, {}).get(channel, True)
     )
+
+
+def notification_allowed(session: Session, event: NotificationEvent, agent: Agent, channel: str) -> bool:
+    if not preference(agent, event.business_id, channel):
+        return False
+    routing = agent.preferences.get("_crm_operator", {})
+    if timestamp(event.created_at) < timestamp(routing.get("since")):
+        return False
+    crm = session.get(CRMConversation, (event.business_id, event.phone_number))
+    if not crm or event.transition != crm.transition or crm.classification.get("in_human_inbox") is False:
+        return False
+    if routing.get("role") == "admin":
+        return True
+    if event.business_id == "memos" and attention_queue(crm) != routing.get("queue", "retail"):
+        return False
+    return not crm.assigned_to or crm.assigned_to in (agent.profile, *routing.get("aliases", []))
 
 
 def send_push(subscription: dict[str, Any], payload: dict[str, Any], settings: Settings) -> int:
@@ -100,7 +123,7 @@ def send_push(subscription: dict[str, Any], payload: dict[str, Any], settings: S
         return 410
     try:
         response = webpush(
-            subscription_info=subscription,
+            subscription_info={key: subscription[key] for key in ("endpoint", "keys")},
             data=json.dumps(payload),
             vapid_private_key=vapid_identity(settings.vapid_private_key),
             vapid_claims={"sub": settings.vapid_subject},
@@ -140,7 +163,7 @@ def dispatch(settings: Settings, sessions: sessionmaker[Session], sender: Any = 
         for pending_event, recipient in missing_pairs:
             owner = session.get(Agent, recipient.profile)
             if session.get(PushDelivery, (pending_event.id, recipient.id)) is None:
-                allowed = owner and preference(owner, pending_event.business_id, "web_push")
+                allowed = owner and notification_allowed(session, pending_event, owner, "web_push")
                 session.add(
                     PushDelivery(
                         event_id=pending_event.id,
@@ -154,15 +177,23 @@ def dispatch(settings: Settings, sessions: sessionmaker[Session], sender: Any = 
         if time.monotonic() - started >= 5:
             break
         with sessions.begin() as session:
-            delivery = session.scalar(
+            candidate = session.scalar(
                 select(PushDelivery)
                 .where(PushDelivery.status == "pending", PushDelivery.retry_at <= now())
-                .with_for_update(skip_locked=True)
                 .limit(1)
             )
-            if delivery is None:
+            if candidate is None:
                 break
-            event = session.get(NotificationEvent, delivery.event_id)
+            event = session.get(NotificationEvent, candidate.event_id)
+            if event:
+                session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": attention_lock(event.business_id, event.phone_number)})
+            # Match transfer's lock order: conversation first, then outbox row.
+            delivery = session.scalar(select(PushDelivery).where(
+                PushDelivery.event_id == candidate.event_id, PushDelivery.subscription_id == candidate.subscription_id,
+                PushDelivery.status == "pending",
+            ).with_for_update(skip_locked=True).execution_options(populate_existing=True))
+            if delivery is None:
+                continue
             sub = session.get(PushSubscription, delivery.subscription_id)
             agent = session.get(Agent, sub.profile) if sub else None
             if (
@@ -171,7 +202,7 @@ def dispatch(settings: Settings, sessions: sessionmaker[Session], sender: Any = 
                 or not sub.active
                 or sub.created_at > event.created_at
                 or not agent
-                or not preference(agent, event.business_id, "web_push")
+                or not notification_allowed(session, event, agent, "web_push")
             ):
                 delivery.status = "disabled"
                 continue
@@ -184,7 +215,7 @@ def dispatch(settings: Settings, sessions: sessionmaker[Session], sender: Any = 
                         "tag": event.id,
                         "title": "Conversación por responder",
                         "url": event.link,
-                        "profile": sub.profile,
+                        "profile": sub.subscription.get("_login_profile", sub.profile),
                         "subscription_id": sub.id,
                     },
                     settings,

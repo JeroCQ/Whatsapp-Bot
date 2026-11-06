@@ -3,7 +3,7 @@ import hashlib
 import hmac
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import jwt
@@ -16,6 +16,15 @@ from crm_service.settings import Settings
 class Actor:
     profile: str
     businesses: tuple[str, ...]
+    aliases: tuple[str, ...] = ()
+    attention_queue: str | None = None
+    is_admin: bool = False
+    login_profile: str = ""
+    queue_actors: dict[str, str] = field(default_factory=dict)
+    retired_profiles: tuple[str, ...] = ()
+
+    def owns(self, owner: str | None) -> bool:
+        return bool(owner and owner in (self.profile, *self.aliases))
 
     def authorize(self, business: str) -> None:
         if business not in self.businesses:
@@ -46,7 +55,18 @@ def authenticate(request: Request, settings: Settings) -> Actor:
             raise ValueError
         if not 0 < claims["exp"] - claims["iat"] <= settings.jwt_max_lifetime:
             raise ValueError
-        return Actor(profile, tuple(sorted(set(allowed) & settings.businesses.keys())))
+        aliases, retired = claims.get("actor_aliases", []), claims.get("retired_profiles", [])
+        targets = claims.get("queue_actors", {})
+        if any(not isinstance(values, list) or len(values) > 8 or any(not isinstance(v, str) or not 1 <= len(v) <= 200 for v in values) for values in (aliases, retired)):
+            raise ValueError
+        if not isinstance(targets, dict) or any(k not in {"retail", "wholesale"} or not isinstance(v, str) or not 1 <= len(v) <= 200 for k, v in targets.items()):
+            raise ValueError
+        queue = claims.get("attention_queue")
+        if queue not in {None, "retail", "wholesale"} or claims.get("operator_role", "operator") not in {"admin", "operator"}:
+            raise ValueError
+        return Actor(profile, tuple(sorted(set(allowed) & settings.businesses.keys())), tuple(aliases), queue,
+                     claims.get("operator_role") == "admin" or profile == "admin", str(claims.get("login_profile", profile)),
+                     targets, tuple(retired))
     except (jwt.PyJWTError, ValueError, TypeError):
         raise HTTPException(401, "Invalid or expired server token") from None
 

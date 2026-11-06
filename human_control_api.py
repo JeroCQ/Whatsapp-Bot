@@ -50,6 +50,11 @@ class CloseCommand(ControlCommand):
     reason: str = Field(default="CRM case closed", min_length=1, max_length=255)
 
 
+class TransferCommand(ControlCommand):
+    target_actor: str = Field(min_length=1, max_length=200)
+    reason: str = Field(default="Operator transfer", min_length=1, max_length=255)
+
+
 def create_router(
     config: Any,
     store_factory: Any,
@@ -252,6 +257,12 @@ def create_router(
         )
         invalidate_followup(phone)
         return mutation_response(value)
+
+    @router.post(base + "/transfer")
+    def transfer(business_id: str, phone: str, body: TransferCommand, request: Request) -> JSONResponse:
+        authorize(request, business_id)
+        return mutation_response(call(store_factory(), "apply_control", phone, "transfer", body.command_id,
+                                      body.actor, body.expected_version, {"target_actor": body.target_actor}))
 
     @router.post(base + "/messages")
     def message(

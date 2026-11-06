@@ -318,7 +318,7 @@ BEGIN
     RETURN v_response || jsonb_build_object('control',public.crm_control_view(p_business_id,p_phone));
   END IF;
 
-  IF p_action IN ('take','close','handoff','reset','begin_send') THEN
+  IF p_action IN ('take','close','handoff','reset','transfer','begin_send') THEN
     IF p_request_id IS NULL OR length(p_request_id) NOT BETWEEN 1 AND 160 THEN
       RETURN jsonb_build_object('error','invalid_command_id','http_status',400);
     END IF;
@@ -359,7 +359,7 @@ BEGIN
           'crm-handoff:'||p_business_id||':'||p_request_id) ON CONFLICT(event_key) DO NOTHING;
     END IF;
     v_response := jsonb_build_object('command_id',p_request_id,'status','confirmed','control',public.crm_control_view(p_business_id,p_phone));
-  ELSIF p_action IN ('take','close','reset','begin_send') THEN
+  ELSIF p_action IN ('take','close','reset','transfer','begin_send') THEN
     IF p_expected_version IS NULL OR p_expected_version<>s.crm_control_version THEN
       RETURN jsonb_build_object('error','control_version_conflict','http_status',409);
     END IF;
@@ -380,6 +380,26 @@ BEGIN
         VALUES(p_phone,'system','RESOLVED: Conversation reset; AI context cleared.',
           jsonb_build_object('business_id',p_business_id,'source','crm_reset','source_event_id',p_request_id,'actor','bot'),
           'crm-reset:'||p_business_id||':'||p_request_id) ON CONFLICT(event_key) DO NOTHING;
+      v_response := jsonb_build_object('command_id',p_request_id,'status','confirmed','control',public.crm_control_view(p_business_id,p_phone));
+    ELSIF p_action='transfer' THEN
+      IF length(trim(p_actor)) NOT BETWEEN 1 AND 200
+         OR length(trim(COALESCE(p_payload->>'target_actor',''))) NOT BETWEEN 1 AND 200
+         OR NOT s.is_paused
+         OR NOT ((s.crm_control_phase='human' AND s.crm_control_owner IS NOT DISTINCT FROM p_actor)
+              OR (s.crm_control_phase IN ('ai','waiting') AND s.crm_control_owner IS NULL)) THEN
+        RETURN jsonb_build_object('error','confirmed_owner_or_unassigned_waiting_required','http_status',409);
+      END IF;
+      IF EXISTS(SELECT 1 FROM public.crm_send_attempts WHERE business_id=p_business_id AND phone_number=p_phone
+                  AND status IN ('sending','unknown')) THEN
+        RETURN jsonb_build_object('error','unsettled_send_blocks_transfer','http_status',409);
+      END IF;
+      UPDATE public.conversation_states SET crm_control_phase='human',crm_control_owner=p_payload->>'target_actor',
+        crm_control_version=crm_control_version+1 WHERE phone_number=p_phone;
+      INSERT INTO public.message_logs(phone_number,role,content,metadata,event_key)
+        VALUES(p_phone,'system','CONTROL: Atención transferida a otro asesor.',
+          jsonb_build_object('business_id',p_business_id,'source','crm_transfer','source_event_id',p_request_id,
+                             'actor',p_actor,'target_actor',p_payload->>'target_actor'),
+          'crm-transfer:'||p_business_id||':'||p_request_id) ON CONFLICT(event_key) DO NOTHING;
       v_response := jsonb_build_object('command_id',p_request_id,'status','confirmed','control',public.crm_control_view(p_business_id,p_phone));
     ELSIF p_action='take' THEN
       IF length(trim(p_actor)) NOT BETWEEN 1 AND 200 THEN RETURN jsonb_build_object('error','actor_required','http_status',400); END IF;

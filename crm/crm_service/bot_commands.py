@@ -4,11 +4,21 @@ import hashlib
 import json
 from typing import Any
 
-from sqlalchemy import select, text
+from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from crm_service.bot_gateway import BotGateway, BotGatewayError
-from crm_service.models import AuditEvent, BotCommand, CRMConversation, SourceConversation, now
+from crm_service.models import (
+    Agent,
+    AuditEvent,
+    BotCommand,
+    CRMConversation,
+    NotificationEvent,
+    PushDelivery,
+    SourceConversation,
+    now,
+)
+from crm_service.routing import attention_lock, authorize_case
 from crm_service.security import Actor
 from crm_service.sync import lock_id
 
@@ -40,6 +50,31 @@ class CommandCoordinator:
             session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_id(self.gateway.business.id)})
             row = self._row(session, command_id)
             assert row is not None
+            if row.operation == "transfer":
+                result = {**{k: row.response[k] for k in ("target_queue", "target_actor") if k in row.response}, **result}
+                if row.status != "confirmed" and result["status"] == "confirmed":
+                    control = result.get("control") or {}
+                    if control.get("phase") != "human" or control.get("is_paused") is not True or control.get("owner") != result.get("target_actor"):
+                        raise BotGatewayError("transfer_not_confirmed", 502)
+                    session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": attention_lock(row.business_id, row.phone_number)})
+                    crm = session.get(CRMConversation, (row.business_id, row.phone_number))
+                    assert crm is not None
+                    crm.assigned_to = str(result["target_actor"])
+                    crm.classification = {**crm.classification, "attention_queue": result["target_queue"],
+                                          "queue_needs_classification": False, "queue_transferred": True}
+                    crm.version += 1
+                    crm.transition += 1
+                    events = select(NotificationEvent.id).where(NotificationEvent.business_id == row.business_id,
+                                                                 NotificationEvent.phone_number == row.phone_number)
+                    session.execute(update(PushDelivery).where(PushDelivery.event_id.in_(events), PushDelivery.status == "pending").values(status="disabled"))
+                    session.add(NotificationEvent(business_id=row.business_id, phone_number=row.phone_number, transition=crm.transition,
+                                                  link=f"/chats?chat={row.business_id}:{row.phone_number}&bucket=needs_reply"))
+                    self._audit(session, row, "crm.queue_transferred", "confirmed")
+            if row.operation == "take" and result["status"] == "confirmed":
+                crm = session.get(CRMConversation, (row.business_id, row.phone_number))
+                if crm and crm.assigned_to != row.profile:
+                    crm.assigned_to = row.profile
+                    crm.version += 1
             if row.operation == "close" and row.status != "confirmed" and result["status"] == "confirmed":
                 control = result.get("control") or {}
                 if control.get("phase") != "ai" or control.get("is_paused") is not False:
@@ -138,17 +173,20 @@ class CommandCoordinator:
             if row and row.phone_number != phone:
                 raise BotGatewayError("command_not_found", 404)
             control = result.get("control") or {}
+            agent = session.get(Agent, row.profile) if row else None
+            aliases = agent.preferences.get("_crm_operator", {}).get("aliases", []) if agent else []
             if row and result["status"] in {"pending", "unknown"}:
                 took = (
                     row.operation == "take" and control.get("phase") == "human"
                     and control.get("confirmed") is True and control.get("is_paused") is True
-                    and control.get("owner") == row.profile
+                    and control.get("owner") in (row.profile, *aliases)
                 )
                 returned = (
                     row.operation == "close" and control.get("phase") == "ai"
                     and control.get("is_paused") is False and not control.get("owner")
                 )
-                if took or returned:
+                transferred = row.operation == "transfer" and control.get("phase") == "human" and control.get("confirmed") is True and control.get("owner") == row.response.get("target_actor")
+                if took or returned or transferred:
                     result = {**result, "status": "confirmed", "reconciled_from_control": True}
                     result.pop("error", None)
             exists = row is not None
@@ -172,7 +210,22 @@ class CommandCoordinator:
         result: dict[str, Any]
         business = self.gateway.business.id
         principal.authorize(business)
+        with self.sessions() as session:
+            crm = session.get(CRMConversation, (business, phone))
+            known = session.get(BotCommand, (business, str(payload["command_id"])))
+            replaying = bool(known and known.profile == principal.profile and known.phone_number == phone and known.operation == operation)
+            if crm and not replaying:
+                authorize_case(principal, crm)
+            elif crm is None and business == "memos" and not principal.is_admin:
+                raise BotGatewayError("crm_conversation_not_found", 404)
         body = {**payload, "actor": principal.profile}
+        if operation == "transfer":
+            target = principal.queue_actors.get(str(payload.get("target_queue")))
+            if business != "memos" or not target:
+                raise BotGatewayError("queue_transfer_not_authorized", 403)
+            if crm and not replaying and crm.classification.get("attention_queue", "retail") == payload["target_queue"]:
+                raise BotGatewayError("already_in_target_queue", 409)
+            body["target_actor"] = target
         command_id = str(body["command_id"])
         immutable_body = body
         if body.get("attachment_id"):
@@ -215,6 +268,9 @@ class CommandCoordinator:
                     operation=operation,
                     request_hash=digest,
                     status="checking",
+                    response=({"command_id": command_id, "status": "unknown", "control": None,
+                               "target_queue": body["target_queue"], "target_actor": body["target_actor"]}
+                              if operation == "transfer" else {}),
                 )
                 session.add(row)
                 session.flush()
@@ -242,16 +298,21 @@ class CommandCoordinator:
             or not control["confirmed"]
             or not control["is_paused"]
             or not control["can_send"]
-            or control.get("owner") != principal.profile
+            or not principal.owns(control.get("owner"))
         ):
             error_code = "confirmed_human_control_required"
         elif operation == "close" and not (
-            (control["phase"] == "human" and control["confirmed"] and control.get("owner") == principal.profile)
+            (control["phase"] == "human" and control["confirmed"] and principal.owns(control.get("owner")))
             or (control["phase"] in {"waiting", "ai"} and not control.get("owner"))
         ):
             error_code = "confirmed_human_control_required"
-        elif operation == "take" and control.get("owner") not in {None, "", principal.profile}:
+        elif operation == "take" and control.get("owner") and not principal.owns(control.get("owner")):
             error_code = "conversation_owned_by_another_actor"
+        elif operation == "transfer" and not (
+            control["is_paused"] and ((control["phase"] == "human" and control["confirmed"] and principal.owns(control.get("owner")))
+                                       or (control["phase"] == "waiting" and not control.get("owner")))
+        ):
+            error_code = "confirmed_owner_or_unassigned_waiting_required"
         if error_code:
             return self._save(
                 command_id,
@@ -275,7 +336,9 @@ class CommandCoordinator:
             row.status, row.updated_at = "forwarding", now()
             self._audit(session, row, "bot.command_forwarded", "forwarding")
         try:
-            result = self.gateway.execute(operation, phone, body)
+            if principal.owns(control.get("owner")):
+                body["actor"] = control["owner"]
+            result = self.gateway.execute(operation, phone, {k: v for k, v in body.items() if k != "target_queue"})
         except BotGatewayError as error:
             status = "unknown" if error.ambiguous else "rejected"
             result = {

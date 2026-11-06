@@ -14,6 +14,7 @@ from crm_service.classification import EPOCH, classify, timestamp
 from crm_service.delivery import project_message, visible_message_clause
 from crm_service.local_targets import require_disposable_source
 from crm_service.models import (
+    Agent,
     CRMConversation,
     NotificationEvent,
     SourceConversation,
@@ -22,6 +23,7 @@ from crm_service.models import (
     SyncStatus,
     now,
 )
+from crm_service.routing import customer_queue
 from crm_service.settings import Business, Settings
 from crm_service.source import SourceFailure
 
@@ -443,6 +445,7 @@ class Synchronizer:
                 or_(
                     SourceConversation.dirty.is_(True),
                     CRMConversation.classification["classification_version"].as_integer().is_distinct_from(3),
+                    (SourceConversation.business_id == "memos") & CRMConversation.classification["attention_queue"].as_string().is_(None),
                 ),
             )
             .order_by(SourceConversation.dirty.desc(), SourceConversation.phone_number)
@@ -479,31 +482,38 @@ class Synchronizer:
             row = session.get(CRMConversation, (business.id, source.phone_number))
             result = classify(source.state, messages, source.handoff, now(), warnings,
                               previous=row.classification if row else None)
+            prior_human = bool(row and row.bucket in {"awaiting_human", "human_active"} and row.classification.get("in_human_inbox") is not False)
+            entering = result["bucket"] == "awaiting_human" and result.get("in_human_inbox", True) and not prior_human
+            if business.id == "memos":
+                queue, unknown = customer_queue(source.state)
+                if row and not entering and row.classification.get("attention_queue"):
+                    queue = row.classification["attention_queue"]
+                    unknown = row.classification.get("queue_needs_classification", False)
+                result.update(attention_queue=queue, queue_needs_classification=unknown)
+                if row and not entering and row.classification.get("queue_transferred"):
+                    result["queue_transferred"] = True
+                if row and entering:
+                    row.assigned_to = None
+                if row and not row.assigned_to:
+                    for agent in session.scalars(select(Agent).order_by(Agent.profile)):
+                        routing = agent.preferences.get("_crm_operator", {})
+                        if business.id in agent.allowed_businesses and routing.get("role") == "operator" and routing.get("queue") == queue:
+                            row.assigned_to = agent.profile
+                            break
             source.warnings = result["data_quality_warnings"]
             source.dirty = False
             count += 1
-            previous = row.bucket if row else None
             if row is None:
                 row = CRMConversation(
                     business_id=business.id, phone_number=source.phone_number, transition=0, version=1
                 )
                 session.add(row)
-            entering = result["bucket"] == "awaiting_human" and previous not in {
-                "awaiting_human",
-                "human_active",
-            }
             if entering:
                 row.transition += 1
             row.bucket, row.classification, row.sort_key = result["bucket"], result, result["sort_key"]
             session.flush()
             if baseline and entering and self.settings.notifications_enabled:
-                link = "/chats?" + urlencode(
-                    {
-                        "business_id": business.id,
-                        "phone_number": source.phone_number,
-                        "bucket": "awaiting_human",
-                    }
-                )
+                link = "/chats?" + urlencode({"chat": f"{business.id}:{source.phone_number}", "bucket": "needs_reply"})
                 session.add(
                     NotificationEvent(
                         business_id=business.id,
