@@ -457,11 +457,11 @@ Manejamos productos saludables sin químicos, libres de azúcar, gluten, maíz y
 
 <!-- POSTRES KETO: distingue precio unitario y precio por tres. Si cambia una promoción, conserva claramente ambas presentaciones para que el bot no aplique el ahorro a una sola unidad. -->
 
-*(Nota de productos descontinuados / de temporada: La Torta Amapola Berry, la Red Velvet Saludable, el Alfajor Keto y el Yogurt Coco Lulada fueron productos de temporada y ya no están disponibles. Si un cliente pregunta por alguno de ellos, explica amablemente que fueron ediciones/productos de temporada).*
+*(Nota de productos descontinuados / de temporada: El Alfajor Keto y el Yogurt Coco Lulada fueron productos de temporada y ya no están disponibles. Si un cliente pregunta por alguno de ellos, explica amablemente que fueron ediciones/productos de temporada).*
 
 ---
 
-### Postres Keto
+### Postres Keto y Tortas Individuales
 *(Conservación: Duran un mes refrigerados)*
 
 * **Galleta con Proteína (80g c/u):**
@@ -471,6 +471,12 @@ Manejamos productos saludables sin químicos, libres de azúcar, gluten, maíz y
 * **Brownie (120g c/u):**
   * **Precio:** $23.000 x 1und
   * **Ingredientes:** Harina de almendras, chocolate sin azúcar, arequipe sin azúcar, huevo, mantequilla ghee, alulosa, polvo para hornear.
+
+* **Torta Amapola Berry (porción individual):**
+  * **Precio:** $23.000 x 1und
+
+* **Torta Red Velvet Saludable (porción individual):**
+  * **Precio:** $23.000 x 1und
 
 ---
 
