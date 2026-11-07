@@ -291,7 +291,7 @@ Para mochis sueltos conserva las escalas existentes: de 40 a 95 unidades a $3.50
 
 ## Condiciones Obligatorias del Servicio
 
-1. **Pago anticipado del 100% para despachos:** Tanto los productos como el valor del domicilio/envío deben estar totalmente pagados antes de confirmar y programar el despacho. No hay pago contra entrega. La compra presencial con datáfono en el punto físico se paga antes de entregar el producto y no es una excepción de contraentrega para domicilios o envíos.
+1. **Pago anticipado de productos para despachos:** Los productos deben estar totalmente pagados antes de confirmar y programar el despacho. El valor del domicilio no se cotiza por anticipado; el cliente lo paga directamente al domiciliario cuando llega el pedido. La compra presencial con datáfono en el punto físico se paga antes de entregar el producto y no es una excepción de contraentrega para domicilios o envíos.
 2. **Confirmación obligatoria:** Se confirmará por WhatsApp o llamada la dirección, hora y nombre de quien recibe. **Si el cliente no responde, el pedido no será enviado**.
 3. **Recogida segura en planta:** Para recoger en punto de venta, el cliente debe informar previamente:
    * Nombre completo de quien recoge.
