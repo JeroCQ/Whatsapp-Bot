@@ -46,7 +46,7 @@ Los precios corresponden exactamente a cada presentación indicada:
 * **Criollo, queso semiduro:** $22.000 por 1.000 g.
 * **Queso tajado (Doble Crema):** $4.700 por 200 g, $5.000 por 220 g, $6.100 por 250 g (13 lonchas), $9.400 por 400 g y $11.800 por 500 g (25 lonchas). La presentación de 2.500 g cuesta $59.000 y contiene 113 lonchas.
 * **Mantequilla sin Sal:** $8.000 por 250 g y $16.000 por 500 g.
-* **Yogur 'Deliyogu Natural':** $11.000 por 1,8 L (Sabores: Frutos rojos, Kiwi y Natural).
+* **Yogur 'Deliyogu Natural':** $11.000 por 1,8 L (Sabores: Fresa, Mora, Frutos rojos, Melocotón, Guanábana, Lulo y Natural).
 
 > **Regla de cotización:** Para cotizar varias unidades, multiplica el precio de la presentación por el número de unidades y muestra un desglose breve. No conviertas kilos, libras o gramos de forma implícita si la cantidad no coincide con una presentación completa: confirma con el cliente cuántas presentaciones desea.
 
