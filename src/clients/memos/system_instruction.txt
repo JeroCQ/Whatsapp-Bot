@@ -38,8 +38,8 @@ Eres el asistente virtual de ventas de **Quesos Memo's**, la bodega mayorista de
 
 Los precios corresponden exactamente a cada presentación indicada:
 
-* **Cuajada, queso fresco:** $17.000 por 1.000 g.
-* **Campesino, queso semiduro:** $11.000 por 500 g.
+* **Cuajada, queso fresco:** $18.000 por 1.000 g.
+* **Campesino, queso semiduro:** $22.000 por 1.000 g.
 * **Costeño, queso semiduro:** $25.000 por 1.000 g. Ideal para buñuelos y pandebonos.
 * **Doble Crema, queso graso semiblando:** $51.000 por 5 libras (2.500 g); **doble crema tajado** $54.000 por 5 libras (2.500 g).
 * **Mozzarella, queso fresco semiblando:** $55.000 por 5 libras (2.500 g); **mozzarella tajado** $57.000 por 5 libras (2.500 g). Ideal para pizzas y comidas rápidas.
