@@ -484,6 +484,15 @@ class Synchronizer:
                               previous=row.classification if row else None)
             prior_human = bool(row and row.bucket in {"awaiting_human", "human_active"} and row.classification.get("in_human_inbox") is not False)
             entering = result["bucket"] == "awaiting_human" and result.get("in_human_inbox", True) and not prior_human
+            incoming_id = max((int(m["id"]) for m in messages if m["role"] == "user"), default=0)
+            previous_incoming = row.classification.get("notification_incoming_id", row.classification.get("last_message_id")) if row else None
+            new_incoming = bool(
+                baseline and previous_incoming is not None and incoming_id > previous_incoming
+                and result.get("in_human_inbox") and source.state.get("is_paused") is True
+                and result.get("unanswered_customer_count", 0) > 0
+            )
+            # Establish the watermark without replaying a backlog on upgrade/backfill.
+            result["notification_incoming_id"] = incoming_id
             if business.id == "memos":
                 routing = project_queue(source.state, row.classification if row else {}, entering)
                 queue = routing["attention_queue"]
@@ -507,11 +516,11 @@ class Synchronizer:
                     business_id=business.id, phone_number=source.phone_number, transition=0, version=1
                 )
                 session.add(row)
-            if entering:
+            if entering or new_incoming:
                 row.transition += 1
             row.bucket, row.classification, row.sort_key = result["bucket"], result, result["sort_key"]
             session.flush()
-            if baseline and entering and self.settings.notifications_enabled:
+            if baseline and (entering or new_incoming) and self.settings.notifications_enabled:
                 link = "/chats?" + urlencode({"chat": f"{business.id}:{source.phone_number}", "bucket": "needs_reply"})
                 session.add(
                     NotificationEvent(
