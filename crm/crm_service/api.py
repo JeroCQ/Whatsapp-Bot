@@ -179,6 +179,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         classification.pop("classification_version", None)
         classification.pop("inbox_release", None)
         read = session.get(ReadState, (source.business_id, source.phone_number, principal.profile))
+        latest_incoming, unread = session.execute(select(
+            func.coalesce(func.max(SourceMessage.source_id), 0),
+            func.count(SourceMessage.source_id).filter(SourceMessage.source_id > (read.last_message_id if read else 0)),
+        ).where(
+            SourceMessage.business_id == source.business_id,
+            SourceMessage.phone_number == source.phone_number, SourceMessage.role == "user",
+        )).one()
         return {
             "business_id": source.business_id,
             "phone_number": source.phone_number,
@@ -190,7 +197,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "attention_queue": classification.get("attention_queue"),
             "queue_needs_classification": classification.get("queue_needs_classification", False),
             "version": crm.version,
-            "read": bool(read and read.last_message_id >= classification.get("last_message_id", 0)),
+            "read": unread == 0,
+            "unread_incoming_count": unread,
+            "last_incoming_message_id": latest_incoming,
             "chatwoot_url": settings.businesses[source.business_id].deep_link(
                 source.state.get("chatwoot_conversation_id")
             ),
@@ -788,18 +797,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/v1/conversations/{business_id}/{phone_number}/read")
     def mark_read(
         business_id: str, phone_number: str, body: ReadInput, principal: Auth, session: DB
-    ) -> dict[str, bool]:
+    ) -> dict[str, Any]:
         _, crm = conversation(session, principal, business_id, phone_number, True)
         row = session.get(ReadState, (business_id, phone_number, principal.profile))
         if body.read:
             if row is None:
                 row = ReadState(business_id=business_id, phone_number=phone_number, profile=principal.profile)
                 session.add(row)
-            row.read_at, row.last_message_id = now(), crm.classification["last_message_id"]
+            incoming = select(SourceMessage.source_id).where(
+                SourceMessage.business_id == business_id, SourceMessage.phone_number == phone_number,
+                SourceMessage.role == "user",
+            )
+            if body.last_message_id is not None:
+                incoming = incoming.where(SourceMessage.source_id <= body.last_message_id)
+            seen = session.scalar(select(func.max(incoming.subquery().c.source_id))) or 0
+            row.read_at, row.last_message_id = now(), max(row.last_message_id or 0, seen)
         elif row:
             session.delete(row)
         audit(session, principal, business_id, phone_number, "crm.read", {"read": body.read})
-        return {"read": body.read}
+        source = session.get(SourceConversation, (business_id, phone_number))
+        assert source is not None
+        session.flush()
+        view = display(session, principal, source, crm)
+        return {**{key: view[key] for key in ("read", "unread_incoming_count", "last_incoming_message_id")},
+                "acknowledged_message_id": row.last_message_id if body.read and row else 0}
 
     def note_response(row: Note) -> dict[str, Any]:
         return {"id": row.id, "body": row.body, "profile": row.profile, "updated_at": row.updated_at}
@@ -1025,8 +1046,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"ok": True}
 
     @app.get("/v1/push/config")
-    def notification_config(principal: Auth) -> dict[str, Any]:
-        return {**push_config(settings), "allowed_businesses": list(principal.businesses)}
+    def notification_config(principal: Auth, session: DB) -> dict[str, Any]:
+        label = "Admin" if principal.is_admin else (
+            "Tanaka / Velvet" if {"tanaka", "velvet"}.issubset(principal.businesses) else
+            "Memo’s Mayoristas" if principal.attention_queue == "wholesale" else
+            "Memo’s Detal" if "memos" in principal.businesses else ", ".join(principal.businesses)
+        )
+        subscriptions = session.scalars(select(PushSubscription).where(
+            PushSubscription.profile == principal.profile,
+        ).order_by(PushSubscription.created_at.desc()).limit(20)).all()
+        return {**push_config(settings), "allowed_businesses": list(principal.businesses),
+                "operator": principal.profile, "operator_label": label,
+                "subscriptions": [{"id": s.id, "active": s.active} for s in subscriptions]}
 
     @app.post("/v1/push/subscriptions", status_code=201)
     def subscribe(body: PushInput, principal: Auth, session: DB) -> dict[str, str]:
@@ -1053,7 +1084,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         row.subscription, row.active = {**body.model_dump(), "_login_profile": principal.login_profile or principal.profile}, True
         session.flush()
         audit(session, principal, "", "", "push.subscribe", {"id": row.id})
-        return {"id": row.id}
+        return {"id": row.id, "operator": principal.profile}
 
     @app.delete("/v1/push/subscriptions/{item_id}", status_code=204)
     def unsubscribe(item_id: str, principal: Auth, session: DB) -> None:

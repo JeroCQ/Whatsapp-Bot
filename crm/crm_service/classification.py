@@ -171,6 +171,11 @@ def classify(
         "priority": priority,
         "priority_reason": reason,
         "last_incoming_at": latest.isoformat() if latest else None,
+        "pending_handoff_at": boundary[0].isoformat() if (
+            bucket == "awaiting_human" and not waiting_customer and boundary
+            and EPOCH < boundary[0] <= timestamp(at)
+            and (not crm or phase in {"waiting", "pausing"})
+        ) else None,
         "last_activity_at": activity_at.isoformat() if activity_at != EPOCH else None,
         "last_message_id": max((int(m.get("id", 0)) for m in ordered), default=0),
         "data_quality_warnings": sorted(quality),
@@ -212,4 +217,6 @@ def classify(
         # Reading, replying and source reconciliation never release a human case.
         result["bucket"] = "awaiting_human"
     result["in_human_inbox"] = result["bucket"] in {"awaiting_human", "human_active"} and not result.get("inbox_release")
+    if not result["in_human_inbox"] or not paused:
+        result["pending_handoff_at"] = None
     return result

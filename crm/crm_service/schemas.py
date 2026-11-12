@@ -55,6 +55,7 @@ class TaskUpdate(Input):
 
 class ReadInput(Input):
     read: bool = True
+    last_message_id: int | None = Field(default=None, ge=0)
 
 
 class SyncInput(Input):

@@ -215,7 +215,7 @@ def dispatch(settings: Settings, sessions: sessionmaker[Session], sender: Any = 
                         "tag": event.id,
                         "title": "Conversación por responder",
                         "url": event.link,
-                        "profile": sub.subscription.get("_login_profile", sub.profile),
+                        "profile": sub.profile,
                         "subscription_id": sub.id,
                     },
                     settings,
