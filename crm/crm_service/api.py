@@ -215,7 +215,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             with engine.connect() as conn:
                 version = conn.scalar(text("SELECT version_num FROM alembic_version"))
-                if version not in {"0004_delivery_receipts", "0005_central_config_usage"}:
+                if version not in {"0004_delivery_receipts", "0005_central_config_usage", "0006_scoped_pilot"}:
                     raise HTTPException(503, "CRM migrations required")
         except SQLAlchemyError:
             raise HTTPException(503, "CRM database unavailable or migrations required") from None

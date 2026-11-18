@@ -1,0 +1,12 @@
+# NOT APPLIED. Only an explicitly isolated pilot target; never crm-staging-*.
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Deliberately no preDeployCommand. Manual target-checked migration only.
+startCommand = "sh -c 'exec uvicorn crm_service.pilot_app:create_app --factory --host 0.0.0.0 --port ${PORT:-8080} --no-access-log'"
+healthcheckPath = "/ready"
+healthcheckTimeout = 60
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 2

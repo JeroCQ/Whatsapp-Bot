@@ -1,5 +1,15 @@
 # Repository architecture rules for Codex
 
+Turn 2 exception: only `crm_service.pilot_app` on an explicitly isolated pilot DB
+can publish immutable versions and switch Briosos + 573105338124. Draft state stays
+draft. Flags default off/standby. The existing verified Briosos consumer resolves
+an immutable context; its Supabase, Redis lock, dedupe, command identity and Meta
+sender remain the only operational authority. No alternate sender/fallback or
+historical commercial migration. No pilot startup/preDeploy may migrate the
+commercial CRM database or consume a live bot queue. Canonical operations guide:
+docs/CHATTY_CENTRAL_CONFIG_TURN2_PILOT.md. Turn-1 descriptions below are historical;
+the collector is now wired only inside approved pilot attempts, never other brands.
+
 Turn-1 central administration is draft-only: `central_config` previews overlay the
 existing Settings registry; neither bots nor sync workers consume them. Reuse
 crm_agents membership/queue preferences read-only. New storage belongs only to

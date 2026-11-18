@@ -52,6 +52,8 @@ class BusinessDraftInput(Input):
     whatsapp_phone_number_id: str | None = Field(default=None, pattern=r"^[0-9]{1,32}$")
     whatsapp_business_account_id: str | None = Field(default=None, pattern=r"^[0-9]{1,32}$")
     overrides: DraftSettings
+    operator_profiles: list[Annotated[str, Field(min_length=1, max_length=200)]] = Field(default_factory=list, max_length=100)
+    connection_purposes: list[Literal["bot_control", "source_read", "chatwoot"]] | None = None
 
 
 class TurnInput(Input):

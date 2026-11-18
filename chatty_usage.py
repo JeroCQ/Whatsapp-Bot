@@ -1,8 +1,7 @@
-"""Opt-in, nonblocking metadata collector. Not imported by any current bot/model path.
+"""Opt-in nonblocking metadata collector, wired only through the scoped pilot context.
 
-Later pilot: put one attempt context INSIDE each existing provider retry attempt,
-observe its response, and separately record a turn only from real delivery logic.
-No network client, provider call, schema creation, retry or pricing is added here.
+One observation per actual attempt inside existing retries. Turn acceptance comes
+separately from the existing sender. Disabled collectors do not start threads.
 """
 import logging
 import re
@@ -54,6 +53,8 @@ class UsageCollector:
         self._emit = emit
         self._queue: Queue[tuple[str, dict[str, Any]]] = Queue(maxsize=256)
         self.dropped_events = 0
+        self.failed_events = 0
+        self.accepted_events = 0
         if self.enabled:
             try:
                 Thread(target=self._drain, name="chatty-usage", daemon=True).start()
@@ -67,9 +68,11 @@ class UsageCollector:
             try:
                 assert self._emit is not None
                 self._emit(kind, payload)
+                self.accepted_events += 1
             except Exception:
                 # No response bodies, credentials, prompts, phone numbers or exception text.
                 logger.warning("usage_sink_failed")
+                self.failed_events += 1
             finally:
                 self._queue.task_done()
 
@@ -79,6 +82,12 @@ class UsageCollector:
         except Full:
             self.dropped_events += 1
             logger.warning("usage_queue_full_event_not_recorded")
+
+    def status(self) -> dict[str, Any]:
+        return {"enabled": self.enabled, "pending_events": self._queue.unfinished_tasks,
+                "accepted_events": self.accepted_events, "failed_events": self.failed_events,
+                "dropped_events": self.dropped_events, "durable_before_acceptance": False,
+                "complete_accounting": False}
 
     @contextmanager
     def attempt(self, *, business_id: str, conversation_id: str, turn_id: str,

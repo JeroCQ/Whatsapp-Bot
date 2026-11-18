@@ -6,7 +6,7 @@ from alembic import context
 from crm_service.models import Base
 
 config = context.config
-url = os.environ["CRM_DATABASE_URL"]
+url = config.attributes.get("pilot_database_url") or os.environ["CRM_DATABASE_URL"]
 if not url.startswith("postgresql+psycopg://"):
     raise ValueError("Migrations target the independent CRM PostgreSQL database only")
 

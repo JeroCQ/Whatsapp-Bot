@@ -1,0 +1,9 @@
+# NOT APPLIED. Isolated read projection only, never a bot/RQ consumer.
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "python -m crm_service.pilot_sync"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 2

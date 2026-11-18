@@ -1,12 +1,14 @@
 from datetime import datetime, timezone
 import uuid
 
-from supabase import create_client, Client
+from supabase import create_client
 from config import config
 from observability import message_metadata, message_event_key
 from human_support import human_handoffs_enabled, human_support_provider, uses_crm
 
-supabase: Client = create_client(config.SUPABASE_URL, config.SUPABASE_KEY)
+from chatty_context import ScopedStorage
+
+supabase = ScopedStorage(create_client(config.SUPABASE_URL, config.SUPABASE_KEY))
 
 
 def get_catalog_assets(*, raise_on_error=False):

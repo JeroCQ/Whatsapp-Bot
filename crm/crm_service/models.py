@@ -276,6 +276,7 @@ class BusinessDraft(Base):
     whatsapp_phone_number_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     whatsapp_business_account_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     overrides: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    operator_profiles: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
     version: Mapped[int] = mapped_column(Integer, default=1)
     updated_by: Mapped[str] = mapped_column(ForeignKey("crm_agents.profile"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
@@ -293,6 +294,28 @@ class SharedConfigDraft(Base):
     updated_by: Mapped[str] = mapped_column(ForeignKey("crm_agents.profile"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     __table_args__ = (CheckConstraint("id = 'shared'", name="ck_single_shared_draft"),)
+
+
+class PilotPublication(Base):
+    """Immutable configuration snapshot; saving a draft never writes this table."""
+    __tablename__ = "crm_pilot_publications"
+    version: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    business_id: Mapped[str] = mapped_column(String(63))
+    phone_number: Mapped[str] = mapped_column(String(32))
+    snapshot: Mapped[dict[str, Any]] = mapped_column(JSON)
+    created_by: Mapped[str] = mapped_column(ForeignKey("crm_agents.profile"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    __table_args__ = (CheckConstraint("business_id = 'briosos' AND phone_number = '573105338124'", name="ck_pilot_scope"),)
+
+
+class PilotSwitch(Base):
+    __tablename__ = "crm_pilot_switch"
+    business_id: Mapped[str] = mapped_column(String(63), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer, default=0)
+    publication_version: Mapped[int | None] = mapped_column(ForeignKey("crm_pilot_publications.version"), nullable=True)
+    mode: Mapped[str] = mapped_column(String(16), default="standby")
+    __table_args__ = (CheckConstraint("business_id = 'briosos' AND mode IN ('standby','shared','legacy')", name="ck_pilot_switch"),)
 
 
 class BusinessConnectionReference(Base):

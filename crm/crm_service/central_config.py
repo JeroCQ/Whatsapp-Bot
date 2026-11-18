@@ -1,4 +1,4 @@
-"""Explicit draft preview. Runtime settings/worker routing never call this reader."""
+"""Explicit draft preview; only a separately published pilot snapshot can be consumed."""
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -27,7 +27,7 @@ def legacy_references(settings: Settings, business_id: str) -> dict[str, str]:
         return {}
     configured = {
         "bot_control": bool(business.bot_api_url and business.bot_control_secret),
-        "source_read": bool(business.readonly_database_url or business.bot_source_secret or business.source_key),
+        "source_read": bool(business.bot_api_enabled or business.readonly_database_url or business.bot_source_secret or business.source_key),
         "chatwoot": bool(business.chatwoot_url and business.chatwoot_account),
     }
     return {purpose: f"legacy_settings:{business_id}:{purpose}" for purpose, exists in configured.items() if exists}
@@ -51,7 +51,7 @@ def preview(session: Session, settings: Settings, business_id: str) -> DraftPrev
         validated = DraftSettings.model_validate(values).model_dump(exclude_unset=True)
         effective.update(validated)
         origins.update({key: label for key in validated})
-    references = legacy_references(settings, business_id)
+    references = {} if business else legacy_references(settings, business_id)
     references.update({row.purpose: row.reference_key for row in session.scalars(
         select(BusinessConnectionReference).where(BusinessConnectionReference.business_id == business_id)
     )})
@@ -78,6 +78,8 @@ def public_business(session: Session, settings: Settings, business_id: str) -> d
         "whatsapp_business_account_id": row.whatsapp_business_account_id if row else None,
         "overrides": row.overrides if row else {}, "preview": candidate.effective, "origins": candidate.origins,
         "memberships": memberships,
+        "operator_profiles": row.operator_profiles if row else [],
+        "available_connection_purposes": sorted(legacy_references(settings, business_id)),
         # Neither opaque reference keys nor secret values/URLs reach the browser.
         "connections": [{"purpose": purpose, "configured_in_legacy": purpose in legacy_references(settings, business_id)}
                         for purpose in sorted(candidate.connection_references)],

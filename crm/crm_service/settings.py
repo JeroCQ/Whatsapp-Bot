@@ -124,10 +124,10 @@ class Settings:
                 raise ValueError(f"Invalid {name}")
 
     @classmethod
-    def from_env(cls, service: str = "api") -> "Settings":
+    def from_env(cls, service: str = "api", *, database_url: str | None = None) -> "Settings":
         if service not in {"api", "worker"}:
             raise ValueError("Unknown CRM service")
-        database = os.environ["CRM_DATABASE_URL"]
+        database = database_url if database_url is not None else os.environ["CRM_DATABASE_URL"]
         if not database.startswith("postgresql+psycopg://"):
             raise ValueError("CRM_DATABASE_URL must use postgresql+psycopg")
         jwt_secret = os.environ["CRM_JWT_SECRET"]

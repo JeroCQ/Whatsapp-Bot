@@ -86,6 +86,19 @@ def create_router(
         if business_id != config.BUSINESS_ID:
             raise HTTPException(403, "Business does not match this bot deployment")
 
+    @router.get("/internal/crm/v1/businesses/{business_id}/pilot-status")
+    def pilot_status(business_id: str, request: Request) -> dict[str, Any]:
+        authorize(request, business_id)
+        from chatty_context import BUSINESS, PHONE, collector_status, enabled, storage_fingerprint
+        from observability import deployment_sha
+        if business_id != BUSINESS:
+            raise HTTPException(404, "pilot_not_supported_for_business")
+        return {"protocol": 1, "business_id": business_id, "test_phone": PHONE,
+                "channel_id": str(config.WA_PHONE_NUMBER_ID), "commit": deployment_sha(),
+                "storage_fingerprint": storage_fingerprint(config), "source_phone_filter": True,
+                "source_export_enabled": bool(getattr(config, "CRM_SOURCE_READ_ENABLED", False)),
+                "bridge_enabled": enabled(), "usage": collector_status()}
+
     def call(store: Any, method: str, *args: Any, **kwargs: Any) -> dict[str, Any]:
         try:
             return getattr(store, method)(*args, **kwargs)
@@ -308,7 +321,18 @@ def create_router(
             # begin_send compares the immutable original request, including actor/text/version.
             value = begin((prior.get("control") or {}).get("inbound_message_ids") or [])
             return mutation_response(value)
-        with phone_lock(phone):
+        from chatty_context import PilotContextError, processing_scope, resolve_context
+        from database import supabase
+        try:
+            context = resolve_context(config, business_id, str(config.WA_PHONE_NUMBER_ID),
+                                      phone, body.command_id, supabase.legacy)
+        except PilotContextError as error:
+            raise HTTPException(409, str(error)) from None
+        if context and body.actor not in {
+                identity for member in context.operators
+                for identity in (member["profile"], *member.get("aliases", []))}:
+            raise HTTPException(403, "pilot_operator_not_assigned")
+        with phone_lock(phone), processing_scope(context):
             snapshot = call(store, "get_control", phone)
             value = begin(snapshot.get("inbound_message_ids") or [])
             if value.get("status") != "reserved":

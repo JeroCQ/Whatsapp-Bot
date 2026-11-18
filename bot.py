@@ -66,6 +66,7 @@ def _call_gemini(operation: str, generate):
         operation,
         generate,
         semaphore=_gemini_semaphore,
+        model_name="gemini-flash-latest",
         request_timeout_seconds=config.GEMINI_REQUEST_TIMEOUT_SECONDS,
         operation_timeout_seconds=config.GEMINI_OPERATION_TIMEOUT_SECONDS,
         attempts=config.GEMINI_RETRY_ATTEMPTS,
@@ -259,10 +260,12 @@ def serialize_current_message(text: str) -> str:
     return json.dumps({"text": text}, ensure_ascii=False).replace("<", "\\u003c").replace(">", "\\u003e")
 
 
-def process_message_logic(phone: str, text: str, is_image: bool = False, log_inbound: bool = True) -> BotTurn:
+def process_message_logic(phone: str, text: str, is_image: bool = False, log_inbound: bool = True, *, business_context=None) -> BotTurn:
     """
     Usa Gemini para procesar el mensaje, entender el contexto y decidir si hace handoff.
     """
+    if business_context is not None:
+        business_context.assert_engine(config, phone)
     refresh_managed_catalogs()
     system_instruction_with_files = extend_system_instruction(SYSTEM_INSTRUCTION, FILE_CATALOG)
     handoffs_enabled = human_handoffs_enabled(config)

@@ -7,6 +7,7 @@ import time
 from google.genai import types
 
 from gemini_retry import call_gemini_with_retry
+from chatty_context import current_context
 
 
 class GeminiOperationTimeout(RuntimeError):
@@ -18,6 +19,7 @@ def run_gemini(
     generate,
     *,
     semaphore,
+    model_name=None,
     request_timeout_seconds=20,
     operation_timeout_seconds=60,
     attempts=3,
@@ -39,6 +41,7 @@ def run_gemini(
     if any(not math.isfinite(value) or value <= 0 for value in limits):
         raise ValueError("Gemini timeout limits must be finite and positive")
     deadline = monotonic() + operation_timeout_seconds
+    attempt_index = 0
 
     def remaining_budget():
         remaining = deadline - monotonic()
@@ -47,6 +50,7 @@ def run_gemini(
         return remaining
 
     def limited_call():
+        nonlocal attempt_index
         if not semaphore.acquire(timeout=remaining_budget()):
             raise GeminiOperationTimeout("gemini_concurrency_wait_expired")
         try:
@@ -55,7 +59,16 @@ def run_gemini(
                 timeout=max(1, int(request_seconds * 1000)),
                 retry_options=types.HttpRetryOptions(attempts=1),
             )
-            return generate(options)
+            context = current_context()
+            if not context or not context.collector or not model_name:
+                return generate(options)
+            attempt_index += 1
+            with context.collector.attempt(business_id=context.business_id,
+                    conversation_id=context.phone_number, turn_id=context.turn_id,
+                    attempt_index=attempt_index, purpose=operation, model_name=model_name) as observation:
+                response = generate(options)
+                observation.observe_response(response)
+                return response
         finally:
             semaphore.release()
 

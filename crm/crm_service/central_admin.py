@@ -8,10 +8,11 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy import and_, func, or_, select, text, tuple_
+from sqlalchemy import and_, delete, func, or_, select, text, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from crm_service import usage_store
 from crm_service.central_config import legacy_defaults, legacy_references, public_business
 from crm_service.central_schemas import AttemptInput, BusinessDraftInput, BusinessId, SharedDraftInput, SupportInput, TurnInput
 from crm_service.classification import timestamp
@@ -108,6 +109,11 @@ def create_admin_router(settings: Settings, actor_dependency: Callable[..., Acto
         row.whatsapp_phone_number_id = body.whatsapp_phone_number_id
         row.whatsapp_business_account_id = body.whatsapp_business_account_id
         row.overrides = body.overrides.model_dump(exclude_unset=True)
+        with session.no_autoflush:
+            authorized = {member["profile"] for member in public_business(session, settings, business_id)["memberships"]}
+        if not set(body.operator_profiles) <= authorized:
+            raise HTTPException(403, "operator_not_authorized_for_business")
+        row.operator_profiles = sorted(set(body.operator_profiles))
         row.version += 1
         row.updated_by, row.updated_at = principal.profile, now()
         try:
@@ -115,53 +121,31 @@ def create_admin_router(settings: Settings, actor_dependency: Callable[..., Acto
         except IntegrityError:
             raise HTTPException(409, "WhatsApp phone identifier already belongs to another draft") from None
         # Explicit draft save only; these pointers still resolve to legacy Settings,
-        # contain no secrets and are never consumed by the worker or bots.
-        for purpose, reference in legacy_references(settings, business_id).items():
+        # contain no secrets. Runtime can use only a separately published pilot snapshot.
+        references = legacy_references(settings, business_id)
+        if body.connection_purposes is not None:
+            if not set(body.connection_purposes) <= references.keys():
+                raise HTTPException(409, "connection_not_available_on_server")
+            session.execute(delete(BusinessConnectionReference).where(BusinessConnectionReference.business_id == business_id))
+            references = {key: references[key] for key in body.connection_purposes}
+        for purpose, reference in references.items():
             if session.get(BusinessConnectionReference, (business_id, purpose)) is None:
                 session.add(BusinessConnectionReference(business_id=business_id, purpose=purpose, reference_key=reference))
         session.flush()
         audit(session, principal, business_id, "config.business_draft_saved", {"version": row.version})
         return public_business(session, settings, business_id)
 
-    def turn(session: Session, business: str, turn_id: str, conversation: str) -> UsageTurn:
-        lock(session, f"usage:{business}:{turn_id}")
-        row = session.get(UsageTurn, (business, turn_id))
-        if row is None:
-            row = UsageTurn(business_id=business, turn_id=turn_id, conversation_id=conversation, outcome="unknown")
-            session.add(row)
-            session.flush()
-        if row.conversation_id != conversation:
-            raise HTTPException(409, "usage_turn_identity_conflict")
-        return row
-
     @router.post("/usage/turns")
     def record_turn(body: TurnInput, principal: Annotated[Actor, Depends(admin)],
                     session: Annotated[Session, Depends(db_dependency)]) -> dict[str, Any]:
         usage_enabled(principal, body.business_id)
-        row = turn(session, body.business_id, body.turn_id, body.conversation_id)
-        if (row.outcome not in {"unknown", body.outcome} or
-                (row.started_at and body.started_at and timestamp(row.started_at) != timestamp(body.started_at))):
-            raise HTTPException(409, "usage_turn_outcome_conflict")
-        row.outcome = body.outcome if body.outcome != "unknown" else row.outcome
-        row.started_at = row.started_at or body.started_at
-        row.updated_at = now()
-        return {"business_id": row.business_id, "turn_id": row.turn_id, "outcome": row.outcome}
+        return usage_store.record_turn(session, body)
 
     @router.post("/usage/attempts")
     def record_attempt(body: AttemptInput, principal: Annotated[Actor, Depends(admin)],
                        session: Annotated[Session, Depends(db_dependency)]) -> dict[str, str]:
         usage_enabled(principal, body.business_id)
-        lock(session, f"attempt:{body.business_id}:{body.attempt_id}")
-        turn(session, body.business_id, body.turn_id, body.conversation_id)
-        fingerprint = digest(body.model_dump(mode="json"))
-        row = session.get(ModelUsageAttempt, (body.business_id, body.attempt_id))
-        if row and row.request_hash != fingerprint:
-            raise HTTPException(409, "usage_attempt_identity_conflict")
-        if row is None:
-            row = ModelUsageAttempt(**body.model_dump(exclude={"conversation_id"}), request_hash=fingerprint)
-            session.add(row)
-            session.flush()
-        return {"business_id": row.business_id, "attempt_id": row.attempt_id, "status": "recorded"}
+        return usage_store.record_attempt(session, body)
 
     @router.get("/usage")
     def usage(session: Annotated[Session, Depends(db_dependency)], business_id: BusinessId | None = None,

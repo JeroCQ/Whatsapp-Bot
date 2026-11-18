@@ -47,6 +47,8 @@ def record_provider_message_id(response):
             trace = current_trace()
             trace["provider_message_id"] = str(provider_id)
             _trace.set(trace)
+            from chatty_context import reply_accepted
+            reply_accepted()
             return str(provider_id)
     except (ValueError, AttributeError, IndexError, TypeError):
         pass

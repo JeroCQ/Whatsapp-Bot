@@ -1,3 +1,4 @@
+from chatty_context import current_context, processing_scope, resolve_context
 import asyncio
 import hashlib
 import hmac
@@ -1365,7 +1366,7 @@ def _send_crm_handoff_notice(phone: str, text: str) -> bool:
     return True
 
 
-def process_whatsapp_message(sender_phone: str, sender_name: str, message_body: str, is_image: bool = False, media_id: str = None, is_audio: bool = False, audio_media_id: str = None, media_type: str = None, mime_type: str = None, filename: str = None, event_id: str = None, customer_message_received_at=None, crm_control_version=None):
+def process_whatsapp_message(sender_phone: str, sender_name: str, message_body: str, is_image: bool = False, media_id: str = None, is_audio: bool = False, audio_media_id: str = None, media_type: str = None, mime_type: str = None, filename: str = None, event_id: str = None, customer_message_received_at=None, crm_control_version=None, business_context=None):
     """Procesador que enruta entre el Bot y Chatwoot basado en el estado."""
     started_at = time.perf_counter()
     received = parse_timestamp(customer_message_received_at)
@@ -1374,7 +1375,7 @@ def process_whatsapp_message(sender_phone: str, sender_name: str, message_body: 
           inbound_message_ids=[event_id] if event_id else [], received_at=received.isoformat() if received else "",
           meta_window_expires_at=expiry, job_id=_current_job_id(), provider_message_id=""):
         try:
-            with phone_lock(sender_phone):
+            with phone_lock(sender_phone), processing_scope(business_context):
                 try:
                     if uses_crm(config):
                         if not get_or_create_customer_state(sender_phone, sender_name or "Cliente"):
@@ -1602,7 +1603,7 @@ def _process_whatsapp_message_unlocked(sender_phone: str, sender_name: str, mess
             state_record.update(audio_preferences)
 
     print("[DEBUG] 5. Procesando lógica del bot...")
-    ai_turn = process_message_logic(sender_phone, message_body, is_image, False)
+    ai_turn = process_message_logic(sender_phone, message_body, is_image, False, business_context=current_context())
     print("[DEBUG] 6. Respuesta IA generada")
 
     if ai_turn:
@@ -2048,13 +2049,17 @@ def process_claimed_whatsapp_event(
     if not valid_whatsapp_sender(sender_phone):
         print(f"[WEBHOOK INVALID] Rejected WhatsApp event without a valid sender event_id={event_id}", flush=True)
         return
+    # Resolve only AFTER verified channel/deployment checks, BEFORE claiming. A bad
+    # registry cannot trigger legacy fallback or the generic reply-recovery sender.
+    business_context = resolve_context(config, business_id, phone_number_id, sender_phone,
+                                       event_id, supabase.legacy)
     if not claim_webhook_event("whatsapp", event_id, sender_phone):
         print(f"[WEBHOOK DEBUG] WhatsApp duplicado ignorado: {event_id}")
         return
     received_kwargs = {"customer_message_received_at": customer_message_received_at} if customer_message_received_at is not None else {}
     if uses_crm(config):
         received_kwargs["crm_control_version"] = crm_control_version if crm_control_version is not None else -1
-    process_whatsapp_message(*args, event_id=event_id, **received_kwargs)
+    process_whatsapp_message(*args, event_id=event_id, business_context=business_context, **received_kwargs)
 
 
 def process_claimed_chatwoot_event(data: dict, event_id: str = None):
