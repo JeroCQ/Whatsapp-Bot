@@ -62,6 +62,7 @@ class Settings:
     sync_secret: str = field(repr=False)
     businesses: dict[str, Business]
     notifications_enabled: bool = False
+    usage_collection_enabled: bool = False
     vapid_private_key: str = field(default="", repr=False)
     vapid_subject: str = ""
     push_hosts: tuple[str, ...] = (
@@ -208,6 +209,7 @@ class Settings:
             sync_secret=sync_secret,
             businesses=businesses,
             notifications_enabled=flag("NOTIFICATIONS_ENABLED"),
+            usage_collection_enabled=flag("CRM_USAGE_COLLECTION_ENABLED"),
             vapid_private_key=os.environ.get("VAPID_PRIVATE_KEY", "").strip(),
             vapid_subject=os.environ.get("VAPID_SUBJECT", "").strip(),
             sync_interval=int(os.environ.get("SYNC_INTERVAL_SECONDS", "5")),

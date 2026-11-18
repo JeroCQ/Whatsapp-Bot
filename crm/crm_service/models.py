@@ -6,6 +6,7 @@ from sqlalchemy import (
     JSON,
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
@@ -264,3 +265,95 @@ class AuditEvent(Base):
     action: Mapped[str] = mapped_column(String(100))
     details: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class BusinessDraft(Base):
+    """Inactive administration data; never a replacement for Settings.businesses."""
+    __tablename__ = "crm_business_drafts"
+    business_id: Mapped[str] = mapped_column(String(63), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(120))
+    state: Mapped[str] = mapped_column(String(16), default="draft", server_default="draft")
+    whatsapp_phone_number_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    whatsapp_business_account_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    overrides: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    updated_by: Mapped[str] = mapped_column(ForeignKey("crm_agents.profile"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    __table_args__ = (
+        CheckConstraint("state = 'draft'", name="ck_business_draft_only"),
+        Index("uq_draft_whatsapp_phone", "whatsapp_phone_number_id", unique=True),
+    )
+
+
+class SharedConfigDraft(Base):
+    __tablename__ = "crm_shared_config_draft"
+    id: Mapped[str] = mapped_column(String(16), primary_key=True, default="shared")
+    values: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    updated_by: Mapped[str] = mapped_column(ForeignKey("crm_agents.profile"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    __table_args__ = (CheckConstraint("id = 'shared'", name="ck_single_shared_draft"),)
+
+
+class BusinessConnectionReference(Base):
+    """Opaque backend pointers, never credentials, URLs or browser-editable values."""
+    __tablename__ = "crm_business_connection_refs"
+    business_id: Mapped[str] = mapped_column(ForeignKey("crm_business_drafts.business_id"), primary_key=True)
+    purpose: Mapped[str] = mapped_column(String(32), primary_key=True)
+    reference_key: Mapped[str] = mapped_column(String(200))
+
+
+class UsageTurn(Base):
+    __tablename__ = "crm_usage_turns"
+    business_id: Mapped[str] = mapped_column(String(63), primary_key=True)
+    turn_id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(String(200))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    outcome: Mapped[str] = mapped_column(String(24), default="unknown")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    __table_args__ = (
+        CheckConstraint("outcome IN ('unknown','reply_accepted','no_reply','failed')", name="ck_usage_turn_outcome"),
+        Index("ix_usage_turn_conversation", "business_id", "conversation_id"),
+    )
+
+
+class ModelUsageAttempt(Base):
+    __tablename__ = "crm_model_usage_attempts"
+    business_id: Mapped[str] = mapped_column(String(63), primary_key=True)
+    attempt_id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    turn_id: Mapped[str] = mapped_column(String(160))
+    attempt_index: Mapped[int] = mapped_column(Integer)
+    purpose: Mapped[str] = mapped_column(String(80))
+    model_name: Mapped[str] = mapped_column(String(200))
+    model_version: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    input_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    total_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    cached_input_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    thought_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    outcome: Mapped[str] = mapped_column(String(20))
+    error_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    request_hash: Mapped[str] = mapped_column(String(64))
+    __table_args__ = (
+        ForeignKeyConstraint(["business_id", "turn_id"], ["crm_usage_turns.business_id", "crm_usage_turns.turn_id"]),
+        CheckConstraint("attempt_index > 0", name="ck_usage_attempt_index"),
+        CheckConstraint("outcome IN ('success','failed','timeout','cancelled','unknown')", name="ck_usage_attempt_outcome"),
+        Index("ix_usage_attempt_business_time", "business_id", "observed_at", "attempt_id"),
+    )
+
+
+class SupportMinutes(Base):
+    __tablename__ = "crm_support_minutes"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    business_id: Mapped[str] = mapped_column(String(63), index=True)
+    minutes: Mapped[int] = mapped_column(Integer)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    category: Mapped[str] = mapped_column(String(24))
+    note: Mapped[str] = mapped_column(String(1000), default="")
+    created_by: Mapped[str] = mapped_column(ForeignKey("crm_agents.profile"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    request_hash: Mapped[str] = mapped_column(String(64))
+    __table_args__ = (CheckConstraint("minutes > 0", name="ck_support_minutes_positive"),)

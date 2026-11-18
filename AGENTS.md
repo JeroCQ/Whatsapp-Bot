@@ -1,5 +1,14 @@
 # Repository architecture rules for Codex
 
+Turn-1 central administration is draft-only: `central_config` previews overlay the
+existing Settings registry; neither bots nor sync workers consume them. Reuse
+crm_agents membership/queue preferences read-only. New storage belongs only to
+CRM Alembic, never bot Supabase SQL. `CRM_USAGE_COLLECTION_ENABLED` defaults false;
+the stdlib-only `chatty_usage.UsageCollector` also defaults disabled and remains
+unwired from current model calls. Count attempts separately from explicitly
+accepted reply turns, keep absent usage/cost unknown, and never log model content
+or secrets. See docs/CHATTY_CENTRAL_CONFIG_TURN1.md. No activation UI in turn 1.
+
 Every change must preserve a clear, repeatable architecture for both existing
 brand deployments and future WhatsApp/Chatwoot brands created from this repository.
 

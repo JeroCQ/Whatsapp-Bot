@@ -17,6 +17,7 @@ from starlette.concurrency import run_in_threadpool
 
 from crm_service.bot_commands import CommandCoordinator
 from crm_service.bot_gateway import BotGateway, BotGatewayError
+from crm_service.central_admin import create_admin_router
 from crm_service.classification import timestamp
 from crm_service.db import database
 from crm_service.delivery import (
@@ -214,7 +215,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             with engine.connect() as conn:
                 version = conn.scalar(text("SELECT version_num FROM alembic_version"))
-                if version != "0004_delivery_receipts":
+                if version not in {"0004_delivery_receipts", "0005_central_config_usage"}:
                     raise HTTPException(503, "CRM migrations required")
         except SQLAlchemyError:
             raise HTTPException(503, "CRM database unavailable or migrations required") from None
@@ -1153,4 +1154,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(404, "Sync request not found")
         return job_response(row)
 
+    app.include_router(create_admin_router(settings, actor, db))
     return app
