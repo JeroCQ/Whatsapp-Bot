@@ -91,7 +91,14 @@ class Settings:
     # enables no businesses. Authentication still scopes every request.
     media_businesses: tuple[str, ...] | None = None
 
+    database_schema: str = "public"
+
     def __post_init__(self) -> None:
+        if self.database_schema not in {"public", "chatty_crm"}:
+            raise ValueError("Unsupported CRM database schema")
+        if self.database_schema == "chatty_crm":
+            from crm_service.central_copy_connection import check_central_project
+            check_central_project(self.database_url)
         if (
             type(self.media_enabled) is not bool
             or any(not re.fullmatch(r"[a-z][a-z0-9_]{0,62}", name) for name in self.media_businesses or ())
@@ -205,6 +212,7 @@ class Settings:
             readers.add(parsed.username)
         return cls(
             database_url=database,
+            database_schema="public" if database_url is not None else os.environ.get("CRM_DATABASE_SCHEMA", "public"),
             jwt_secret=jwt_secret,
             sync_secret=sync_secret,
             businesses=businesses,

@@ -1,0 +1,1053 @@
+{
+  "enums": [
+    {
+      "name": "bot_state",
+      "values": [
+        "GREETING",
+        "PRODUCT_SELECTION",
+        "FORMAT_SELECTION",
+        "QUANTITY_SELECTION",
+        "PAYMENT_PENDING",
+        "PICKUP_INSTRUCTIONS",
+        "HUMAN_HANDOFF"
+      ]
+    }
+  ],
+  "tables": [
+    {
+      "name": "catalog_assets",
+      "columns": [
+        {
+          "name": "business_id",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "catalog_id",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "public_name",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "description",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "media_type",
+          "type": "text",
+          "default": "'document'::text",
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "filename",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "default": "now()",
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "default": "now()",
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "content_type",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": false
+        },
+        {
+          "name": "size_bytes",
+          "type": "bigint",
+          "default": null,
+          "identity": "",
+          "not_null": false
+        }
+      ],
+      "indexes": [],
+      "constraints": [
+        {
+          "name": "catalog_assets_catalog_id_check",
+          "type": "c",
+          "definition": "CHECK ((catalog_id ~ '^catalogo_[a-z0-9_]{1,52}$'::text))"
+        },
+        {
+          "name": "catalog_assets_content_type_check",
+          "type": "c",
+          "definition": "CHECK ((content_type = ANY (ARRAY['application/pdf'::text, 'image/jpeg'::text, 'image/png'::text, 'image/webp'::text])))"
+        },
+        {
+          "name": "catalog_assets_description_check",
+          "type": "c",
+          "definition": "CHECK (((length(TRIM(BOTH FROM description)) >= 1) AND (length(TRIM(BOTH FROM description)) <= 2000)))"
+        },
+        {
+          "name": "catalog_assets_media_type_check",
+          "type": "c",
+          "definition": "CHECK ((media_type = ANY (ARRAY['document'::text, 'image'::text])))"
+        },
+        {
+          "name": "catalog_assets_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (business_id, catalog_id)"
+        },
+        {
+          "name": "catalog_assets_public_name_check",
+          "type": "c",
+          "definition": "CHECK (((length(TRIM(BOTH FROM public_name)) >= 1) AND (length(TRIM(BOTH FROM public_name)) <= 120)))"
+        },
+        {
+          "name": "catalog_assets_size_bytes_check",
+          "type": "c",
+          "definition": "CHECK (((size_bytes IS NULL) OR (size_bytes >= 0)))"
+        }
+      ],
+      "primary_key": [
+        "business_id",
+        "catalog_id"
+      ]
+    },
+    {
+      "name": "conversation_states",
+      "columns": [
+        {
+          "name": "phone_number",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "current_state",
+          "type": "public.bot_state",
+          "default": "'GREETING'::bot_state",
+          "identity": "",
+          "not_null": false
+        },
+        {
+          "name": "is_paused",
+          "type": "boolean",
+          "default": "false",
+          "identity": "",
+          "not_null": false
+        },
+        {
+          "name": "handoff_reason",
+          "type": "character varying(255)",
+          "default": null,
+          "identity": "",
+          "not_null": false
+        },
+        {
+          "name": "retry_count",
+          "type": "integer",
+          "default": "0",
+          "identity": "",
+          "not_null": false
+        },
+        {
+          "name": "last_interaction",
+          "type": "timestamp with time zone",
+          "default": "now()",
+          "identity": "",
+          "not_null": false
+        },
+        {
+          "name": "chatwoot_conversation_id",
+          "type": "integer",
+          "default": null,
+          "identity": "",
+          "not_null": false
+        },
+        {
+          "name": "follow_up_token",
+          "type": "character varying",
+          "default": null,
+          "identity": "",
+          "not_null": false
+        },
+        {
+          "name": "customer_data",
+          "type": "jsonb",
+          "default": "'{}'::jsonb",
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "order_summary",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": false
+        },
+        {
+          "name": "follow_up_not_before",
+          "type": "timestamp with time zone",
+          "default": null,
+          "identity": "",
+          "not_null": false
+        },
+        {
+          "name": "follow_up_suppressed",
+          "type": "boolean",
+          "default": "false",
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "follow_up_suppression_reason",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": false
+        },
+        {
+          "name": "crm_control_version",
+          "type": "bigint",
+          "default": "0",
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "crm_control_phase",
+          "type": "text",
+          "default": "'ai'::text",
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "crm_control_owner",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": false
+        },
+        {
+          "name": "crm_control_business_id",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": false
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX uq_conversation_states_active_chatwoot_conversation_id ON public.conversation_states USING btree (chatwoot_conversation_id) WHERE (chatwoot_conversation_id IS NOT NULL)",
+        "CREATE INDEX idx_conversation_states_chatwoot_conversation_id ON public.conversation_states USING btree (chatwoot_conversation_id) WHERE (chatwoot_conversation_id IS NOT NULL)"
+      ],
+      "constraints": [
+        {
+          "name": "conversation_states_phone_number_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (phone_number) REFERENCES customers(phone_number)"
+        },
+        {
+          "name": "conversation_states_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (phone_number)"
+        }
+      ],
+      "primary_key": [
+        "phone_number"
+      ]
+    },
+    {
+      "name": "crm_control_commands",
+      "columns": [
+        {
+          "name": "business_id",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "command_id",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "phone_number",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "operation",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "request",
+          "type": "jsonb",
+          "default": null,
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "response",
+          "type": "jsonb",
+          "default": "'{}'::jsonb",
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "default": "now()",
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "default": "now()",
+          "identity": "",
+          "not_null": true
+        }
+      ],
+      "indexes": [],
+      "constraints": [
+        {
+          "name": "crm_control_commands_phone_number_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (phone_number) REFERENCES customers(phone_number)"
+        },
+        {
+          "name": "crm_control_commands_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (business_id, command_id)"
+        }
+      ],
+      "primary_key": [
+        "business_id",
+        "command_id"
+      ]
+    },
+    {
+      "name": "crm_media_assets",
+      "columns": [
+        {
+          "name": "business_id",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "id",
+          "type": "uuid",
+          "default": null,
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "phone_number",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "actor",
+          "type": "text",
+          "default": "''::text",
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "direction",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "mime_type",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "filename",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "size_bytes",
+          "type": "bigint",
+          "default": "0",
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "sha256",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": false
+        },
+        {
+          "name": "source_sha256",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": false
+        },
+        {
+          "name": "source_filename",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": false
+        },
+        {
+          "name": "source_mime_type",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": false
+        },
+        {
+          "name": "voice_note",
+          "type": "boolean",
+          "default": "false",
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "default": "'pending'::text",
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "storage_key",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": false
+        },
+        {
+          "name": "original_storage_key",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": false
+        },
+        {
+          "name": "playback",
+          "type": "jsonb",
+          "default": "'{}'::jsonb",
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "source_event_id",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": false
+        },
+        {
+          "name": "meta_media_id",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": false
+        },
+        {
+          "name": "error",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "default": "now()",
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "default": "now()",
+          "identity": "",
+          "not_null": true
+        }
+      ],
+      "indexes": [
+        "CREATE INDEX ix_crm_media_conversation ON public.crm_media_assets USING btree (business_id, phone_number, created_at)"
+      ],
+      "constraints": [
+        {
+          "name": "crm_media_assets_business_id_check",
+          "type": "c",
+          "definition": "CHECK (((length(business_id) >= 1) AND (length(business_id) <= 63)))"
+        },
+        {
+          "name": "crm_media_assets_check",
+          "type": "c",
+          "definition": "CHECK (((status <> 'ready'::text) OR ((storage_key IS NOT NULL) AND (sha256 IS NOT NULL) AND (size_bytes > 0))))"
+        },
+        {
+          "name": "crm_media_assets_direction_check",
+          "type": "c",
+          "definition": "CHECK ((direction = ANY (ARRAY['inbound'::text, 'outbound'::text])))"
+        },
+        {
+          "name": "crm_media_assets_kind_check",
+          "type": "c",
+          "definition": "CHECK ((kind = ANY (ARRAY['image'::text, 'audio'::text, 'document'::text, 'video'::text, 'sticker'::text])))"
+        },
+        {
+          "name": "crm_media_assets_phone_number_check",
+          "type": "c",
+          "definition": "CHECK (((length(phone_number) >= 1) AND (length(phone_number) <= 200)))"
+        },
+        {
+          "name": "crm_media_assets_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (business_id, id)"
+        },
+        {
+          "name": "crm_media_assets_playback_check",
+          "type": "c",
+          "definition": "CHECK ((jsonb_typeof(playback) = 'object'::text))"
+        },
+        {
+          "name": "crm_media_assets_sha256_check",
+          "type": "c",
+          "definition": "CHECK (((sha256 IS NULL) OR (sha256 ~ '^[a-f0-9]{64}$'::text)))"
+        },
+        {
+          "name": "crm_media_assets_size_bytes_check",
+          "type": "c",
+          "definition": "CHECK (((size_bytes >= 0) AND (size_bytes <= 100000000)))"
+        },
+        {
+          "name": "crm_media_assets_source_sha256_check",
+          "type": "c",
+          "definition": "CHECK (((source_sha256 IS NULL) OR (source_sha256 ~ '^[a-f0-9]{64}$'::text)))"
+        },
+        {
+          "name": "crm_media_assets_status_check",
+          "type": "c",
+          "definition": "CHECK ((status = ANY (ARRAY['pending'::text, 'ready'::text, 'unavailable'::text])))"
+        }
+      ],
+      "primary_key": [
+        "business_id",
+        "id"
+      ]
+    },
+    {
+      "name": "crm_send_attempts",
+      "columns": [
+        {
+          "name": "business_id",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "attempt_id",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "phone_number",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "actor",
+          "type": "text",
+          "default": "''::text",
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "version",
+          "type": "bigint",
+          "default": null,
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "request",
+          "type": "jsonb",
+          "default": null,
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "provider_message_id",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": false
+        },
+        {
+          "name": "detail",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "default": "now()",
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "default": "now()",
+          "identity": "",
+          "not_null": true
+        }
+      ],
+      "indexes": [
+        "CREATE INDEX crm_send_attempt_inflight ON public.crm_send_attempts USING btree (business_id, phone_number, kind, status)",
+        "CREATE UNIQUE INDEX crm_send_attempt_provider_id ON public.crm_send_attempts USING btree (business_id, provider_message_id) WHERE ((provider_message_id IS NOT NULL) AND (provider_message_id <> ''::text))"
+      ],
+      "constraints": [
+        {
+          "name": "crm_send_attempts_kind_check",
+          "type": "c",
+          "definition": "CHECK ((kind = ANY (ARRAY['auto'::text, 'human'::text])))"
+        },
+        {
+          "name": "crm_send_attempts_phone_number_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (phone_number) REFERENCES customers(phone_number)"
+        },
+        {
+          "name": "crm_send_attempts_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (business_id, attempt_id)"
+        },
+        {
+          "name": "crm_send_attempts_status_check",
+          "type": "c",
+          "definition": "CHECK ((status = ANY (ARRAY['sending'::text, 'accepted'::text, 'delivered'::text, 'read'::text, 'failed'::text, 'unknown'::text])))"
+        }
+      ],
+      "primary_key": [
+        "business_id",
+        "attempt_id"
+      ]
+    },
+    {
+      "name": "customers",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "default": "gen_random_uuid()",
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "phone_number",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "name",
+          "type": "character varying(100)",
+          "default": null,
+          "identity": "",
+          "not_null": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "default": "now()",
+          "identity": "",
+          "not_null": false
+        }
+      ],
+      "indexes": [],
+      "constraints": [
+        {
+          "name": "customers_phone_number_key",
+          "type": "u",
+          "definition": "UNIQUE (phone_number)"
+        },
+        {
+          "name": "customers_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)"
+        }
+      ],
+      "primary_key": [
+        "id"
+      ]
+    },
+    {
+      "name": "dashboard_admins",
+      "columns": [
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "default": null,
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "default": "now()",
+          "identity": "",
+          "not_null": true
+        }
+      ],
+      "indexes": [],
+      "constraints": [
+        {
+          "name": "dashboard_admins_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (user_id)"
+        },
+        {
+          "name": "dashboard_admins_user_id_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE"
+        }
+      ],
+      "primary_key": [
+        "user_id"
+      ]
+    },
+    {
+      "name": "handoff_deliveries",
+      "columns": [
+        {
+          "name": "business_id",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "phone_number",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "request_id",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "default": "'pending'::text",
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "attempts",
+          "type": "integer",
+          "default": "0",
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "retry_at",
+          "type": "timestamp with time zone",
+          "default": "now()",
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "conversation_id",
+          "type": "bigint",
+          "default": null,
+          "identity": "",
+          "not_null": false
+        },
+        {
+          "name": "last_error",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "default": "now()",
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "default": "now()",
+          "identity": "",
+          "not_null": true
+        }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_handoff_deliveries_pending ON public.handoff_deliveries USING btree (business_id, status, retry_at)"
+      ],
+      "constraints": [
+        {
+          "name": "handoff_deliveries_attempts_check",
+          "type": "c",
+          "definition": "CHECK ((attempts >= 0))"
+        },
+        {
+          "name": "handoff_deliveries_phone_number_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (phone_number) REFERENCES customers(phone_number)"
+        },
+        {
+          "name": "handoff_deliveries_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (business_id, phone_number)"
+        },
+        {
+          "name": "handoff_deliveries_status_check",
+          "type": "c",
+          "definition": "CHECK ((status = ANY (ARRAY['pending'::text, 'reserved'::text, 'sending'::text, 'created'::text, 'unknown'::text, 'exhausted'::text, 'cancelled'::text])))"
+        }
+      ],
+      "primary_key": [
+        "business_id",
+        "phone_number"
+      ]
+    },
+    {
+      "name": "message_logs",
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "default": null,
+          "identity": "d",
+          "not_null": true
+        },
+        {
+          "name": "phone_number",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "role",
+          "type": "character varying(20)",
+          "default": null,
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "content",
+          "type": "text",
+          "default": "''::text",
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "default": "now()",
+          "identity": "",
+          "not_null": false
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb",
+          "default": "'{}'::jsonb",
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "event_key",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": false
+        }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_message_logs_phone_created_at ON public.message_logs USING btree (phone_number, created_at DESC, id DESC)",
+        "CREATE UNIQUE INDEX uq_message_logs_event_key ON public.message_logs USING btree (event_key)"
+      ],
+      "constraints": [
+        {
+          "name": "message_logs_phone_number_fkey",
+          "type": "f",
+          "definition": "FOREIGN KEY (phone_number) REFERENCES customers(phone_number)"
+        },
+        {
+          "name": "message_logs_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "message_logs_role_check",
+          "type": "c",
+          "definition": "CHECK (((role)::text = ANY ((ARRAY['user'::character varying, 'model'::character varying, 'system'::character varying, 'asesor'::character varying])::text[])))"
+        }
+      ],
+      "primary_key": [
+        "id"
+      ]
+    },
+    {
+      "name": "processed_webhook_events",
+      "columns": [
+        {
+          "name": "source",
+          "type": "character varying",
+          "default": null,
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "event_id",
+          "type": "character varying",
+          "default": null,
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "phone_number",
+          "type": "character varying",
+          "default": null,
+          "identity": "",
+          "not_null": false
+        },
+        {
+          "name": "status",
+          "type": "character varying",
+          "default": "'received'::character varying",
+          "identity": "",
+          "not_null": true
+        },
+        {
+          "name": "received_at",
+          "type": "timestamp with time zone",
+          "default": "now()",
+          "identity": "",
+          "not_null": false
+        },
+        {
+          "name": "processed_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "identity": "",
+          "not_null": false
+        },
+        {
+          "name": "error",
+          "type": "text",
+          "default": null,
+          "identity": "",
+          "not_null": false
+        }
+      ],
+      "indexes": [],
+      "constraints": [
+        {
+          "name": "processed_webhook_events_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (source, event_id)"
+        }
+      ],
+      "primary_key": [
+        "source",
+        "event_id"
+      ]
+    }
+  ],
+  "functions": [
+    "CREATE OR REPLACE FUNCTION public.crm_control_dispatch(p_business_id text, p_phone text, p_action text, p_request_id text DEFAULT ''::text, p_actor text DEFAULT ''::text, p_expected_version bigint DEFAULT NULL::bigint, p_payload jsonb DEFAULT '{}'::jsonb)\n RETURNS jsonb\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'pg_catalog', 'public'\nAS $function$\r\nDECLARE s public.conversation_states%ROWTYPE; cmd public.crm_control_commands%ROWTYPE;\r\n        attempt public.crm_send_attempts%ROWTYPE; wanted jsonb; v_response jsonb;\r\n        control jsonb; target_status text; provider_id text; blocked boolean;\r\nBEGIN\r\n  IF p_business_id IS NULL OR p_business_id !~ '^[a-z][a-z0-9_-]{0,62}$' THEN\r\n    RETURN jsonb_build_object('error','invalid_business','http_status',400);\r\n  END IF;\r\n  IF p_action IN ('finish_send','receipt') THEN\r\n    IF p_request_id <> '' THEN\r\n      SELECT * INTO attempt FROM public.crm_send_attempts\r\n        WHERE business_id=p_business_id AND attempt_id=p_request_id;\r\n    ELSE\r\n      SELECT * INTO attempt FROM public.crm_send_attempts\r\n        WHERE business_id=p_business_id AND provider_message_id=p_payload->>'provider_message_id';\r\n    END IF;\r\n    IF NOT FOUND THEN RETURN jsonb_build_object('error','send_attempt_not_found','http_status',404); END IF;\r\n    IF p_phone IS NOT NULL AND p_phone <> attempt.phone_number THEN\r\n      RETURN jsonb_build_object('error','command_identity_mismatch','http_status',409);\r\n    END IF;\r\n    p_phone := attempt.phone_number;\r\n    p_request_id := attempt.attempt_id;\r\n  END IF;\r\n  SELECT * INTO s FROM public.conversation_states WHERE phone_number=p_phone FOR UPDATE;\r\n  IF NOT FOUND THEN RETURN jsonb_build_object('error','conversation_not_found','http_status',404); END IF;\r\n  IF s.crm_control_business_id IS NOT NULL AND s.crm_control_business_id <> p_business_id THEN\r\n    RETURN jsonb_build_object('error','business_mismatch','http_status',403);\r\n  END IF;\r\n  UPDATE public.conversation_states SET crm_control_business_id=p_business_id WHERE phone_number=p_phone;\r\n\r\n  IF s.crm_control_phase='pausing' AND NOT EXISTS (\r\n      SELECT 1 FROM public.crm_send_attempts WHERE business_id=p_business_id AND phone_number=p_phone\r\n        AND kind='auto' AND status IN ('sending','unknown')) THEN\r\n    UPDATE public.conversation_states SET crm_control_phase='human' WHERE phone_number=p_phone;\r\n    s.crm_control_phase := 'human';\r\n    UPDATE public.crm_control_commands SET response=response || jsonb_build_object(\r\n      'status','confirmed','control',public.crm_control_view(p_business_id,p_phone)),updated_at=now()\r\n      WHERE business_id=p_business_id AND phone_number=p_phone AND operation='take'\r\n        AND request->>'actor'=s.crm_control_owner AND response->>'status'='pending';\r\n  END IF;\r\n  IF p_action='read' THEN RETURN public.crm_control_view(p_business_id,p_phone); END IF;\r\n  IF p_action='command' THEN\r\n    SELECT * INTO cmd FROM public.crm_control_commands WHERE business_id=p_business_id AND command_id=p_request_id;\r\n    IF NOT FOUND THEN RETURN jsonb_build_object('error','command_not_found','http_status',404); END IF;\r\n    IF cmd.phone_number <> p_phone THEN RETURN jsonb_build_object('error','command_identity_mismatch','http_status',409); END IF;\r\n    SELECT * INTO attempt FROM public.crm_send_attempts WHERE business_id=p_business_id AND attempt_id=p_request_id;\r\n    v_response := cmd.response;\r\n    IF FOUND THEN v_response := v_response || jsonb_build_object('status',attempt.status,'provider_message_id',attempt.provider_message_id); END IF;\r\n    RETURN v_response || jsonb_build_object('control',public.crm_control_view(p_business_id,p_phone));\r\n  END IF;\r\n\r\n  IF p_action IN ('take','close','handoff','reset','transfer','begin_send') THEN\r\n    IF p_request_id IS NULL OR length(p_request_id) NOT BETWEEN 1 AND 160 THEN\r\n      RETURN jsonb_build_object('error','invalid_command_id','http_status',400);\r\n    END IF;\r\n    wanted := jsonb_build_object('operation',p_action,'phone',p_phone,'actor',p_actor,\r\n                                'version',p_expected_version,'payload',p_payload);\r\n    IF p_action='begin_send' THEN\r\n      SELECT * INTO attempt FROM public.crm_send_attempts WHERE business_id=p_business_id AND attempt_id=p_request_id;\r\n      IF FOUND THEN\r\n        IF attempt.phone_number <> p_phone OR (attempt.request #- '{payload,inbound_message_ids}') <> (wanted #- '{payload,inbound_message_ids}') THEN\r\n          RETURN jsonb_build_object('error','idempotency_conflict','http_status',409);\r\n        END IF;\r\n        RETURN jsonb_build_object('command_id',p_request_id,'status',attempt.status,\r\n            'provider_message_id',attempt.provider_message_id,'control',public.crm_control_view(p_business_id,p_phone));\r\n      END IF;\r\n    ELSE\r\n      SELECT * INTO cmd FROM public.crm_control_commands WHERE business_id=p_business_id AND command_id=p_request_id;\r\n      IF FOUND THEN\r\n        IF cmd.phone_number <> p_phone OR cmd.request <> wanted THEN\r\n          RETURN jsonb_build_object('error','idempotency_conflict','http_status',409);\r\n        END IF;\r\n        v_response := cmd.response || jsonb_build_object('control',public.crm_control_view(p_business_id,p_phone));\r\n        IF p_action='take' THEN v_response := v_response || jsonb_build_object('status',CASE WHEN s.crm_control_phase='human' THEN 'confirmed' ELSE 'pending' END); END IF;\r\n        RETURN v_response;\r\n      END IF;\r\n    END IF;\r\n  END IF;\r\n\r\n  IF p_action='handoff' THEN\r\n    IF s.crm_control_phase NOT IN ('human','pausing') THEN\r\n      UPDATE public.conversation_states SET is_paused=true,current_state='HUMAN_HANDOFF',\r\n        handoff_reason=left(COALESCE(p_payload->>'reason','Human attention required'),255),\r\n        crm_control_phase='waiting',crm_control_owner=NULL,crm_control_version=crm_control_version+1,\r\n        follow_up_token=NULL,follow_up_suppressed=true,follow_up_suppression_reason='crm_handoff'\r\n        WHERE phone_number=p_phone;\r\n      INSERT INTO public.message_logs(phone_number,role,content,metadata,event_key)\r\n        VALUES(p_phone,'system','HANDOFF: '||COALESCE(p_payload->>'reason','Human attention required'),\r\n          jsonb_build_object('business_id',p_business_id,'source','crm_handoff','source_event_id',p_request_id),\r\n          'crm-handoff:'||p_business_id||':'||p_request_id) ON CONFLICT(event_key) DO NOTHING;\r\n    END IF;\r\n    v_response := jsonb_build_object('command_id',p_request_id,'status','confirmed','control',public.crm_control_view(p_business_id,p_phone));\r\n  ELSIF p_action IN ('take','close','reset','transfer','begin_send') THEN\r\n    IF p_expected_version IS NULL OR p_expected_version<>s.crm_control_version THEN\r\n      RETURN jsonb_build_object('error','control_version_conflict','http_status',409);\r\n    END IF;\r\n    IF p_action='reset' THEN\r\n      IF COALESCE(p_actor,'')<>'bot' OR COALESCE(s.is_paused,true) OR s.crm_control_phase<>'ai' THEN\r\n        RETURN jsonb_build_object('error','active_ai_required_for_reset','http_status',409);\r\n      END IF;\r\n      IF EXISTS(SELECT 1 FROM public.crm_send_attempts WHERE business_id=p_business_id AND phone_number=p_phone\r\n                  AND status IN ('sending','unknown')) THEN\r\n        RETURN jsonb_build_object('error','unsettled_send_blocks_reset','http_status',409);\r\n      END IF;\r\n      UPDATE public.conversation_states SET current_state='GREETING',customer_data='{}'::jsonb,order_summary=NULL,\r\n        handoff_reason=NULL,chatwoot_conversation_id=NULL,crm_control_owner=NULL,\r\n        crm_control_version=crm_control_version+1,follow_up_token=NULL,follow_up_not_before=NULL\r\n        WHERE phone_number=p_phone;\r\n      -- Keep the CRM's incremental history/audit; reset only the bot's context.\r\n      INSERT INTO public.message_logs(phone_number,role,content,metadata,event_key)\r\n        VALUES(p_phone,'system','RESOLVED: Conversation reset; AI context cleared.',\r\n          jsonb_build_object('business_id',p_business_id,'source','crm_reset','source_event_id',p_request_id,'actor','bot'),\r\n          'crm-reset:'||p_business_id||':'||p_request_id) ON CONFLICT(event_key) DO NOTHING;\r\n      v_response := jsonb_build_object('command_id',p_request_id,'status','confirmed','control',public.crm_control_view(p_business_id,p_phone));\r\n    ELSIF p_action='transfer' THEN\r\n      IF length(trim(p_actor)) NOT BETWEEN 1 AND 200\r\n         OR length(trim(COALESCE(p_payload->>'target_actor',''))) NOT BETWEEN 1 AND 200\r\n         OR NOT s.is_paused\r\n         OR NOT ((s.crm_control_phase='human' AND s.crm_control_owner IS NOT DISTINCT FROM p_actor)\r\n              OR (s.crm_control_phase IN ('ai','waiting') AND s.crm_control_owner IS NULL)) THEN\r\n        RETURN jsonb_build_object('error','confirmed_owner_or_unassigned_waiting_required','http_status',409);\r\n      END IF;\r\n      IF EXISTS(SELECT 1 FROM public.crm_send_attempts WHERE business_id=p_business_id AND phone_number=p_phone\r\n                  AND status IN ('sending','unknown')) THEN\r\n        RETURN jsonb_build_object('error','unsettled_send_blocks_transfer','http_status',409);\r\n      END IF;\r\n      UPDATE public.conversation_states SET crm_control_phase='human',crm_control_owner=p_payload->>'target_actor',\r\n        crm_control_version=crm_control_version+1 WHERE phone_number=p_phone;\r\n      INSERT INTO public.message_logs(phone_number,role,content,metadata,event_key)\r\n        VALUES(p_phone,'system','CONTROL: Atención transferida a otro asesor.',\r\n          jsonb_build_object('business_id',p_business_id,'source','crm_transfer','source_event_id',p_request_id,\r\n                             'actor',p_actor,'target_actor',p_payload->>'target_actor'),\r\n          'crm-transfer:'||p_business_id||':'||p_request_id) ON CONFLICT(event_key) DO NOTHING;\r\n      v_response := jsonb_build_object('command_id',p_request_id,'status','confirmed','control',public.crm_control_view(p_business_id,p_phone));\r\n    ELSIF p_action='take' THEN\r\n      IF length(trim(p_actor)) NOT BETWEEN 1 AND 200 THEN RETURN jsonb_build_object('error','actor_required','http_status',400); END IF;\r\n      IF s.crm_control_phase IN ('human','pausing') AND s.crm_control_owner IS DISTINCT FROM p_actor THEN\r\n        RETURN jsonb_build_object('error','controlled_by_another_actor','http_status',409);\r\n      END IF;\r\n      SELECT EXISTS(SELECT 1 FROM public.crm_send_attempts WHERE business_id=p_business_id AND phone_number=p_phone\r\n        AND kind='auto' AND status IN ('sending','unknown')) INTO blocked;\r\n      UPDATE public.conversation_states SET is_paused=true,current_state='HUMAN_HANDOFF',\r\n        handoff_reason=left(COALESCE(p_payload->>'reason','CRM human takeover'),255),\r\n        crm_control_phase=CASE WHEN blocked THEN 'pausing' ELSE 'human' END,crm_control_owner=p_actor,\r\n        crm_control_version=crm_control_version+1,follow_up_token=NULL,follow_up_suppressed=true,\r\n        follow_up_suppression_reason='crm_human_control' WHERE phone_number=p_phone;\r\n      v_response := jsonb_build_object('command_id',p_request_id,'status',CASE WHEN blocked THEN 'pending' ELSE 'confirmed' END,\r\n                                     'control',public.crm_control_view(p_business_id,p_phone));\r\n    ELSIF p_action='close' THEN\r\n      IF length(trim(p_actor)) NOT BETWEEN 1 AND 200 OR NOT s.is_paused OR NOT (\r\n        (s.crm_control_phase='human' AND s.crm_control_owner IS NOT DISTINCT FROM p_actor)\r\n        OR (s.crm_control_phase IN ('ai','waiting') AND s.crm_control_owner IS NULL)\r\n      ) THEN\r\n        RETURN jsonb_build_object('error','confirmed_owner_required','http_status',409);\r\n      END IF;\r\n      IF EXISTS(SELECT 1 FROM public.crm_send_attempts WHERE business_id=p_business_id AND phone_number=p_phone\r\n                  AND status IN ('sending','unknown')) THEN\r\n        RETURN jsonb_build_object('error','unsettled_send_blocks_close','http_status',409);\r\n      END IF;\r\n      UPDATE public.conversation_states SET is_paused=false,current_state='GREETING',handoff_reason=NULL,\r\n        crm_control_phase='ai',crm_control_owner=NULL,crm_control_version=crm_control_version+1,\r\n        follow_up_token=NULL,follow_up_suppressed=false,follow_up_suppression_reason=NULL\r\n        WHERE phone_number=p_phone;\r\n      INSERT INTO public.message_logs(phone_number,role,content,metadata,event_key)\r\n        VALUES(p_phone,'system','RESOLVED: CRM case closed; AI control restored.',\r\n          jsonb_build_object('business_id',p_business_id,'source','crm_close','source_event_id',p_request_id,'actor',p_actor),\r\n          'crm-close:'||p_business_id||':'||p_request_id) ON CONFLICT(event_key) DO NOTHING;\r\n      v_response := jsonb_build_object('command_id',p_request_id,'status','confirmed','control',public.crm_control_view(p_business_id,p_phone));\r\n    ELSE\r\n      control := public.crm_control_view(p_business_id,p_phone);\r\n      IF p_payload->>'kind' NOT IN ('auto','human') THEN RETURN jsonb_build_object('error','invalid_send_kind','http_status',400); END IF;\r\n      IF p_payload->>'kind'='auto' AND p_payload->>'purpose'='handoff_ack' THEN\r\n        -- One text acknowledgement of this exact bot-created handoff. This is\r\n        -- still an auto attempt, so takeover waits for its sending/unknown state.\r\n        IF COALESCE(p_actor,'')<>'bot' OR NOT COALESCE(s.is_paused,false) OR s.crm_control_phase<>'waiting' OR s.crm_control_owner IS NOT NULL\r\n           OR length(COALESCE(p_payload->>'text','')) NOT BETWEEN 1 AND 4096 OR p_payload ? 'attachments' THEN\r\n          RETURN jsonb_build_object('error','automatic_send_fenced','http_status',409);\r\n        END IF;\r\n        SELECT * INTO cmd FROM public.crm_control_commands WHERE business_id=p_business_id\r\n          AND phone_number=p_phone AND command_id=p_payload->>'handoff_request_id' AND operation='handoff';\r\n        IF NOT FOUND OR NOT COALESCE((cmd.response#>>'{control,version}')::bigint=s.crm_control_version,false) THEN\r\n          RETURN jsonb_build_object('error','handoff_notice_not_authorized','http_status',409);\r\n        END IF;\r\n        IF EXISTS(SELECT 1 FROM public.crm_send_attempts WHERE business_id=p_business_id AND phone_number=p_phone\r\n            AND request#>>'{payload,purpose}'='handoff_ack'\r\n            AND request#>>'{payload,handoff_request_id}'=p_payload->>'handoff_request_id') THEN\r\n          RETURN jsonb_build_object('error','handoff_notice_already_reserved','http_status',409);\r\n        END IF;\r\n      ELSIF p_payload->>'kind'='auto' AND (s.is_paused OR s.crm_control_phase<>'ai') THEN\r\n        RETURN jsonb_build_object('error','automatic_send_fenced','http_status',409);\r\n      END IF;\r\n      IF p_payload->>'kind'='human' THEN\r\n        IF s.crm_control_phase<>'human' OR NOT s.is_paused OR s.crm_control_owner IS DISTINCT FROM p_actor THEN\r\n          RETURN jsonb_build_object('error','confirmed_owner_required','http_status',409);\r\n        END IF;\r\n        IF NOT COALESCE((control->>'can_send')::boolean,false) THEN\r\n          RETURN jsonb_build_object('error','whatsapp_window_closed_or_unverified','http_status',409);\r\n        END IF;\r\n        IF EXISTS(SELECT 1 FROM public.crm_send_attempts WHERE business_id=p_business_id AND phone_number=p_phone\r\n                    AND kind='human' AND status IN ('sending','unknown')) THEN\r\n          RETURN jsonb_build_object('error','unsettled_send_blocks_human_reply','http_status',409);\r\n        END IF;\r\n        UPDATE public.conversation_states SET crm_control_version=crm_control_version+1 WHERE phone_number=p_phone;\r\n        control := public.crm_control_view(p_business_id,p_phone);\r\n      END IF;\r\n      INSERT INTO public.crm_send_attempts(business_id,attempt_id,phone_number,kind,actor,version,request,status)\r\n        VALUES(p_business_id,p_request_id,p_phone,p_payload->>'kind',p_actor,p_expected_version,wanted,'sending');\r\n      v_response := jsonb_build_object('command_id',p_request_id,'status','reserved','control',control);\r\n    END IF;\r\n  ELSIF p_action IN ('finish_send','receipt') THEN\r\n    SELECT * INTO attempt FROM public.crm_send_attempts WHERE business_id=p_business_id AND attempt_id=p_request_id FOR UPDATE;\r\n    target_status := p_payload->>'status';\r\n    provider_id := NULLIF(p_payload->>'provider_message_id','');\r\n    IF p_action='receipt' AND target_status NOT IN ('accepted','delivered','read','failed') THEN\r\n      RETURN jsonb_build_object('error','invalid_receipt_status','http_status',400);\r\n    END IF;\r\n    IF p_action='finish_send' AND target_status NOT IN ('accepted','failed','unknown') THEN\r\n      RETURN jsonb_build_object('error','invalid_send_status','http_status',400);\r\n    END IF;\r\n    IF attempt.provider_message_id IS NOT NULL AND provider_id IS NOT NULL AND attempt.provider_message_id<>provider_id THEN\r\n      RETURN jsonb_build_object('error','provider_identity_conflict','http_status',409);\r\n    END IF;\r\n    -- Do not regress delivery receipts when the HTTP acknowledgement arrives late.\r\n    IF attempt.status='read' OR (attempt.status='delivered' AND target_status<>'read') THEN\r\n      target_status := attempt.status;\r\n    ELSIF attempt.status='failed' AND target_status NOT IN ('delivered','read') THEN\r\n      -- A late HTTP acknowledgement or Meta sent callback cannot erase a known failure.\r\n      target_status := 'failed';\r\n    ELSIF attempt.status='accepted' AND target_status='unknown' THEN\r\n      target_status := 'accepted';\r\n    END IF;\r\n    UPDATE public.crm_send_attempts SET status=target_status,\r\n      provider_message_id=COALESCE(provider_id,provider_message_id),detail=left(p_payload->>'detail',100),updated_at=now()\r\n      WHERE business_id=p_business_id AND attempt_id=p_request_id;\r\n    IF attempt.kind='human' AND target_status IN ('accepted','delivered','read','failed','unknown') THEN\r\n      INSERT INTO public.message_logs(phone_number,role,content,metadata,event_key)\r\n        VALUES(p_phone,'asesor',COALESCE(attempt.request->'payload'->>'text',''),\r\n          jsonb_build_object('business_id',p_business_id,'source','human','source_event_id',p_request_id,\r\n            'actor',attempt.actor,'command_id',p_request_id,\r\n            'attachments',COALESCE(attempt.request->'payload'->'attachments','[]'::jsonb),\r\n            'provider_message_id',COALESCE(provider_id,attempt.provider_message_id),'delivery_status',target_status,\r\n            'inbound_message_ids',COALESCE(attempt.request->'payload'->'inbound_message_ids','[]'::jsonb)),\r\n          'crm-human:'||p_business_id||':'||p_request_id) ON CONFLICT(event_key) DO NOTHING;\r\n    END IF;\r\n    IF attempt.kind='human' THEN\r\n      UPDATE public.message_logs SET metadata=COALESCE(metadata,'{}'::jsonb) || jsonb_build_object(\r\n        'delivery_status',target_status,'provider_message_id',COALESCE(provider_id,attempt.provider_message_id))\r\n        WHERE event_key='crm-human:'||p_business_id||':'||p_request_id;\r\n      IF attempt.status IS DISTINCT FROM target_status AND target_status IN ('accepted','delivered','read','failed') THEN\r\n        -- Metadata edits alone are invisible to the incremental ID watermark. Append a\r\n        -- receipt fact, without message content, so the next bounded poll sees it.\r\n        INSERT INTO public.message_logs(phone_number,role,content,metadata,event_key)\r\n          VALUES(p_phone,'system','DELIVERY_STATUS: '||target_status,\r\n            jsonb_build_object('business_id',p_business_id,'source','crm_delivery',\r\n              'command_id',p_request_id,'source_event_id',p_request_id,'delivery_status',target_status,\r\n              'provider_message_id',COALESCE(provider_id,attempt.provider_message_id)),\r\n            'crm-delivery:'||p_business_id||':'||p_request_id||':'||target_status)\r\n          ON CONFLICT(event_key) DO NOTHING;\r\n      END IF;\r\n    END IF;\r\n    v_response := jsonb_build_object('command_id',p_request_id,'status',target_status,\r\n         'provider_message_id',COALESCE(provider_id,attempt.provider_message_id),\r\n         'control',public.crm_control_view(p_business_id,p_phone));\r\n    UPDATE public.crm_control_commands SET response=v_response,updated_at=now()\r\n      WHERE business_id=p_business_id AND command_id=p_request_id;\r\n    RETURN v_response;\r\n  ELSE\r\n    RETURN jsonb_build_object('error','unsupported_control_action','http_status',400);\r\n  END IF;\r\n  INSERT INTO public.crm_control_commands(business_id,command_id,phone_number,operation,request,response)\r\n    VALUES(p_business_id,p_request_id,p_phone,p_action,wanted,v_response);\r\n  RETURN v_response;\r\nEXCEPTION WHEN unique_violation THEN\r\n  RETURN jsonb_build_object('error','idempotency_conflict','http_status',409);\r\nEND $function$\n",
+    "CREATE OR REPLACE FUNCTION public.crm_control_view(p_business_id text, p_phone text)\n RETURNS jsonb\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'pg_catalog', 'public'\nAS $function$\r\nDECLARE s public.conversation_states%ROWTYPE; inbound public.message_logs%ROWTYPE;\r\n        received timestamptz; expiry timestamptz; phase text; inbound_ids jsonb;\r\nBEGIN\r\n  SELECT * INTO s FROM public.conversation_states WHERE phone_number=p_phone;\r\n  IF NOT FOUND THEN RETURN jsonb_build_object('error','conversation_not_found','http_status',404); END IF;\r\n  IF s.crm_control_business_id IS NOT NULL AND s.crm_control_business_id <> p_business_id THEN\r\n    RETURN jsonb_build_object('error','business_mismatch','http_status',403);\r\n  END IF;\r\n  phase := CASE WHEN s.is_paused AND s.crm_control_phase='ai' THEN 'waiting' ELSE s.crm_control_phase END;\r\n  SELECT * INTO inbound FROM public.message_logs WHERE phone_number=p_phone AND role='user'\r\n    ORDER BY created_at DESC,id DESC LIMIT 1;\r\n  BEGIN received := NULLIF(inbound.metadata->>'received_at','')::timestamptz;\r\n  EXCEPTION WHEN invalid_datetime_format OR datetime_field_overflow THEN received := NULL; END;\r\n  IF received IS NOT NULL AND received <= now()+interval '1 minute' THEN expiry := received+interval '24 hours'; END IF;\r\n  -- A human reply covers the inbound set visible at reservation, never later arrivals.\r\n  SELECT COALESCE(jsonb_agg(m.metadata->>'source_event_id' ORDER BY m.created_at,m.id),'[]'::jsonb)\r\n    INTO inbound_ids FROM public.message_logs m\r\n    WHERE m.phone_number=p_phone AND m.role='user' AND m.metadata->>'source_event_id' IS NOT NULL\r\n      AND NOT EXISTS (SELECT 1 FROM public.message_logs r WHERE r.phone_number=p_phone\r\n        AND r.role='system' AND r.content LIKE 'RESOLVED:%' AND (r.created_at,r.id)>=(m.created_at,m.id));\r\n  RETURN jsonb_build_object('business_id',p_business_id,'phone_number',p_phone,'provider','crm',\r\n    'phase',phase,'version',s.crm_control_version,'owner',s.crm_control_owner,\r\n    'is_paused',s.is_paused,'confirmed',phase='human' AND s.is_paused,\r\n    'can_send',COALESCE(phase='human' AND s.is_paused AND s.crm_control_owner IS NOT NULL AND expiry>now()\r\n      AND NOT EXISTS (SELECT 1 FROM public.crm_send_attempts WHERE business_id=p_business_id\r\n        AND phone_number=p_phone AND status IN ('sending','unknown')),false),\r\n    'window_expires_at',expiry,'inbound_message_ids',inbound_ids);\r\nEND $function$\n"
+  ],
+  "sequences": [
+    {
+      "max": "9223372036854775807",
+      "min": "1",
+      "name": "message_logs_id_seq",
+      "type": "bigint",
+      "cache": "1",
+      "cycle": false,
+      "start": "1",
+      "increment": "1"
+    }
+  ]
+}

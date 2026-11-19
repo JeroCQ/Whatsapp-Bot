@@ -56,6 +56,7 @@ class Settings:
     # publishable/anon key. Keep the old variable as a deployment-compatible
     # fallback.
     SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
+    SUPABASE_TABLE_PREFIX = os.getenv("SUPABASE_TABLE_PREFIX", "")
 
     WA_VERIFY_TOKEN = os.getenv("WA_VERIFY_TOKEN")
     WA_TOKEN = os.getenv("WA_TOKEN")
@@ -179,6 +180,11 @@ class Settings:
     
     @classmethod
     def validate(cls):
+        if cls.SUPABASE_TABLE_PREFIX not in {"", f"chatty_{cls.BUSINESS_ID}_"}:
+            raise ValueError("SUPABASE_TABLE_PREFIX must belong to this BUSINESS_ID")
+        if (cls.SUPABASE_TABLE_PREFIX and
+                (cls.SUPABASE_URL or "").rstrip("/") != "https://tbvcvqddpppqlwuehdaf.supabase.co"):
+            raise ValueError("The reviewed table prefixes belong to the central Supabase project")
         critical_vars = [
             "BUSINESS_ID",
             "SUPABASE_URL", "SUPABASE_KEY", 

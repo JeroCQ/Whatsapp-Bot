@@ -1,0 +1,60 @@
+"""Provision only the private CRM schema in Tanaka with the existing Alembic chain."""
+
+from pathlib import Path
+
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import create_engine, text
+from sqlalchemy.pool import NullPool
+
+from crm_service.central_copy_connection import CopyError, connect
+from crm_service.central_copy import CRM_REVISIONS, CRM_SCHEMA
+
+REVISION = "0006_scoped_pilot"
+
+
+def connection_for_migration():
+    connection = connect("CHATTY_CENTRAL_DATABASE_URL", central=True)
+    connection.autocommit = False
+    return connection
+
+
+def migrate():
+    engine = create_engine("postgresql+psycopg://", hide_parameters=True,
+                           creator=connection_for_migration, poolclass=NullPool)
+    try:
+        with engine.begin() as connection:
+            connection.execute(text("CREATE SCHEMA IF NOT EXISTS chatty_crm"))
+            connection.execute(text("REVOKE ALL ON SCHEMA chatty_crm FROM PUBLIC, anon, authenticated, service_role"))
+            connection.execute(text("SET LOCAL search_path = chatty_crm"))
+            versioned = connection.execute(text(
+                "SELECT to_regclass('chatty_crm.alembic_version') IS NOT NULL")).scalar_one()
+            if versioned:
+                revisions = connection.execute(text("SELECT version_num FROM chatty_crm.alembic_version")).scalars().all()
+                if len(revisions) != 1 or revisions[0] not in CRM_REVISIONS:
+                    raise CopyError("El esquema CRM central contiene una revisión no reconocida.")
+            elif connection.execute(text("""
+                SELECT EXISTS (SELECT 1 FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'chatty_crm')
+            """)).scalar_one():
+                raise CopyError("El esquema CRM central contiene objetos sin historial de migración.")
+            config = Config()
+            config.set_main_option("script_location", str(Path(__file__).resolve().parents[1] / "alembic"))
+            config.attributes.update({"central_connection": connection, "central_schema": CRM_SCHEMA})
+            command.upgrade(config, REVISION)
+            actual = connection.execute(text("SELECT version_num FROM chatty_crm.alembic_version")).scalar_one()
+            if actual != REVISION:
+                raise CopyError("Alembic no confirmó la revisión esperada.")
+    finally:
+        engine.dispose()
+
+
+if __name__ == "__main__":
+    try:
+        migrate()
+    except CopyError as error:
+        raise SystemExit(str(error)) from None
+    except Exception as error:
+        # SQLAlchemy connection exceptions may render private connection settings.
+        raise SystemExit(f"No se pudo preparar el esquema CRM central ({type(error).__name__}).") from None
+    print("Esquema privado del CRM preparado en Tanaka. Ningún proceso fue cambiado.")

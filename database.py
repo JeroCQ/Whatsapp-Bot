@@ -8,7 +8,37 @@ from human_support import human_handoffs_enabled, human_support_provider, uses_c
 
 from chatty_context import ScopedStorage
 
-supabase = ScopedStorage(create_client(config.SUPABASE_URL, config.SUPABASE_KEY))
+class BusinessStorage:
+    """Keep existing table/RPC contracts and IDs while sharing one project.
+
+    The prefix is server-configured, never a chat/browser parameter. Storage
+    object keys already carry the business and retain their original paths.
+    """
+    def __init__(self, client, prefix):
+        self.client, self.prefix = client, prefix
+
+    def table(self, name):
+        if self.prefix and name not in {
+            "customers", "conversation_states", "message_logs", "processed_webhook_events",
+            "dashboard_admins", "catalog_assets", "handoff_deliveries", "crm_control_commands",
+            "crm_send_attempts", "crm_media_assets",
+        }:
+            raise ValueError("Unknown central business table")
+        return self.client.table(self.prefix + name)
+
+    def rpc(self, name, params):
+        if self.prefix and name not in {"crm_control_dispatch", "crm_control_view"}:
+            raise ValueError("Unknown central business operation")
+        return self.client.rpc(self.prefix + name, params)
+
+    def __getattr__(self, name):
+        return getattr(self.client, name)
+
+
+client = create_client(config.SUPABASE_URL, config.SUPABASE_KEY)
+supabase = ScopedStorage(
+    BusinessStorage(client, config.SUPABASE_TABLE_PREFIX) if config.SUPABASE_TABLE_PREFIX else client
+)
 
 
 def get_catalog_assets(*, raise_on_error=False):
