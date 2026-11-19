@@ -51,6 +51,13 @@ def main() -> None:
     engine, sessions = database(settings)
     try:
         while not stop.is_set():
+            from crm_service.runtime_service import worker_pause_state, worker_acknowledge
+            pause = worker_pause_state()
+            if pause and pause.get("frozen"):
+                if pause.get("epoch"):
+                    worker_acknowledge(pause["epoch"])
+                stop.wait(settings.sync_interval)
+                continue
             with sessions.begin() as session:
                 state = session.get(PilotSwitch, BUSINESS)
                 publication = session.get(PilotPublication, state.publication_version) if state else None

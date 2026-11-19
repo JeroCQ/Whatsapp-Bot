@@ -5,8 +5,9 @@ The existing bots remain the only Meta senders and retain their Redis queues.
 deployment into authenticated startup registration. While the registry mode is
 `legacy`, startup does not replace its storage or commercial configuration.
 The central API enables its private router only with
-`CHATTY_RUNTIME_REGISTRY_ENABLED=true`; tokens derive from its private
-`CHATTY_RUNTIME_SECRET`. No credential belongs in a browser or this repository.
+`CHATTY_RUNTIME_REGISTRY_ENABLED=true`; connection-specific enrollment tokens are
+kept in the RLS-protected server registry. Existing master-derived tokens remain
+compatible. No credential belongs in a browser or this repository.
 
 The registry stores the existing configured server connections, not new user
 credentials. Public business/queue permissions continue to come from authenticated
@@ -28,3 +29,22 @@ The dedicated `chatty_runtime` database login does not change the `postgres`
 password. Its CRM schema has been provisioned by the existing Alembic chain.
 The source/target copy and final deployment health checks are operational
 requirements; no local application/test/build environment is required.
+
+The private owner factory is `crm_service.central_app:create_app`; it preserves
+the pilot until the registry actually publishes the central mode. Its sync
+counterpart is `python -m crm_service.central_worker`. Neither wrapper activates
+a migration merely by starting. API source-copy requests run read-only source
+transactions using that API's own configured database connection; the private
+target connection is delivered server-to-server by the registry. Login/JWT keys
+are never replaced. Source workers acknowledge drain before the barrier can be
+verified. The private migration-operation endpoint serializes actual copies,
+checks row/Storage integrity, and will not install without all five final
+snapshots and observed drain evidence. Its status output contains only counts.
+
+Managed Storage permissions and owners are not changed in the central project.
+The existing Storage API connection checks only the particular destination
+buckets needed by the file copy. Table ownership applies only to the explicitly
+listed new prefixed destinations and migration metadata; RLS remains enabled.
+The repeatable, narrowly scoped ownership step is
+`supabase/central/runtime_permissions.sql`. It must run before activation and
+does not change the owners or policies of the original Tanaka tables.

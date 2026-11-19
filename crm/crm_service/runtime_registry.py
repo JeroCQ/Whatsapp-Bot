@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import os
 import re
+from functools import lru_cache
 from urllib.parse import urlsplit
 
 import httpx
@@ -11,13 +12,19 @@ from pydantic import BaseModel, ConfigDict, Field
 
 TABLE = "chatty_runtime_businesses"
 BUSINESS = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+SERVICE_ROLES = {"commercial-api", "commercial-worker", "central-worker", "pilot-api", "pilot-worker"}
 
 
 class RegistryError(RuntimeError):
     pass
 
 
+@lru_cache(maxsize=64)
 def runtime_token(business, kind="business"):
+    rows = Registry().request("GET", "chatty_runtime_tokens", params={
+        "id": "eq." + kind + ":" + business, "limit": "1"})
+    if rows:
+        return rows[0]["token"]
     secret = os.environ.get("CHATTY_RUNTIME_SECRET", "")
     if len(secret) < 32:
         raise RegistryError("central_runtime_secret_missing")
@@ -86,7 +93,7 @@ class Registry:
                 "version": row["version"], "mode": row["mode"], "environment": env}
 
     def service(self, role):
-        if role not in {"commercial-api", "commercial-worker", "central-worker"}:
+        if role not in SERVICE_ROLES:
             raise RegistryError("central_service_unknown")
         rows = self.request("GET", "chatty_runtime_services", params={"role": "eq." + role})
         if len(rows) != 1:
@@ -101,19 +108,25 @@ class Registry:
     def service_response(self, row):
         env = {}
         if row["mode"] == "central":
-            source_role = "commercial-worker" if row["role"] == "central-worker" else row["role"]
+            source_role = ("commercial-worker" if row["role"] in {"central-worker", "pilot-worker"}
+                           else "commercial-api" if row["role"] == "pilot-api" else row["role"])
             source = self.service(source_role)["source_configuration"]
             database_url = os.environ.get("CHATTY_CENTRAL_DATABASE_URL", "")
             if not source or not database_url.startswith("postgresql+psycopg://"):
                 raise RegistryError("central_crm_destination_not_prepared")
             businesses = ",".join(item["business_id"] for item in self.all())
+            pilot = self.service("pilot-api")["source_configuration"]
+            media_enabled = any(item.get("CRM_MEDIA_ENABLED", "").lower() == "true" for item in (source, pilot))
             env = {**source, "CRM_DATABASE_URL": database_url,
+                   "CRM_DATABASE_SCHEMA": "chatty_crm",
                    "SUPABASE_URL": self.origin, "SUPABASE_SERVICE_ROLE_KEY": self.key,
                    "CHATTY_CENTRAL_ENABLED": "true", "CRM_BUSINESSES": businesses,
                    "CRM_SOURCE_MODE": "bot_api", "CRM_USAGE_COLLECTION_ENABLED": "true",
-                   "CRM_MEDIA_ALLOWED_BUSINESSES": source.get("CRM_MEDIA_ALLOWED_BUSINESSES", businesses)}
+                   "CRM_MEDIA_ENABLED": "true" if media_enabled else "false",
+                   "CRM_MEDIA_ALLOWED_BUSINESSES": businesses}
         return {"role": row["role"], "mode": row["mode"], "frozen": row["frozen"],
-                "epoch": row["epoch"], "environment": env}
+                "epoch": row["epoch"], "environment": env,
+                "migration_target_url": os.environ.get("CHATTY_CENTRAL_DATABASE_URL", "")}
 
 
 class Bootstrap(BaseModel):
@@ -126,6 +139,7 @@ class Bootstrap(BaseModel):
 class ServiceBootstrap(BaseModel):
     model_config = ConfigDict(extra="forbid")
     configuration: dict[str, str]
+    service_api_url: str = ""
 
 
 class ServiceState(BaseModel):
@@ -139,7 +153,7 @@ def create_runtime_router(settings, sessions):
     router = APIRouter()
 
     def service_auth(role, request):
-        if (role not in {"commercial-api", "commercial-worker", "central-worker"}
+        if (role not in SERVICE_ROLES
                 or request.headers.get("origin") or request.headers.get("sec-fetch-site")
                 or not hmac.compare_digest(request.headers.get("x-chatty-runtime-token", ""),
                                            runtime_token(role, "service"))):
@@ -154,7 +168,15 @@ def create_runtime_router(settings, sessions):
         registry = Registry()
         row = registry.service(role)
         if role != "central-worker" and row["mode"] == "legacy":
-            row = registry.service_update(role, {"source_configuration": body.configuration})
+            values = {"source_configuration": body.configuration}
+            if body.service_api_url:
+                parsed = urlsplit(body.service_api_url)
+                if (not role.endswith("-api") or parsed.scheme != "https" or not parsed.hostname
+                        or parsed.path or parsed.username or parsed.password or parsed.query or parsed.fragment
+                        or (row.get("api_url") and row["api_url"] != body.service_api_url)):
+                    raise HTTPException(409, "central_service_origin_mismatch")
+                values["api_url"] = body.service_api_url
+            row = registry.service_update(role, values)
         return registry.service_response(row)
 
     @router.get("/internal/runtime/services/{role}/state")

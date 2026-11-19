@@ -22,18 +22,27 @@ INSERT INTO public.chatty_runtime_businesses(business_id,bot_api_url,target_pref
 ON CONFLICT(business_id) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS public.chatty_runtime_services (
-  role text PRIMARY KEY CHECK (role IN ('commercial-api','commercial-worker','central-worker')),
+  role text PRIMARY KEY CHECK (role IN ('commercial-api','commercial-worker','central-worker','pilot-api','pilot-worker')),
   mode text NOT NULL DEFAULT 'legacy' CHECK (mode IN ('legacy','central')),
   source_configuration jsonb NOT NULL DEFAULT '{}'::jsonb,
   frozen boolean NOT NULL DEFAULT false,
   epoch text NOT NULL DEFAULT '',
-  paused_epoch text NOT NULL DEFAULT ''
+  paused_epoch text NOT NULL DEFAULT '',
+  api_url text NOT NULL DEFAULT ''
 );
 ALTER TABLE public.chatty_runtime_services ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.chatty_runtime_services FROM PUBLIC, anon, authenticated;
 GRANT SELECT, INSERT, UPDATE ON public.chatty_runtime_services TO service_role;
 INSERT INTO public.chatty_runtime_services(role) VALUES
- ('commercial-api'),('commercial-worker'),('central-worker') ON CONFLICT DO NOTHING;
+ ('commercial-api'),('commercial-worker'),('central-worker'),('pilot-api'),('pilot-worker') ON CONFLICT DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS public.chatty_runtime_tokens (
+  id text PRIMARY KEY,
+  token text NOT NULL CHECK (length(token) >= 32)
+);
+ALTER TABLE public.chatty_runtime_tokens ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.chatty_runtime_tokens FROM PUBLIC, anon, authenticated;
+GRANT SELECT ON public.chatty_runtime_tokens TO service_role;
 
 CREATE TABLE IF NOT EXISTS public.chatty_migration_runs (
   epoch text PRIMARY KEY,
@@ -44,3 +53,5 @@ CREATE TABLE IF NOT EXISTS public.chatty_migration_runs (
 ALTER TABLE public.chatty_migration_runs ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.chatty_migration_runs FROM PUBLIC, anon, authenticated;
 GRANT SELECT, INSERT, UPDATE ON public.chatty_migration_runs TO service_role;
+
+NOTIFY pgrst, 'reload schema';

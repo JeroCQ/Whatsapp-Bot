@@ -1,6 +1,7 @@
 """Migration bridge for existing CRM services, preserving their JWT and login."""
 import hmac
 import os
+import threading
 from urllib.parse import urlsplit
 
 import httpx
@@ -9,7 +10,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 STATE = {"frozen": False, "epoch": "", "inflight": 0, "mode": "legacy"}
-_TRANSFER = {"CRM_DATABASE_URL", "NOTIFICATIONS_ENABLED", "VAPID_PRIVATE_KEY", "VAPID_SUBJECT",
+_TRANSFER = {"CRM_DATABASE_URL", "CRM_DATABASE_SCHEMA", "NOTIFICATIONS_ENABLED", "VAPID_PRIVATE_KEY", "VAPID_SUBJECT",
              "CRM_MEDIA_ENABLED", "CRM_MEDIA_ALLOWED_BUSINESSES", "CRM_SOURCE_MODE",
              "CRM_USAGE_COLLECTION_ENABLED", "CRM_BOT_TEST_MODE", "CRM_BOT_TIMEOUT_SECONDS",
              "SYNC_INTERVAL_SECONDS", "SYNC_PAGE_SIZE", "SYNC_MAX_PAGES", "SYNC_MAX_SECONDS",
@@ -45,7 +46,23 @@ def bootstrap():
     if not configured():
         return
     snapshot = {key: value for key, value in os.environ.items() if key in _TRANSFER}
-    data = remote("POST", "/bootstrap", {"configuration": snapshot})
+    role = os.environ["CHATTY_RUNTIME_SERVICE_ROLE"]
+    api_url = "https://" + os.environ.get("RAILWAY_PUBLIC_DOMAIN", "") if role.endswith("-api") else ""
+    if role.startswith("pilot-"):
+        snapshot["CRM_DATABASE_URL"] = os.environ["CHATTY_PILOT_DATABASE_URL"]
+    if role == "pilot-api" and os.environ.get("CHATTY_RUNTIME_REGISTRY_ENABLED") == "true":
+        # The registry owner must not call its own HTTP server before it listens.
+        from crm_service.runtime_registry import Registry
+        registry = Registry()
+        row = registry.service(role)
+        if row["mode"] == "legacy":
+            row = registry.service_update(role, {"source_configuration": snapshot, "api_url": api_url})
+        data = registry.service_response(row)
+    else:
+        data = remote("POST", "/bootstrap", {"configuration": snapshot, "service_api_url": api_url})
+    target = data.get("migration_target_url", "")
+    if target:
+        os.environ["CHATTY_CENTRAL_DATABASE_URL"] = target
     if data.get("mode") not in {"legacy", "central"}:
         raise RuntimeError("central_crm_bootstrap_mode_invalid")
     overrides = data.get("environment", {})
@@ -69,12 +86,46 @@ def install(app):
 
     def authorize(request):
         secret = os.environ.get("CHATTY_RUNTIME_TOKEN", "")
-        if (request.headers.get("origin") or request.headers.get("sec-fetch-site")
+        if (len(secret) < 32 or request.headers.get("origin") or request.headers.get("sec-fetch-site")
                 or not hmac.compare_digest(request.headers.get("x-chatty-runtime-token", ""), secret)):
             raise HTTPException(401, "central_service_authentication_required")
 
     class Epoch(BaseModel):
         epoch: str = Field(pattern=r"^[A-Za-z0-9_-]{16,80}$")
+
+    copy_lock = threading.Lock()
+
+    class CopyRequest(Epoch):
+        final: bool = False
+
+    @router.post("/internal/runtime/service/copy")
+    def copy_source(body: CopyRequest, request: Request):
+        authorize(request)
+        role = os.environ["CHATTY_RUNTIME_SERVICE_ROLE"]
+        dataset = {"commercial-api": "commercial-crm", "pilot-api": "pilot-crm"}.get(role)
+        if not dataset or STATE["mode"] != "legacy":
+            raise HTTPException(409, "migration_source_not_available")
+        if body.final and (not STATE["frozen"] or STATE["epoch"] != body.epoch or STATE["inflight"]):
+            raise HTTPException(409, "migration_source_not_drained")
+        if not copy_lock.acquire(blocking=False):
+            raise HTTPException(409, "migration_copy_already_running")
+        try:
+            from crm_service.central_copy import prepare, prepare_staging
+            from crm_service.central_copy_connection import connect, parse_dsn
+            import psycopg
+            source_url = (os.environ["CHATTY_PILOT_DATABASE_URL"] if role == "pilot-api"
+                          else os.environ["CRM_DATABASE_URL"])
+            with psycopg.connect(parse_dsn(source_url), autocommit=True, connect_timeout=5) as source:
+                with connect("CHATTY_CENTRAL_DATABASE_URL", central=True) as target:
+                    if not body.final:
+                        prepare_staging(target)
+                    rows = prepare(source, target, body.epoch, dataset, final=body.final)
+            return {"dataset": dataset, "rows": rows, "final": body.final}
+        except Exception as error:
+            # No row, database URL, driver traceback or credential in HTTP output.
+            raise HTTPException(503, "migration_copy_failed_" + type(error).__name__) from None
+        finally:
+            copy_lock.release()
 
     @router.get("/internal/runtime/service/status")
     def status(request: Request):

@@ -62,6 +62,19 @@ def validate_bucket(db, bucket, expected_public):
         raise CopyError(f"Falta el bucket esperado o su visibilidad difiere: {bucket}")
 
 
+def validate_target_bucket(settings, bucket, expected_public):
+    # Use the existing Storage connection for this specific bucket. Do not
+    # grant the SQL migration login access to global managed Storage metadata.
+    origin, headers = settings
+    with httpx.Client(timeout=httpx.Timeout(30, connect=5), follow_redirects=False) as client:
+        response = client.get(origin + "/storage/v1/bucket/" + quote(bucket, safe=""), headers=headers)
+    if response.status_code != 200:
+        raise CopyError(f"Storage destino no confirmó el bucket: {bucket}")
+    value = response.json()
+    if value.get("id") != bucket or value.get("public") is not expected_public:
+        raise CopyError(f"La visibilidad del bucket destino difiere: {bucket}")
+
+
 def check_asset_references(source, dataset, media_bucket):
     pattern = dataset + "/%"
     invalid = source.execute("""
@@ -168,7 +181,7 @@ def transfer_storage(source, target, epoch, dataset):
     media = os.environ.get("CRM_MEDIA_BUCKET", "crm-private-media")
     for bucket, public in ((catalog, True), (media, False)):
         validate_bucket(source, bucket, public)
-        validate_bucket(target, bucket, public)
+        validate_target_bucket(dest, bucket, public)
     check_asset_references(source, dataset, media)
     seen, total = {}, 0
     try:

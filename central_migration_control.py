@@ -46,6 +46,7 @@ def create_router(config):
                 "table_prefix": config.SUPABASE_TABLE_PREFIX,
                 "storage_origin": config.SUPABASE_URL,
                 "frozen": bool(redis.get(FROZEN)), "workers_busy": len(busy),
+                "epoch": (redis.get(FROZEN) or b"").decode(),
                 "requests_active": redis.zcard(ACTIVE)}
 
     @router.get("/internal/runtime/migration/status")
