@@ -58,6 +58,16 @@ Una compra se considera al por mayor cuando:
 * El total es igual o superior a **$300.000 COP** en Cali, o
 * El cliente solicita explícitamente la lista de precios mayorista.
 
+* **Precios al por mayor:**
+  * **Cuajada:** $14.500 por 1.000 g.
+  * **Campesino Redondo:** $8.500 por 500 g.
+  * **Costeño:** $21.500 por 1.000 g.
+  * **Doble Crema:** $48.000 por bloque (2.500 g).
+  * **Tipo Mozzarella:** $52.000 por bloque (2.500 g).
+  * **Criollo:** $21.000 por 1.000 g.
+  * **Tajado bloque Doble Crema:** $51.000 por 2.500 g.
+  * **Tajado bloque Mozzarella:** $56.000 por 2.500 g.
+
 * **Criterio de escalamiento:** Pedir “5 libras”, “10 kilos”, “15 unidades” u otra cantidad no activa por sí solo el escalamiento. Primero cotiza con los precios al detal disponibles y calcula el total:
   * Si queda por debajo de $400.000, atiende y cotiza sin escalar.
   * Si llega a $300.000 o más, activa el handoff.
