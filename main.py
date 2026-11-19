@@ -2092,6 +2092,11 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
         expected = "sha256=" + hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
         if not secret or not hmac.compare_digest(request.headers.get("x-hub-signature-256", ""), expected):
             raise HTTPException(401, "Invalid Meta webhook signature")
+    from central_runtime_client import migration_frozen
+    if migration_frozen():
+        from central_migration_control import buffer_verified_webhook
+        buffer_verified_webhook(await request.body(), request.headers.get("x-hub-signature-256", ""))
+        return {"status": "queued", "reason": "central_migration"}
     data = await request.json()
     accepted = 0
     rejected = 0
@@ -2269,3 +2274,7 @@ app.include_router(create_control_router(config, lambda: get_control_store(),
     send_media=lambda phone, media_id, kind, caption, filename:
         send_whatsapp_media(phone, media_id, kind, caption, filename)))
 app.include_router(create_source_router(config, lambda: get_source_reader()))
+if os.environ.get("CHATTY_RUNTIME_URL"):
+    from central_migration_control import create_router as create_migration_router, install_request_tracking
+    app.include_router(create_migration_router(config))
+    install_request_tracking(app)

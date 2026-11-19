@@ -65,7 +65,8 @@ def create_app() -> FastAPI:
 
     def guard(request: Request) -> None:
         path = unquote(request.url.path)
-        if path in {"/health", "/ready"} or path.startswith("/v1/admin/") or path.startswith("/internal/pilot/"):
+        if (path in {"/health", "/ready"} or path.startswith("/v1/admin/")
+                or path.startswith("/internal/pilot/") or path.startswith("/internal/runtime/")):
             return  # Each Admin/internal route has its own existing JWT/server-secret validation.
         if path.startswith("/internal/"):
             raise HTTPException(403, "pilot_internal_job_submission_forbidden")

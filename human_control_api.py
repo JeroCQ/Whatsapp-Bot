@@ -85,6 +85,10 @@ def create_router(
             raise HTTPException(401, "Bot control authentication required")
         if business_id != config.BUSINESS_ID:
             raise HTTPException(403, "Business does not match this bot deployment")
+        if request.method not in {"GET", "HEAD"}:
+            from central_runtime_client import migration_frozen
+            if migration_frozen():
+                raise HTTPException(503, "central_migration_in_progress_query_existing_commands_only")
 
     @router.get("/internal/crm/v1/businesses/{business_id}/pilot-status")
     def pilot_status(business_id: str, request: Request) -> dict[str, Any]:

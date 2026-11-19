@@ -1,5 +1,14 @@
 # Repository architecture rules for Codex
 
+November 19 consolidation authorization supersedes the historical pilot-only and
+separate-Supabase restrictions below: Tanaka is the approved central project,
+with separate public table/RPC prefixes for the other businesses and a private
+chatty_crm schema. Preserve original IDs, rows, accounts, queues, control and Meta
+senders. Origins must remain intact. Runtime bootstrap is explicit opt-in and
+legacy behavior remains unchanged until a verified coordinated cutover. Do not
+run local tests, builds or application servers for this delivery; production
+migration integrity and deployment readiness checks are required.
+
 Turn 2 exception: only `crm_service.pilot_app` on an explicitly isolated pilot DB
 can publish immutable versions and switch Briosos + 573105338124. Draft state stays
 draft. Flags default off/standby. The existing verified Briosos consumer resolves

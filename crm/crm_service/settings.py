@@ -134,6 +134,8 @@ class Settings:
     def from_env(cls, service: str = "api", *, database_url: str | None = None) -> "Settings":
         if service not in {"api", "worker"}:
             raise ValueError("Unknown CRM service")
+        from crm_service.runtime_service import bootstrap
+        bootstrap()
         database = database_url if database_url is not None else os.environ["CRM_DATABASE_URL"]
         if not database.startswith("postgresql+psycopg://"):
             raise ValueError("CRM_DATABASE_URL must use postgresql+psycopg")
@@ -143,7 +145,13 @@ class Settings:
             raise ValueError("Use distinct CRM secrets of at least 32 characters")
         businesses = {}
         test_mode = flag("CRM_BOT_TEST_MODE")
-        for raw in os.environ.get("CRM_BUSINESSES", "tanaka,memos,velvet").split(","):
+        runtime = {}
+        if flag("CHATTY_CENTRAL_ENABLED"):
+            from crm_service.runtime_registry import Registry
+            runtime = {row["business_id"]: row for row in Registry().all()}
+            if not runtime or any(not row.get("source_configuration") for row in runtime.values()):
+                raise ValueError("Every central business must be registered before startup")
+        for raw in (runtime.keys() if runtime else os.environ.get("CRM_BUSINESSES", "tanaka,memos,velvet").split(",")):
             name = raw.strip()
             if not re.fullmatch(r"[a-z][a-z0-9_]{0,62}", name) or name in businesses:
                 raise ValueError("Invalid or duplicate business identifier")
@@ -161,6 +169,14 @@ class Settings:
             source_enabled = flag(f"{prefix}_BOT_API_ENABLED")
             control_secret = os.environ.get(f"{prefix}_BOT_CONTROL_SECRET", "") if service == "api" else ""
             source_secret = os.environ.get(f"{prefix}_BOT_SOURCE_SECRET", "") if service == "worker" else ""
+            if runtime:
+                source = runtime[name]["source_configuration"]
+                bot_url = runtime[name]["bot_api_url"]
+                operations = source.get("CRM_CONTROL_ENABLED", "").strip().lower() in {"true", "1", "yes", "on"}
+                source_enabled = source.get("CRM_SOURCE_READ_ENABLED", "").strip().lower() in {"true", "1", "yes", "on"}
+                control_secret = source.get("CRM_BOT_CONTROL_SECRET", "") if service == "api" else ""
+                source_secret = source.get("CRM_SOURCE_READ_SECRET", "") if service == "worker" else ""
+                url, readonly, cw, account = "", "", "", ""
             if (operations or source_enabled) and not bot_url:
                 raise ValueError("Enabled bot integration requires a configured bot origin")
             if operations and service == "api" and len(control_secret) < 32:

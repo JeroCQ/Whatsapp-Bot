@@ -34,6 +34,14 @@ class PilotCollector(UsageCollector):
                                   "channel_id": context.channel_id, "record": payload})
 
 
+class RuntimeCollector(UsageCollector):
+    def _submit(self, kind, payload):
+        context = current_context()
+        if context is not None:
+            super()._submit(kind, {"runtime_version": context.publication_version,
+                                  "channel_id": context.channel_id, "record": payload})
+
+
 class PilotContextError(RuntimeError):
     pass
 
@@ -44,7 +52,14 @@ def enabled():
 
 def storage_fingerprint(config):
     # Nonsecret identity, never credentials. The same adapter survives activation/reversal.
-    return hashlib.sha256(f"{config.BUSINESS_ID}:{str(config.SUPABASE_URL).rstrip('/')}".encode()).hexdigest()
+    identity = f"{config.BUSINESS_ID}:{str(config.SUPABASE_URL).rstrip('/')}"
+    schema = getattr(config, "SUPABASE_SCHEMA", "public")
+    if schema != "public":
+        identity += ":" + schema
+    prefix = getattr(config, "SUPABASE_TABLE_PREFIX", "")
+    if prefix:
+        identity += ":" + prefix
+    return hashlib.sha256(identity.encode()).hexdigest()
 
 
 def registry_origin():
@@ -56,12 +71,12 @@ def registry_origin():
     return value
 
 
-def registry_request(config, method, path, *, params=None, body=None):
+def registry_request(config, method, path, *, params=None, body=None, origin=None):
     secret = str(getattr(config, "CRM_BOT_CONTROL_SECRET", ""))
     if len(secret) < 32:
         raise PilotContextError("pilot_server_secret_unavailable")
     try:
-        with requests.request(method, registry_origin() + path, params=params, json=body,
+        with requests.request(method, (origin or registry_origin()) + path, params=params, json=body,
                               headers={"X-CRM-Bot-Secret": secret}, timeout=(2, 3),
                               allow_redirects=False, stream=True) as response:
             if response.status_code != 200:
@@ -109,6 +124,27 @@ class BusinessContext:
 
 
 def resolve_context(config, business_id, channel_id, phone, event_id, client):
+    from central_runtime_client import metadata
+    runtime = metadata()
+    if runtime.get("mode") == "central":
+        if (business_id != config.BUSINESS_ID or business_id != runtime.get("business_id")
+                or str(channel_id) != str(config.WA_PHONE_NUMBER_ID)
+                or str(channel_id) != str(runtime.get("channel_id")) or not event_id):
+            raise PilotContextError("central_verified_identity_required")
+        with _collectors_lock:
+            collector = _collectors.get("central:" + business_id)
+            if collector is None:
+                def emit(kind, envelope):
+                    registry_request(config, "POST", f"/internal/runtime/businesses/{business_id}/usage/{kind}",
+                                     body=envelope, origin=os.environ["CHATTY_RUNTIME_URL"].rstrip("/"))
+                collector = RuntimeCollector(emit, enabled=True)
+                _collectors["central:" + business_id] = collector
+        context = BusinessContext(business_id, phone, str(channel_id), int(runtime["version"]),
+            int(runtime["version"]), "shared", MappingProxyType({}), MappingProxyType({}), (),
+            LegacyStorageAdapter(business_id, storage_fingerprint(config), client),
+            hashlib.sha256(f"{business_id}:{phone}:{event_id}".encode()).hexdigest(), collector)
+        context.assert_engine(config, phone)
+        return context
     if not enabled() or business_id != BUSINESS or phone != PHONE:
         return None
     if business_id != config.BUSINESS_ID or str(channel_id) != str(config.WA_PHONE_NUMBER_ID) or not event_id:

@@ -2,8 +2,11 @@ import os
 import logging
 import math
 import sys
+from central_runtime_client import bootstrap_environment
 from chatwoot_security import normalize_chatwoot_root
 from human_support import human_support_provider
+
+bootstrap_environment()
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -57,6 +60,7 @@ class Settings:
     # fallback.
     SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
     SUPABASE_TABLE_PREFIX = os.getenv("SUPABASE_TABLE_PREFIX", "")
+    SUPABASE_SCHEMA = os.getenv("SUPABASE_SCHEMA", "public")
 
     WA_VERIFY_TOKEN = os.getenv("WA_VERIFY_TOKEN")
     WA_TOKEN = os.getenv("WA_TOKEN")
@@ -180,6 +184,8 @@ class Settings:
     
     @classmethod
     def validate(cls):
+        if cls.SUPABASE_SCHEMA != "public":
+            raise ValueError("This consolidation preserves the public schema and business table prefixes")
         if cls.SUPABASE_TABLE_PREFIX not in {"", f"chatty_{cls.BUSINESS_ID}_"}:
             raise ValueError("SUPABASE_TABLE_PREFIX must belong to this BUSINESS_ID")
         if (cls.SUPABASE_TABLE_PREFIX and

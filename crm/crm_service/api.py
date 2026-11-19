@@ -1155,4 +1155,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return job_response(row)
 
     app.include_router(create_admin_router(settings, actor, db))
+    # Explicit opt-in only: the legacy commercial API does not acquire a new
+    # dependency just because this code is present in the shared repository.
+    if __import__("os").environ.get("CHATTY_RUNTIME_REGISTRY_ENABLED") == "true":
+        from crm_service.runtime_registry import create_runtime_router
+        app.include_router(create_runtime_router(settings, sessions))
+    from crm_service.runtime_service import install
+    install(app)
     return app

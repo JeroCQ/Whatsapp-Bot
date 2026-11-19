@@ -40,6 +40,8 @@ def main() -> None:
     sync_runs: dict[str, Future[dict[str, str]]] = {}
     next_sync: dict[str, float] = {}
     queued_run: Future[str | None] | None = None
+    from crm_service.runtime_service import worker_pause_state, worker_acknowledge
+    pause_state, next_gate_check, acknowledged = None, 0.0, ""
     try:
         if args.once:
             result = worker.run(args.business)
@@ -49,6 +51,18 @@ def main() -> None:
             return
         while not stop.is_set():
             try:
+                if time.monotonic() >= next_gate_check:
+                    pause_state = worker_pause_state()
+                    next_gate_check = time.monotonic() + 3
+                if pause_state and pause_state.get("frozen"):
+                    pending = [*sync_runs.values(), queued_run, push_run]
+                    if all(job is None or job.done() for job in pending):
+                        epoch = pause_state.get("epoch", "")
+                        if epoch and epoch != acknowledged:
+                            worker_acknowledge(epoch)
+                            acknowledged = epoch
+                    stop.wait(1)
+                    continue
                 queued_business = None
                 if queued_run is not None and queued_run.done():
                     try:
