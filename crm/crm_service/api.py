@@ -96,10 +96,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         principal = authenticate(request, settings)
         # Never retain a profile lock/connection across a remote bot command.
         with sessions.begin() as session:
+            agent = session.get(Agent, principal.profile)
+            old = agent.preferences.get("_crm_operator", {}) if agent else {}
+            current = bool(
+                agent and agent.allowed_businesses == list(principal.businesses)
+                and old.get("role") == ("admin" if principal.is_admin else "operator")
+                and old.get("queue") == principal.attention_queue
+                and old.get("aliases") == list(principal.aliases) and old.get("since")
+            )
+            retired_profiles = tuple(profile for profile in principal.retired_profiles if profile != principal.profile)
+            if current and retired_profiles:
+                # Check retirement, rather than caching permissions or skipping
+                # revocation. Unchanged polling needs no profile write/lock.
+                current = not session.scalar(select(or_(
+                    select(Agent.profile).where(
+                        Agent.profile.in_(retired_profiles),
+                        func.coalesce(Agent.preferences["_crm_operator"]["role"].as_string(), "") != "retired",
+                    ).exists(),
+                    select(PushSubscription.id).where(
+                        PushSubscription.profile.in_(retired_profiles), PushSubscription.active.is_(True),
+                    ).exists(),
+                )))
+            if current:
+                return principal
             session.execute(
                 text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_id("actor:" + principal.profile)}
             )
-            agent = session.get(Agent, principal.profile)
+            agent = session.get(Agent, principal.profile, populate_existing=True)
             if agent is None:
                 agent = Agent(profile=principal.profile, allowed_businesses=list(principal.businesses), preferences={})
                 session.add(agent)
@@ -116,7 +139,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 previous = session.get(Agent, retired)
                 if previous:
                     previous.preferences = {**previous.preferences, "_crm_operator": {"role": "retired"}}
-                    session.execute(update(PushSubscription).where(PushSubscription.profile == retired).values(active=False))
+                    session.execute(update(PushSubscription).where(
+                        PushSubscription.profile == retired, PushSubscription.active.is_(True),
+                    ).values(active=False))
         return principal
 
     Auth = Annotated[Actor, Depends(actor)]
@@ -161,8 +186,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if not agent or business not in agent.allowed_businesses:
                 raise HTTPException(422, "Assignee has no registered access to this business")
 
+    def incoming_counts(
+        session: Session, principal: Actor, keys: list[tuple[str, str]]
+    ) -> dict[tuple[str, str], tuple[int, int]]:
+        if not keys:
+            return {}
+        rows = session.execute(select(
+            SourceMessage.business_id, SourceMessage.phone_number,
+            func.max(SourceMessage.source_id),
+            func.count(SourceMessage.source_id).filter(
+                SourceMessage.source_id > func.coalesce(ReadState.last_message_id, 0)),
+        ).outerjoin(ReadState, and_(
+            ReadState.business_id == SourceMessage.business_id,
+            ReadState.phone_number == SourceMessage.phone_number,
+            ReadState.profile == principal.profile,
+        )).where(
+            tuple_(SourceMessage.business_id, SourceMessage.phone_number).in_(keys),
+            SourceMessage.role == "user",
+        ).group_by(SourceMessage.business_id, SourceMessage.phone_number))
+        return {(business, phone): (int(latest), int(unread))
+                for business, phone, latest, unread in rows}
+
     def display(
-        session: Session, principal: Actor, source: SourceConversation, crm: CRMConversation
+        session: Session, principal: Actor, source: SourceConversation, crm: CRMConversation,
+        counts: tuple[int, int] | None = None,
     ) -> dict[str, Any]:
         classification = dict(crm.classification)
         if classification.get("bucket") == "human_active":
@@ -179,14 +226,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         classification.pop("sort_key", None)
         classification.pop("classification_version", None)
         classification.pop("inbox_release", None)
-        read = session.get(ReadState, (source.business_id, source.phone_number, principal.profile))
-        latest_incoming, unread = session.execute(select(
-            func.coalesce(func.max(SourceMessage.source_id), 0),
-            func.count(SourceMessage.source_id).filter(SourceMessage.source_id > (read.last_message_id if read else 0)),
-        ).where(
-            SourceMessage.business_id == source.business_id,
-            SourceMessage.phone_number == source.phone_number, SourceMessage.role == "user",
-        )).one()
+        key = (source.business_id, source.phone_number)
+        latest_incoming, unread = counts if counts is not None else incoming_counts(
+            session, principal, [key]).get(key, (0, 0))
         return {
             "business_id": source.business_id,
             "phone_number": source.phone_number,
@@ -687,8 +729,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 activity.desc(), CRMConversation.business_id, CRMConversation.phone_number,
             ).limit(limit + 1)
         ).all()
+        # Count visible page watermarks together, not two remote SQL round trips
+        # per contact. Keys already passed business/queue authorization above.
+        counts = incoming_counts(session, principal, [
+            (source.business_id, source.phone_number) for source, _, _ in rows[:limit]
+        ])
         items = [
-            {**display(session, principal, source, crm),
+            {**display(session, principal, source, crm,
+                       counts.get((source.business_id, source.phone_number), (0, 0))),
              "last_activity_at": timestamp(activity_at).isoformat() if activity_at != timestamp(None) else None}
             for source, crm, activity_at in rows[:limit]
         ]

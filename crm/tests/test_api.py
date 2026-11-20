@@ -137,6 +137,52 @@ def test_read_is_per_actor(client, settings):
     assert client.get("/v1/inbox").json()["items"][0]["read"] is False
 
 
+def test_bulk_inbox_counts_are_scoped_and_use_one_aggregate(client, settings):
+    from sqlalchemy import event
+
+    client.post("/v1/conversations/tanaka/573001/read", json={})
+    client.headers["Authorization"] = "Bearer " + token(
+        settings, allowed_businesses=["tanaka", "memos", "velvet"])
+    statements = []
+
+    def capture(_conn, _cursor, statement, _parameters, _context, _many):
+        if "LEFT OUTER JOIN crm_read_states" in statement:
+            statements.append(statement)
+
+    engine = client.app.state.engine
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        response = client.get("/v1/inbox?bucket=all")
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+    assert response.status_code == 200
+    assert len(statements) == 1
+    items = {row["business_id"]: row for row in response.json()["items"]}
+    assert items["tanaka"]["unread_incoming_count"] == 0
+    assert items["memos"]["unread_incoming_count"] == 1
+    assert items["velvet"]["unread_incoming_count"] == 1
+    client.headers["Authorization"] = "Bearer " + token(settings, profile="other-agent")
+    assert client.get("/v1/inbox?bucket=all").json()["items"][0]["unread_incoming_count"] == 1
+
+
+def test_unchanged_actor_polling_does_not_take_profile_lock(client):
+    from sqlalchemy import event
+
+    assert client.get("/v1/inbox").status_code == 200
+    statements = []
+
+    def capture(_conn, _cursor, statement, _parameters, _context, _many):
+        statements.append(statement)
+
+    engine = client.app.state.engine
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        assert client.get("/v1/inbox").status_code == 200
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+    assert not any("pg_advisory_xact_lock" in statement for statement in statements)
+
+
 def test_crm_update_and_optimistic_conflict(client, sessions):
     url = "/v1/conversations/tanaka/573001/crm"
     response = client.patch(url, json={"version": 1, "stage": "qualified", "tags": ["vip"]})

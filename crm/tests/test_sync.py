@@ -91,6 +91,19 @@ def test_independent_business_cursors_and_same_phone(seeded, sessions):
         assert {r.phone_number for r in rows} == {"573001"}
 
 
+def test_page_prefetch_preserves_business_identity_and_updates(seeded, sessions):
+    datasets, worker = seeded
+    with sessions.begin() as session:
+        rows = datasets["tanaka"]["message_logs"]
+        prefetched = worker.prefetch_page(session, "tanaka", rows)
+        assert prefetched and all(row.business_id == "tanaka" for row in prefetched)
+        original = session.get(SourceMessage, ("tanaka", 1))
+        worker.upsert_message(session, "tanaka", {**rows[0], "content": "actualizada"})
+        assert session.get(SourceMessage, ("tanaka", 1)) is original
+        assert original.content == "actualizada"
+        assert session.get(SourceMessage, ("memos", 2)).content == "Hola"
+
+
 def test_failed_business_does_not_block_others(settings, sessions):
     worker = Synchronizer(settings, sessions, lambda biz: FakeSource(data(), failure=biz.id == "memos"))
     assert worker.run() == {"tanaka": "ok", "memos": "failed", "velvet": "ok"}

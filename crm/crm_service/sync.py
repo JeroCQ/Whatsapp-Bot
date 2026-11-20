@@ -389,6 +389,7 @@ class Synchronizer:
             if not rows:
                 cursor.value, cursor.updated_at = {"id": after}, now()
                 return
+            prefetched = self.prefetch_page(session, business.id, rows)
             for item in rows:
                 budget.check()
                 if int(item["id"]) <= after:
@@ -396,7 +397,27 @@ class Synchronizer:
                 self.upsert_message(session, business.id, item)
                 after = int(item["id"])
                 cursor.value, cursor.updated_at = {"id": after}, now()
+            del prefetched
             cursor.value, cursor.updated_at = {"id": after}, now()
+
+    def prefetch_page(
+        self, session: Session, business: str, rows: list[dict[str, Any]]
+    ) -> list[Any]:
+        if not rows:
+            return []
+        # Keep strong references for SQLAlchemy's identity map until the page
+        # finishes. Existing upsert/receipt validation is unchanged; historical
+        # rows no longer need two individual SELECTs each over the network.
+        return [
+            *session.scalars(select(SourceMessage).where(
+                SourceMessage.business_id == business,
+                SourceMessage.source_id.in_([int(item["id"]) for item in rows]),
+            )),
+            *session.scalars(select(SourceConversation).where(
+                SourceConversation.business_id == business,
+                SourceConversation.phone_number.in_([item["phone_number"] for item in rows]),
+            )),
+        ]
 
     def reconcile_messages(
         self, session: Session, business: Business, adapter: Reader, budget: ReadBudget
@@ -407,6 +428,7 @@ class Synchronizer:
             return
         after = int(cursor.value.get("id", 0))
         rows = self.page(adapter, "message_logs", after, budget)
+        prefetched = self.prefetch_page(session, business.id, rows)
         previous = after
         for item in rows:
             budget.check()
@@ -416,6 +438,7 @@ class Synchronizer:
             self.upsert_message(session, business.id, item)
             previous = current
             cursor.value, cursor.updated_at = {"id": previous}, now()
+        del prefetched
         cursor.value = {
             "id": previous if rows else 0,
             "next_at": (now() + timedelta(seconds=self.settings.reconcile_interval)).isoformat(),
