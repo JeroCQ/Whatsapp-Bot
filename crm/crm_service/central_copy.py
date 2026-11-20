@@ -147,10 +147,12 @@ def stream_rows(db, relation, fields, key, sink=None):
 def assert_business_scope(source, dataset, table, fields):
     if "business_id" not in fields:
         return
+    if dataset in CRM_DATASETS and table == "audit_events":
+        # Global and historical audit scopes are not operational tenants.
+        # Preserve them verbatim; never discard or normalize original audit.
+        return
     permitted = [dataset] if dataset in BOT_DATASETS else (
         ["tanaka", "velvet", "memos", "briosos"] if dataset == "commercial-crm" else ["briosos"])
-    if table == "audit_events":
-        permitted.append("")
     unexpected = source.execute(sql.SQL(
         "SELECT EXISTS (SELECT 1 FROM {} WHERE business_id IS NOT NULL AND NOT (business_id = ANY(%s)))"
     ).format(ident("public", table)), (permitted,)).fetchone()[0]
@@ -352,7 +354,7 @@ def install_table(target, epoch, dataset, table, snapshot, *, fresh_businesses=(
         target.execute(sql.SQL("""
             INSERT INTO {} AS d ({}) SELECT {} FROM {} s WHERE TRUE
             ON CONFLICT (profile) DO UPDATE SET allowed_businesses=(
-                SELECT jsonb_agg(v ORDER BY v)::json FROM (
+                SELECT COALESCE(jsonb_agg(v ORDER BY v),'[]'::jsonb)::json FROM (
                     SELECT DISTINCT value v FROM jsonb_array_elements_text(
                         d.allowed_businesses::jsonb || excluded.allowed_businesses::jsonb)
                 ) membership)

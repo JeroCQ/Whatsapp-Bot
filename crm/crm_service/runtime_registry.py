@@ -4,6 +4,7 @@ import hmac
 import os
 import re
 from functools import lru_cache
+from typing import Literal
 from urllib.parse import urlsplit
 
 import httpx
@@ -149,6 +150,7 @@ class ServiceState(BaseModel):
     frozen: bool | None = None
     epoch: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{16,80}$")
     paused_epoch: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{16,80}$")
+    reported_mode: Literal["legacy", "central"] | None = None
 
 
 def create_runtime_router(settings, sessions):
@@ -197,6 +199,8 @@ def create_runtime_router(settings, sessions):
             raise HTTPException(409, "central_service_epoch_conflict")
         if "paused_epoch" in values and (not row["frozen"] or row["epoch"] != requested):
             raise HTTPException(409, "central_service_is_not_frozen")
+        if "reported_mode" in values and ("paused_epoch" not in values or values["reported_mode"] != row["mode"]):
+            raise HTTPException(409, "central_service_runtime_mode_mismatch")
         if values.get("frozen") is False:
             values.update({"epoch": "", "paused_epoch": ""})
         row = registry.service_update(role, values)
@@ -220,7 +224,7 @@ def create_runtime_router(settings, sessions):
                 raise HTTPException(409, "central_runtime_registration_scope_mismatch")
             if row.get("channel_id") and row["channel_id"] != env["WA_PHONE_NUMBER_ID"]:
                 raise HTTPException(409, "central_runtime_channel_change_forbidden")
-            if row["mode"] == "legacy" and row["source_configuration"] != env:
+            if row["mode"] == "legacy" and (row["source_configuration"] != env or row.get("source_commit") != body.commit):
                 try:
                     row = registry.update(row, {"source_configuration": env,
                                                "channel_id": env["WA_PHONE_NUMBER_ID"],

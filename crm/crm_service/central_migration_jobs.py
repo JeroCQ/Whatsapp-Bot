@@ -24,7 +24,7 @@ WORKER_ROLES = ("commercial-worker", "pilot-worker")
 
 class Operation(BaseModel):
     epoch: str = Field(pattern=r"^[A-Za-z0-9_-]{16,80}$")
-    action: Literal["prepare", "freeze", "verify-barrier", "final-copy", "install", "abort", "status"]
+    action: Literal["prepare", "freeze", "verify-barrier", "final-copy", "install", "activate", "verify-central", "resume-central", "abort", "status"]
     dataset: Literal["briosos", "memos", "velvet", "commercial-crm", "pilot-crm"] | None = None
 
 
@@ -98,6 +98,44 @@ def inspect_barrier(registry, epoch):
     return evidence
 
 
+def inspect_central(registry, epoch, *, resuming=False):
+    """Observe restarted processes, not merely the desired registry mode."""
+    evidence = {"bots": {}, "apis": {}, "worker": {}}
+    for row in registry.all():
+        status = source_call(row, "status", epoch)
+        if (row["mode"] != "central" or status.get("mode") != "central"
+                or status.get("business_id") != row["business_id"]
+                or status.get("channel_id") != row["channel_id"]
+                or status.get("table_prefix") != row["target_prefix"]
+                or status.get("storage_origin", "").rstrip("/") != registry.origin
+                or not status.get("workers")
+                or any(worker.get("mode") != "central"
+                       or worker.get("business_id") != row["business_id"]
+                       or worker.get("channel_id") != row["channel_id"]
+                       or worker.get("table_prefix") != row["target_prefix"]
+                       or worker.get("storage_origin", "").rstrip("/") != registry.origin
+                       for worker in status.get("workers", []))
+                or (not resuming and (not status.get("frozen") or status.get("workers_busy") != 0))
+                or (status.get("frozen") and status.get("epoch") != epoch)):
+            raise CopyError("Falta confirmar un bot reiniciado en su destino central.")
+        evidence["bots"][row["business_id"]] = status
+    for role in API_ROLES:
+        row = registry.service(role)
+        status = call(row["api_url"], runtime_token(role, "service"), "/internal/runtime/service/status")
+        if (status.get("mode") != "central" or status.get("database_schema") != "chatty_crm"
+                or (not resuming and not status.get("frozen"))
+                or (status.get("frozen") and status.get("epoch") != epoch)):
+            raise CopyError("Falta confirmar una API reiniciada con el CRM central.")
+        evidence["apis"][role] = status
+    worker, old = registry.service("pilot-worker"), registry.service("commercial-worker")
+    if (worker["mode"] != "central" or worker.get("reported_mode") != "central"
+            or worker["paused_epoch"] != epoch or not worker["frozen"]
+            or old["mode"] != "legacy" or not old["frozen"] or old["paused_epoch"] != epoch):
+        raise CopyError("El sincronizador central debe confirmar su arranque; el antiguo sigue en espera.")
+    evidence["worker"] = {"role": "pilot-worker", "mode": worker["reported_mode"], "epoch": epoch}
+    return evidence
+
+
 def execute(body):
     registry = Registry()
     if body.action == "status":
@@ -164,6 +202,35 @@ def execute(body):
         with connect("CHATTY_CENTRAL_DATABASE_URL", central=True) as target:
             install(target, body.epoch)
         return {"rows_installed": True, "writers_enabled": False}
+    if body.action == "activate":
+        inspect_barrier(registry, body.epoch)
+        # The server already has these registry permissions. Do not extend the
+        # SQL data-copy login's authority over routing/configuration tables.
+        return registry.request("POST", "rpc/chatty_activate_runtime", body={"p_epoch": body.epoch})
+    if body.action in {"verify-central", "resume-central"}:
+        evidence = inspect_central(registry, body.epoch, resuming=body.action == "resume-central")
+        with connect("CHATTY_CENTRAL_DATABASE_URL", central=True) as target:
+            state, progress = run_row(target, body.epoch)
+            if state != "frozen" or not progress.get("central_authority_published"):
+                raise CopyError("No hay una publicación central pendiente en este corte.")
+            progress["central_runtime_evidence"] = evidence
+            save_progress(target, body.epoch, progress)
+        if body.action == "verify-central":
+            return {"central_verified": True, "queues_released": False}
+        # Only verified central processes are resumed. The old sync stays
+        # paused, avoiding two notification/source consumers after migration.
+        for row in registry.all():
+            status = source_call(row, "status", body.epoch)
+            if status.get("frozen"):
+                source_call(row, "resume", body.epoch)
+        for role in API_ROLES:
+            row = registry.service(role)
+            if row["frozen"]:
+                call(row["api_url"], runtime_token(role, "service"), "/internal/runtime/service/resume", {"epoch": body.epoch})
+        registry.service_update("pilot-worker", {"frozen": False, "epoch": "", "paused_epoch": ""})
+        with connect("CHATTY_CENTRAL_DATABASE_URL", central=True) as target:
+            target.execute("UPDATE public.chatty_migration_runs SET state='committed' WHERE epoch=%s AND state='frozen'", (body.epoch,))
+        return {"state": "committed", "central_verified": True, "queues_released": True, "origins_retained": True}
     if body.action == "abort":
         if any(row["mode"] != "legacy" for row in registry.all()):
             raise CopyError("Ya existe autoridad central; no se puede volver al origen antiguo.")

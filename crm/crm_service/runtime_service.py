@@ -136,7 +136,8 @@ def install(app):
     @router.get("/internal/runtime/service/status")
     def status(request: Request):
         authorize(request)
-        return {**STATE, "role": os.environ["CHATTY_RUNTIME_SERVICE_ROLE"]}
+        return {**STATE, "role": os.environ["CHATTY_RUNTIME_SERVICE_ROLE"],
+                "database_schema": os.environ.get("CRM_DATABASE_SCHEMA", "public")}
 
     @router.post("/internal/runtime/service/freeze")
     def freeze(body: Epoch, request: Request):
@@ -178,4 +179,4 @@ def worker_pause_state():
 
 
 def worker_acknowledge(epoch):
-    remote("POST", "/state", {"paused_epoch": epoch})
+    remote("POST", "/state", {"paused_epoch": epoch, "reported_mode": STATE["mode"]})

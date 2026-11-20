@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS public.chatty_runtime_services (
   frozen boolean NOT NULL DEFAULT false,
   epoch text NOT NULL DEFAULT '',
   paused_epoch text NOT NULL DEFAULT '',
-  api_url text NOT NULL DEFAULT ''
+  api_url text NOT NULL DEFAULT '',
+  reported_mode text NOT NULL DEFAULT '' CHECK (reported_mode IN ('','legacy','central'))
 );
 ALTER TABLE public.chatty_runtime_services ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.chatty_runtime_services FROM PUBLIC, anon, authenticated;

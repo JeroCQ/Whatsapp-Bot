@@ -33,6 +33,23 @@ Memo's and Velvet copy logins are read-only, have no RLS bypass and use explicit
 SELECT policies on only the ten bot tables and their own catalog/media keys.
 No existing password is reset. No managed central Storage owner is changed.
 
+Global/historical CRM audit scopes are copied verbatim, not treated as unknown
+operational tenants. They never grant a user access to another business.
+
+The bounded operation sequence is `prepare` for each dataset, `freeze`,
+`verify-barrier`, `final-copy` for each dataset, `install`, `activate`, restart
+the four existing bot services plus both APIs and the central pilot sync,
+`verify-central`, then `resume-central`. The old commercial sync remains paused.
+Do not freeze before deployments have succeeded and restart access is available.
+Each bot reports both web and RQ parent bindings. All must use their own existing
+channel/queue with the expected central prefix before any queue is released.
+Management writes receive 503 during the copy; signed Meta callbacks are buffered.
+
+`supabase/central/activate_runtime.sql` publishes modes atomically using the
+server's existing `service_role` table permissions and a SECURITY INVOKER
+function. It grants no registry-table access to the SQL copy login, changes no
+existing owner and preserves RLS. Only the server can execute that function.
+
 After a successful cutover, every bot must report its expected business, Meta
 channel, central storage origin and table prefix before its existing queue is
 released. Use the normal CRM factory/worker for all businesses, not the
