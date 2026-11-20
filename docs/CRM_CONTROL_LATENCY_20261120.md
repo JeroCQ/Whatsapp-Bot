@@ -31,3 +31,23 @@ older uncertain command; use only its existing command-status lookup.
 
 No local tests, builds, application execution or real-message probes were run.
 Service readiness is not proof of end-to-end WhatsApp delivery.
+
+## Follow-up: status lookup racing dispatch
+
+An automatic status GET could see the durable `checking` command before the
+original request claimed forwarding. Missing bot receipt recovery then replaced
+`checking` with `unknown`; the original request returned without dispatching.
+Control ownership was valid, but no message reached the bot.
+
+Recovery observations no longer overwrite checking/forwarding or downgrade a
+terminal receipt. Only a still-checking original request may claim forwarding.
+Both frontends defer status polling while posting and allow one in-flight GET
+per command. Repeated identical results no longer append duplicate audit rows.
+
+An old unknown message can become `not_forwarded` only with its durable requested
+audit and no committed forwarding audit, checked under its command row lock. The
+forwarding audit is committed before any bot POST. A missing bot receipt alone
+remains insufficient. This closes the old command without replay, allowing a new
+explicit send. No delivery is fabricated; genuinely dispatched unknown sends stay
+unknown. No schema/variables/bot restart is needed for this follow-up: update the
+two CRM APIs and publish the frontends through their existing Lovable flow.

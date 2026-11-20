@@ -45,10 +45,45 @@ class CommandCoordinator:
             )
         )
 
-    def _save(self, command_id: str, result: dict[str, Any], http_status: int) -> tuple[dict[str, Any], int]:
+    def _save(
+        self, command_id: str, result: dict[str, Any], http_status: int, *, recovery: bool = False
+    ) -> tuple[dict[str, Any], int]:
         with self.sessions.begin() as session:
             row = self._row(session, command_id)
             assert row is not None
+            if recovery and result["status"] in {"pending", "unknown"}:
+                if row.status in {"checking", "forwarding"}:
+                    # Polling can arrive before the original POST finishes its
+                    # preflight. A missing bot receipt must not replace checking
+                    # with unknown and cancel that original dispatch.
+                    return {**result, "status": "pending", "error": "command_in_progress_no_resend"}, 202
+                if row.status not in {"pending", "unknown"} and row.response:
+                    # A stale GET must not downgrade an accepted/rejected result
+                    # committed while that GET was waiting on the bot.
+                    return row.response, row.http_status
+                if (row.operation == "messages" and row.status == "unknown"
+                        and result.get("error") == "command_result_missing_no_resend"
+                        and not result.get("provider_message_id")):
+                    actions = set(session.scalars(select(AuditEvent.action).where(
+                        AuditEvent.business_id == row.business_id,
+                        AuditEvent.phone_number == row.phone_number,
+                        AuditEvent.action.in_(["bot.command_requested", "bot.command_forwarded"]),
+                        AuditEvent.details["command_id"].as_string() == row.command_id,
+                    )))
+                    # The forward audit and forwarding state are committed
+                    # together BEFORE any bot POST. This is dispatch evidence,
+                    # unlike a 404 receipt alone. Fence the old command closed;
+                    # never retry it or label it delivered.
+                    if actions == {"bot.command_requested"}:
+                        result = {**result, "status": "not_forwarded", "error": "command_not_dispatched"}
+                        http_status = 200
+            if recovery and (
+                (row.status == "read" and result["status"] in {"accepted", "delivered"})
+                or (row.status == "delivered" and result["status"] == "accepted")
+            ):
+                return row.response, row.http_status
+            if row.response == result and row.http_status == http_status:
+                return result, http_status
             # A provider result must not wait behind an entire business sync,
             # which includes remote source reads. The command row serializes
             # receipts; only control operations also touch this conversation's
@@ -204,7 +239,7 @@ class CommandCoordinator:
                     result.pop("error", None)
             exists = row is not None
         code = 202 if result["status"] in {"pending", "unknown"} else 200
-        return self._save(command_id, result, code) if exists else (result, code)
+        return self._save(command_id, result, code, recovery=True) if exists else (result, code)
 
     def status(self, principal: Actor, phone: str, command_id: str) -> tuple[dict[str, Any], int]:
         principal.authorize(self.gateway.business.id)
@@ -344,8 +379,10 @@ class CommandCoordinator:
         with self.sessions.begin() as session:
             row = self._row(session, command_id)
             assert row is not None
-            if row.status not in {"checking", "not_forwarded"} and row.response:
-                return row.response, row.http_status
+            if row.status != "checking":
+                # Only the original, still-checking dispatcher can claim this
+                # POST. In particular, never revive a fenced not_forwarded row.
+                return row.response or {"command_id": command_id, "status": "unknown", "control": control}, row.http_status
             row.status, row.updated_at = "forwarding", now()
             self._audit(session, row, "bot.command_forwarded", "forwarding")
         try:
