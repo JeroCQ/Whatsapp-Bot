@@ -95,7 +95,8 @@ def reviewed_tables(source, dataset):
         return BOT_TABLES
     revision = source.execute("SELECT version_num FROM public.alembic_version").fetchall()
     if len(revision) != 1 or revision[0][0] not in CRM_REVISIONS:
-        raise CopyError(f"Revisión CRM no admitida: {dataset}")
+        labels = ",".join(str(item[0])[:64] for item in revision[:3])
+        raise CopyError(f"Revisión CRM no admitida: {dataset}/{labels}")
     available = {r[0] for r in source.execute("""
         SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename <> 'alembic_version'
     """)}
@@ -105,7 +106,7 @@ def reviewed_tables(source, dataset):
     if revision[0][0] == "0004_delivery_receipts":
         expected -= CRM_CONFIG_TABLES
     if available != expected:
-        raise CopyError(f"Faltan tablas CRM o hay tablas fuera del contrato: {dataset}")
+        raise CopyError(f"Tablas CRM incompatibles: {dataset}; faltan={','.join(sorted(expected-available))}; extras={','.join(sorted(available-expected))}")
     return [table for table in CRM_TABLES if table in available]
 
 
@@ -298,20 +299,79 @@ def prepare(source, target, epoch, dataset, *, final):
     return sum(item["rows"] for item in copied.values())
 
 
-def install_table(target, epoch, dataset, table, snapshot):
+def prepare_fresh(target, epoch, dataset, *, final):
+    """An explicitly authorized empty tenant, not a claimed source-data copy."""
+    with target.transaction():
+        begin(target)
+        state, progress = run_row(target, epoch, lock=True)
+        if state != ("frozen" if final else "preparing") or progress.get("rows_installed"):
+            raise CopyError("El reinicio no coincide con la fase de migración.")
+        if final and not progress.get("barrier_verified"):
+            raise CopyError("El reinicio requiere el mismo drenado verificado.")
+        tables = {}
+        for table in BOT_TABLES:
+            schema, name = qualified(dataset, table)
+            fields = list(columns(target, schema, name))
+            key = primary_key(target, schema, name)
+            if not fields or not key:
+                raise CopyError("Falta el esquema nuevo del negocio autorizado.")
+            relation, stage = ident(schema, name), staging_name(epoch, dataset, table)
+            if target.execute(sql.SQL("SELECT EXISTS (SELECT 1 FROM {})").format(relation)).fetchone()[0]:
+                raise CopyError("El destino nuevo ya contiene datos; no se reiniciará otra vez.")
+            target.execute(sql.SQL("DROP TABLE IF EXISTS {}").format(stage))
+            target.execute(sql.SQL("CREATE TABLE {} AS SELECT * FROM {} WITH NO DATA").format(stage, relation))
+            tables[table] = {"columns": fields, "key": key, "rows": 0,
+                             "sha256": stream_rows(target, stage, fields, key)}
+        progress.setdefault("datasets", {})[dataset] = {
+            "tables": tables, "sequences": {}, "strategy": "fresh",
+            "final": final, "captured_at": datetime.now(timezone.utc).isoformat(),
+            "storage": {"objects": 0, "bytes": 0, "strategy": "fresh"},
+        }
+        save_progress(target, epoch, progress)
+    return 0
+
+
+def install_table(target, epoch, dataset, table, snapshot, *, fresh_businesses=()):
     stage = staging_name(epoch, dataset, table)
     destination = ident(*qualified(dataset, table))
     fields, key = snapshot["columns"], snapshot["key"]
     if stream_rows(target, stage, fields, key) != snapshot["sha256"]:
         raise CopyError(f"La copia preparada cambió: {dataset}/{table}")
+    selected = sql.SQL("(SELECT * FROM {} original WHERE TRUE").format(stage)
+    if dataset in CRM_DATASETS and fresh_businesses:
+        if "business_id" in fields and table not in CRM_CONFIG_TABLES | CRM_PILOT_TABLES:
+            selected += sql.SQL(" AND (original.business_id IS NULL OR NOT (original.business_id = ANY({})))").format(sql.Literal(list(fresh_businesses)))
+        elif table == "push_deliveries":
+            selected += sql.SQL(""" AND EXISTS (SELECT 1 FROM chatty_crm.notification_events e
+                WHERE e.id=original.event_id) AND EXISTS (SELECT 1 FROM chatty_crm.push_subscriptions p
+                WHERE p.id=original.subscription_id)""")
+    selected += sql.SQL(")")
+    if dataset in CRM_DATASETS and table == "crm_agents":
+        # Keep the commercial operator's preferences/queue identity. Union
+        # memberships only; both untouched snapshots remain in private staging.
+        target.execute(sql.SQL("""
+            INSERT INTO {} AS d ({}) SELECT {} FROM {} s WHERE TRUE
+            ON CONFLICT (profile) DO UPDATE SET allowed_businesses=(
+                SELECT jsonb_agg(v ORDER BY v)::json FROM (
+                    SELECT DISTINCT value v FROM jsonb_array_elements_text(
+                        d.allowed_businesses::jsonb || excluded.allowed_businesses::jsonb)
+                ) membership)
+        """).format(destination, names(fields), names(fields), selected))
+        missing = target.execute(sql.SQL("""
+            SELECT EXISTS (SELECT 1 FROM {} s LEFT JOIN {} d USING (profile)
+                WHERE d.profile IS NULL OR NOT (d.allowed_businesses::jsonb @> s.allowed_businesses::jsonb))
+        """).format(selected, destination)).fetchone()[0]
+        if missing:
+            raise CopyError("No se conservaron todas las cuentas del CRM.")
+        return
     target.execute(sql.SQL(
-        "INSERT INTO {} ({}) OVERRIDING SYSTEM VALUE SELECT {} FROM {} ON CONFLICT ({}) DO NOTHING"
-    ).format(destination, names(fields), names(fields), stage, names(key)))
+        "INSERT INTO {} ({}) OVERRIDING SYSTEM VALUE SELECT {} FROM {} WHERE TRUE ON CONFLICT ({}) DO NOTHING"
+    ).format(destination, names(fields), names(fields), selected + sql.SQL(" s"), names(key)))
     extra = columns(target, *qualified(dataset, table)).keys() - set(fields)
     different = target.execute(sql.SQL("""
         SELECT EXISTS (SELECT 1 FROM {} s LEFT JOIN {} d USING ({})
             WHERE d.{} IS NULL OR to_jsonb(s) IS DISTINCT FROM (to_jsonb(d) - %s::text[]))
-    """).format(stage, destination, names(key), ident(key[0])), (sorted(extra),)).fetchone()[0]
+    """).format(selected, destination, names(key), ident(key[0])), (sorted(extra),)).fetchone()[0]
     if different:
         raise CopyError(f"Conflicto de filas existentes (no se reemplazaron): {dataset}/{table}")
 
@@ -337,12 +397,15 @@ def install(target, epoch):
             if target.execute(sql.SQL("SELECT EXISTS (SELECT 1 FROM {} LIMIT 1)").format(relation)).fetchone()[0]:
                 raise CopyError(f"El destino contiene filas fuera de esta copia: {schema}/{table}")
         next_values = {}
+        fresh_businesses = tuple(name for name, report in reports.items()
+                                 if name in BOT_DATASETS and report.get("strategy") == "fresh")
         for dataset in DATASETS:
             report = reports[dataset]
             order = BOT_TABLES if dataset in BOT_DATASETS else CRM_TABLES
             for table in order:
                 if table in report["tables"]:
-                    install_table(target, epoch, dataset, table, report["tables"][table])
+                    install_table(target, epoch, dataset, table, report["tables"][table],
+                                  fresh_businesses=fresh_businesses)
             schema = "public" if dataset in BOT_DATASETS else CRM_SCHEMA
             for name, sequence in report["sequences"].items():
                 slot = (schema, name)
@@ -353,6 +416,8 @@ def install(target, epoch):
             target.execute(sql.SQL("ALTER SEQUENCE {} RESTART WITH {}").format(
                 ident(schema, name), sql.Literal(max(current, value))))
         progress["rows_installed"] = True
+        progress["fresh_businesses"] = list(fresh_businesses)
+        progress["source_snapshots_retained"] = True
         save_progress(target, epoch, progress)
 
 

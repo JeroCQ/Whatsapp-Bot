@@ -9,6 +9,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from crm_service.central_copy_connection import CopyError
+
 STATE = {"frozen": False, "epoch": "", "inflight": 0, "mode": "legacy"}
 _TRANSFER = {"CRM_DATABASE_URL", "CRM_DATABASE_SCHEMA", "NOTIFICATIONS_ENABLED", "VAPID_PRIVATE_KEY", "VAPID_SUBJECT",
              "CRM_MEDIA_ENABLED", "CRM_MEDIA_ALLOWED_BUSINESSES", "CRM_SOURCE_MODE",
@@ -121,6 +123,10 @@ def install(app):
                         prepare_staging(target)
                     rows = prepare(source, target, body.epoch, dataset, final=body.final)
             return {"dataset": dataset, "rows": rows, "final": body.final}
+        except CopyError as error:
+            # CopyError messages contain reviewed schema/dataset identifiers,
+            # never source rows or connection credentials.
+            raise HTTPException(409, "migration_copy: " + str(error)) from None
         except Exception as error:
             # No row, database URL, driver traceback or credential in HTTP output.
             raise HTTPException(503, "migration_copy_failed_" + type(error).__name__) from None

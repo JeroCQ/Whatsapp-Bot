@@ -12,7 +12,7 @@ from psycopg.types.json import Jsonb
 
 from crm_service.central_copy import (
     BOT_DATASETS, CRM_DATASETS, DATASETS, CopyError, check_bot_source,
-    install, prepare, prepare_staging, run_row, save_progress,
+    install, prepare, prepare_fresh, prepare_staging, run_row, save_progress,
 )
 from crm_service.central_copy_connection import connect
 from crm_service.runtime_registry import Registry, runtime_token
@@ -35,6 +35,10 @@ def call(origin, token, path, body=None):
         response = client.request("POST" if body is not None else "GET", origin + path,
                                   json=body, headers={"X-Chatty-Runtime-Token": token})
     if response.status_code != 200:
+        if response.status_code == 409:
+            detail = response.json().get("detail", "")
+            if isinstance(detail, str) and detail.startswith("migration_copy: ") and len(detail) < 512:
+                raise CopyError(detail)
         raise CopyError(f"Un origen rechazó la operación de migración (HTTP {response.status_code}).")
     return response.json()
 
@@ -114,6 +118,13 @@ def execute(body):
             return call(row["api_url"], runtime_token(role, "service"), "/internal/runtime/service/copy",
                         {"epoch": body.epoch, "final": final})
         row = registry.get(body.dataset)
+        if row.get("migration", {}).get("strategy") == "fresh":
+            if row["business_id"] != "briosos" or row["migration"].get("fresh_start_authorized") is not True:
+                raise CopyError("No existe autorización para reiniciar ese negocio.")
+            with connect("CHATTY_CENTRAL_DATABASE_URL", central=True) as target:
+                prepare_staging(target)
+                count = prepare_fresh(target, body.epoch, body.dataset, final=final)
+            return {"dataset": body.dataset, "rows": count, "final": final, "strategy": "fresh"}
         with source_environment(row):
             check_bot_source(body.dataset)
             with connect("CHATTY_CENTRAL_DATABASE_URL", central=True) as target:

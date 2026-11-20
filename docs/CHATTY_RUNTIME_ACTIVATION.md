@@ -19,6 +19,20 @@ and HTTP operations, and a durable buffer for signed Meta ingress. Do not mark a
 barrier verified before observing those facts. Never freeze an origin while a
 required deployment approval is still pending.
 
+November 20 exception approved by Daniel: Briosos can start empty. Its registry
+`migration.strategy=fresh` and `fresh_start_authorized=true` explicitly select
+the new schema in `supabase/central/briosos.sql`; neither SQL nor private Storage
+access to its separate organization is needed. Preparation hashes the actual
+empty destinations instead of pretending to copy that source. Its old CRM
+operational rows are not reinstalled into the fresh tenant. All original stores
+and both private CRM snapshots remain intact; business drafts, accounts, usage
+and support records are retained. Overlapping operator memberships are unioned
+while the commercial preferences and queue identity remain authoritative.
+
+Memo's and Velvet copy logins are read-only, have no RLS bypass and use explicit
+SELECT policies on only the ten bot tables and their own catalog/media keys.
+No existing password is reset. No managed central Storage owner is changed.
+
 After a successful cutover, every bot must report its expected business, Meta
 channel, central storage origin and table prefix before its existing queue is
 released. Use the normal CRM factory/worker for all businesses, not the

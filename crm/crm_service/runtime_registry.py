@@ -86,6 +86,8 @@ class Registry:
             env = {**source, "BUSINESS_ID": row["business_id"],
                    "SUPABASE_URL": self.origin, "SUPABASE_SERVICE_ROLE_KEY": self.key,
                    "SUPABASE_SCHEMA": "public", "SUPABASE_TABLE_PREFIX": row["target_prefix"]}
+            # General central mode is not the original one-number pilot.
+            env["CHATTY_PILOT_BRIDGE_ENABLED"] = "false"
             for old, new in row.get("migration", {}).get("public_url_map", {}).items():
                 if "PRESAVED_FILES_JSON" in env:
                     env["PRESAVED_FILES_JSON"] = env["PRESAVED_FILES_JSON"].replace(old, new)
