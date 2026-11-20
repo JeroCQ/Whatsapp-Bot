@@ -33,6 +33,19 @@ BEGIN
     EXECUTE format('ALTER SEQUENCE public.%I OWNER TO chatty_runtime',sequence.sequencename);
   END LOOP;
 END $$;
+-- Read only the non-secret writer mode for the installer's final guard.
+-- No configuration/credential reads or registry UPDATE access is granted.
+GRANT SELECT (mode) ON public.chatty_runtime_businesses,public.chatty_runtime_services TO chatty_runtime;
+DO $$
+DECLARE relation text;
+BEGIN
+  FOREACH relation IN ARRAY ARRAY['chatty_runtime_businesses','chatty_runtime_services'] LOOP
+    IF NOT EXISTS(SELECT 1 FROM pg_policies WHERE schemaname='public'
+        AND tablename=relation AND policyname='chatty_copy_read_mode') THEN
+      EXECUTE format('CREATE POLICY chatty_copy_read_mode ON public.%I FOR SELECT TO chatty_runtime USING (true)', relation);
+    END IF;
+  END LOOP;
+END $$;
 REVOKE CREATE ON SCHEMA public FROM chatty_runtime;
 GRANT chatty_runtime TO postgres WITH INHERIT FALSE, SET FALSE;
 COMMIT;
