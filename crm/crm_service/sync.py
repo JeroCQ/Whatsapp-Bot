@@ -479,7 +479,11 @@ class Synchronizer:
                 }
                 for m in rows
             ]
-            row = session.get(CRMConversation, (business.id, source.phone_number))
+            # Reload under the per-conversation row lock: a confirmed control
+            # command may have updated assignment/release markers since this
+            # sync started. Never overwrite those with an older identity-map copy.
+            row = session.get(CRMConversation, (business.id, source.phone_number),
+                              with_for_update=True, populate_existing=True)
             result = classify(source.state, messages, source.handoff, now(), warnings,
                               previous=row.classification if row else None)
             prior_human = bool(row and row.bucket in {"awaiting_human", "human_active"} and row.classification.get("in_human_inbox") is not False)

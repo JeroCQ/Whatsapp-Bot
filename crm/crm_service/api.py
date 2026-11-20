@@ -799,12 +799,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def mark_read(
         business_id: str, phone_number: str, body: ReadInput, principal: Auth, session: DB
     ) -> dict[str, Any]:
-        _, crm = conversation(session, principal, business_id, phone_number, True)
+        # Reading does not mutate ownership or the projection. Serialize only
+        # this operator's read watermark, never block control/sync on the CRM row.
+        _, crm = conversation(session, principal, business_id, phone_number)
+        session.execute(text("SELECT pg_advisory_xact_lock(:key)"),
+                        {"key": lock_id(f"crm-read:{business_id}:{phone_number}:{principal.profile}")})
         row = session.get(ReadState, (business_id, phone_number, principal.profile))
+        changed = False
         if body.read:
             if row is None:
                 row = ReadState(business_id=business_id, phone_number=phone_number, profile=principal.profile)
                 session.add(row)
+                changed = True
             incoming = select(SourceMessage.source_id).where(
                 SourceMessage.business_id == business_id, SourceMessage.phone_number == phone_number,
                 SourceMessage.role == "user",
@@ -812,10 +818,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if body.last_message_id is not None:
                 incoming = incoming.where(SourceMessage.source_id <= body.last_message_id)
             seen = session.scalar(select(func.max(incoming.subquery().c.source_id))) or 0
-            row.read_at, row.last_message_id = now(), max(row.last_message_id or 0, seen)
+            if changed or seen > (row.last_message_id or 0):
+                row.read_at, row.last_message_id = now(), max(row.last_message_id or 0, seen)
+                changed = True
         elif row:
             session.delete(row)
-        audit(session, principal, business_id, phone_number, "crm.read", {"read": body.read})
+            changed = True
+        if changed:
+            audit(session, principal, business_id, phone_number, "crm.read", {"read": body.read})
         source = session.get(SourceConversation, (business_id, phone_number))
         assert source is not None
         session.flush()

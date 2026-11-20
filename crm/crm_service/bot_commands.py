@@ -47,9 +47,20 @@ class CommandCoordinator:
 
     def _save(self, command_id: str, result: dict[str, Any], http_status: int) -> tuple[dict[str, Any], int]:
         with self.sessions.begin() as session:
-            session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_id(self.gateway.business.id)})
             row = self._row(session, command_id)
             assert row is not None
+            # A provider result must not wait behind an entire business sync,
+            # which includes remote source reads. The command row serializes
+            # receipts; only control operations also touch this conversation's
+            # projection. Lock source before projection, as the synchronizer
+            # does, so a confirmed return cannot deadlock with source updates.
+            crm = None
+            if row.operation in {"take", "close", "transfer"} and result["status"] == "confirmed":
+                if row.operation == "close":
+                    session.get(SourceConversation, (row.business_id, row.phone_number),
+                                with_for_update=True, populate_existing=True)
+                crm = session.get(CRMConversation, (row.business_id, row.phone_number),
+                                  with_for_update=True, populate_existing=True)
             if row.operation == "transfer":
                 result = {**{k: row.response[k] for k in ("target_queue", "target_actor") if k in row.response}, **result}
                 if row.status != "confirmed" and result["status"] == "confirmed":
@@ -57,7 +68,6 @@ class CommandCoordinator:
                     if control.get("phase") != "human" or control.get("is_paused") is not True or control.get("owner") != result.get("target_actor"):
                         raise BotGatewayError("transfer_not_confirmed", 502)
                     session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": attention_lock(row.business_id, row.phone_number)})
-                    crm = session.get(CRMConversation, (row.business_id, row.phone_number))
                     assert crm is not None
                     crm.assigned_to = str(result["target_actor"])
                     crm.classification = {**crm.classification, "attention_queue": result["target_queue"],
@@ -72,7 +82,6 @@ class CommandCoordinator:
                                                   link=f"/chats?chat={row.business_id}:{row.phone_number}&bucket=needs_reply"))
                     self._audit(session, row, "crm.queue_transferred", "confirmed")
             if row.operation == "take" and result["status"] == "confirmed":
-                crm = session.get(CRMConversation, (row.business_id, row.phone_number))
                 control = result.get("control") or {}
                 if crm and row.business_id == "memos" and control.get("owner") and type(control.get("version")) is int:
                     crm.classification = {**crm.classification, "queue_control_version": control["version"]}

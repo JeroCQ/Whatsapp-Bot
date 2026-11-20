@@ -325,14 +325,17 @@ def create_router(
             # begin_send compares the immutable original request, including actor/text/version.
             value = begin((prior.get("control") or {}).get("inbound_message_ids") or [])
             return mutation_response(value)
-        from chatty_context import PilotContextError, processing_scope, resolve_context
+        from chatty_context import PilotContextError, enabled as pilot_bridge_enabled, processing_scope, resolve_context
         from database import supabase
         try:
             context = resolve_context(config, business_id, str(config.WA_PHONE_NUMBER_ID),
                                       phone, body.command_id, supabase.legacy)
         except PilotContextError as error:
             raise HTTPException(409, str(error)) from None
-        if context and body.actor not in {
+        # Central contexts do not carry the opt-in pilot's operator allowlist.
+        # Central sends still require authenticated CRM access and the atomic
+        # begin_send owner/pause/version checks below.
+        if context and pilot_bridge_enabled() and body.actor not in {
                 identity for member in context.operators
                 for identity in (member["profile"], *member.get("aliases", []))}:
             raise HTTPException(403, "pilot_operator_not_assigned")
