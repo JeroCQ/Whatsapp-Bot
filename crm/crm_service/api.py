@@ -84,7 +84,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="Independent WhatsApp CRM", version="0.1.0", docs_url=None, redoc_url=None)
     app.state.settings, app.state.sessions, app.state.engine = settings, sessions, engine
     app.state.bot_transport = None
-    app.add_middleware(BodyLimitMiddleware)
+    app.add_middleware(BodyLimitMiddleware, management_limits={
+        name: business.management_upload_bytes for name, business in settings.businesses.items()
+    })
 
     def db() -> Iterator[Session]:
         with sessions.begin() as session:
@@ -1213,6 +1215,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return job_response(row)
 
     app.include_router(create_admin_router(settings, actor, db))
+    from crm_service.bot_management import create_router as create_management_router
+    app.include_router(create_management_router(settings, actor, sessions))
     # Explicit opt-in only: the legacy commercial API does not acquire a new
     # dependency just because this code is present in the shared repository.
     if __import__("os").environ.get("CHATTY_RUNTIME_REGISTRY_ENABLED") == "true":

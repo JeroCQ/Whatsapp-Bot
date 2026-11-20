@@ -46,6 +46,8 @@ class Business:
     bot_source_secret: str = field(default="", repr=False)
     operations_enabled: bool = False
     bot_api_enabled: bool = False
+    # Existing dashboard limit from the central snapshot, plus multipart framing.
+    management_upload_bytes: int = 101 * 1024**2
 
     def deep_link(self, conversation_id: str | int | None) -> str | None:
         if not self.chatwoot_url or not self.chatwoot_account or not conversation_id:
@@ -169,6 +171,7 @@ class Settings:
             source_enabled = flag(f"{prefix}_BOT_API_ENABLED")
             control_secret = os.environ.get(f"{prefix}_BOT_CONTROL_SECRET", "") if service == "api" else ""
             source_secret = os.environ.get(f"{prefix}_BOT_SOURCE_SECRET", "") if service == "worker" else ""
+            catalog_limit_mb = 100
             if runtime:
                 source = runtime[name]["source_configuration"]
                 bot_url = runtime[name]["bot_api_url"]
@@ -176,6 +179,7 @@ class Settings:
                 source_enabled = source.get("CRM_SOURCE_READ_ENABLED", "").strip().lower() in {"true", "1", "yes", "on"}
                 control_secret = source.get("CRM_BOT_CONTROL_SECRET", "") if service == "api" else ""
                 source_secret = source.get("CRM_SOURCE_READ_SECRET", "") if service == "worker" else ""
+                catalog_limit_mb = int(source.get("DASHBOARD_MAX_CATALOG_MB", "100"))
                 url, readonly, cw, account = "", "", "", ""
             if (operations or source_enabled) and not bot_url:
                 raise ValueError("Enabled bot integration requires a configured bot origin")
@@ -201,6 +205,7 @@ class Settings:
                 source_secret,
                 operations,
                 source_enabled,
+                max(0, catalog_limit_mb) * 1024**2 + 1024**2,
             )
         bot_origins = [
             b.bot_api_url

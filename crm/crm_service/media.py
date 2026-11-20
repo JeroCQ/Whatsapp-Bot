@@ -43,6 +43,10 @@ MIMES = {
     "application/octet-stream": "document",
 }
 _UPLOAD_PATH = re.compile(r"^/v1/conversations/[a-z][a-z0-9_]{0,62}/[^/]+/attachments$")
+_MANAGEMENT_BODY_PATH = re.compile(
+    r"^/v1/bot-management/([a-z][a-z0-9_]{0,62})/api/"
+    r"(?:upload-catalog|catalogs(?:/[A-Za-z0-9_-]{1,80}/file)?|generate-si-changes|format-and-save-si)$"
+)
 
 
 def attachment_id(value: str) -> str:
@@ -144,8 +148,9 @@ def range_headers(headers: Headers) -> dict[str, str]:
 class BodyLimitMiddleware:
     """Allow large binary bodies only on the dedicated bounded upload route."""
 
-    def __init__(self, app: ASGIApp):
+    def __init__(self, app: ASGIApp, management_limits: dict[str, int] | None = None):
         self.app = app
+        self.management_limits = management_limits or {}
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -153,6 +158,9 @@ class BodyLimitMiddleware:
             return
         upload = scope.get("method") == "POST" and bool(_UPLOAD_PATH.fullmatch(scope.get("path", "")))
         maximum = MAX_UPLOAD_BYTES if upload else 1024**2
+        management = _MANAGEMENT_BODY_PATH.fullmatch(scope.get("path", ""))
+        if scope.get("method") == "POST" and management:
+            maximum = self.management_limits.get(management.group(1), 1024**2)
         declared = Headers(scope=scope).get("content-length")
         if declared and (not declared.isdigit() or int(declared) > maximum):
             await JSONResponse({"detail": "Request body too large"}, status_code=413)(scope, receive, send)

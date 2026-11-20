@@ -1,5 +1,13 @@
 # Repository architecture rules for Codex
 
+November 20: the four-business central migration is committed and active. The
+old inactive Briosos publication is not the live system; do not activate it or
+repeat the pilot cutover. Central bot management reuses private registered bot
+origins/dashboard keys through /v1/bot-management, preserving original per-brand
+editing permissions even for shared CRM operators. Historical log access uses
+central projections with queue scoping. Do not ask for duplicate frontend brand
+secrets. See docs/CHATTY_CENTRAL_MANAGEMENT_20261120.md.
+
 November 19 consolidation authorization supersedes the historical pilot-only and
 separate-Supabase restrictions below: Tanaka is the approved central project,
 with separate public table/RPC prefixes for the other businesses and a private
