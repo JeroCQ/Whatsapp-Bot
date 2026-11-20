@@ -24,6 +24,7 @@ from crm_service.models import (
     now,
 )
 from crm_service.routing import QUEUE_ROUTING_VERSION, project_queue
+from crm_service.notifications import notice_snapshot
 from crm_service.settings import Business, Settings
 from crm_service.source import SourceFailure
 
@@ -520,6 +521,10 @@ class Synchronizer:
             )
             # Establish the watermark without replaying a backlog on upgrade/backfill.
             result["notification_incoming_id"] = incoming_id
+            if entering or new_incoming:
+                result["notification"] = notice_snapshot(source, messages, "handoff" if entering else "message")
+            elif row and row.classification.get("notification"):
+                result["notification"] = row.classification["notification"]
             if business.id == "memos":
                 routing = project_queue(source.state, row.classification if row else {}, entering)
                 queue = routing["attention_queue"]
@@ -558,3 +563,4 @@ class Synchronizer:
                     )
                 )
             budget.check()
+

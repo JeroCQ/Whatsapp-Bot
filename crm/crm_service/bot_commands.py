@@ -106,6 +106,8 @@ class CommandCoordinator:
                     assert crm is not None
                     crm.assigned_to = str(result["target_actor"])
                     crm.classification = {**crm.classification, "attention_queue": result["target_queue"],
+                                          "notification": {**crm.classification.get("notification", {}),
+                                                           "kind": "transfer", "reason": "Transferencia de un asesor"},
                                           "queue_needs_classification": False, "queue_transferred": True,
                                           "queue_control_version": control["version"]}
                     crm.version += 1
@@ -400,3 +402,4 @@ class CommandCoordinator:
             }
             return self._save(command_id, result, 202 if error.ambiguous else error.status_code)
         return self._save(command_id, result, 202 if result["status"] in {"pending", "unknown"} else 200)
+

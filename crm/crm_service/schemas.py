@@ -104,6 +104,16 @@ class PushKeys(Input):
 class PushInput(Input):
     endpoint: str = Field(max_length=4096)
     keys: PushKeys
+    device_label: str = Field(default="Navegador", max_length=80)
+    receipt_version: int = Field(default=0, ge=0, le=1)
+
+
+class PushReceipt(Input):
+    event_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    subscription_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    expires: int = Field(gt=0)
+    token: str = Field(pattern=r"^[a-f0-9]{64}$")
+    stage: Literal["presented", "opened", "superseded"]
 
 
 class PreferencesInput(Input):
@@ -113,3 +123,4 @@ class PreferencesInput(Input):
 
 
 Bucket = Literal["awaiting_human", "human_active", "ai_active", "closed", "all"]
+

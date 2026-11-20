@@ -44,6 +44,7 @@ from crm_service.models import (
     CRMConversation,
     Note,
     NotificationEvent,
+    PushDelivery,
     PushSubscription,
     ReadState,
     SourceConversation,
@@ -53,7 +54,7 @@ from crm_service.models import (
     Task,
     now,
 )
-from crm_service.notifications import endpoint_allowed, endpoint_hash, preference, push_config
+from crm_service.notifications import endpoint_allowed, endpoint_hash, preference, push_config, notice_content, notification_allowed, receipt_valid
 from crm_service.routing import authorize_case, queue_clause
 from crm_service.schemas import (
     Bucket,
@@ -64,6 +65,7 @@ from crm_service.schemas import (
     NoteInput,
     PreferencesInput,
     PushInput,
+    PushReceipt,
     ReadInput,
     SyncInput,
     TaskInput,
@@ -1065,10 +1067,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         agent = session.get(Agent, principal.profile)
         allowed = [b for b in principal.businesses if agent and preference(agent, b, "in_app")]
         query = (
-            select(NotificationEvent)
+            select(NotificationEvent, CRMConversation, SourceConversation)
+            .select_from(NotificationEvent)
             .join(CRMConversation, and_(CRMConversation.business_id == NotificationEvent.business_id,
                                        CRMConversation.phone_number == NotificationEvent.phone_number,
                                        CRMConversation.transition == NotificationEvent.transition))
+            .join(SourceConversation, and_(SourceConversation.business_id == NotificationEvent.business_id,
+                                           SourceConversation.phone_number == NotificationEvent.phone_number))
             .where(NotificationEvent.business_id.in_(allowed))
             .where(queue_clause(principal), CRMConversation.classification["in_human_inbox"].as_boolean().is_distinct_from(False))
             .where(NotificationEvent.created_at >= timestamp(agent.preferences.get("_crm_operator", {}).get("since") if agent else None))
@@ -1079,15 +1084,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not principal.is_admin:
             query = query.where(or_(CRMConversation.assigned_to.is_(None), CRMConversation.assigned_to.in_([principal.profile, *principal.aliases])))
         return {
+            "snapshot_at": now(),
             "items": [
                 {
+                    **notice_content(session, e, crm, source),
                     "id": e.id,
                     "business_id": e.business_id,
                     "phone_number": e.phone_number,
                     "url": e.link,
                     "created_at": e.created_at,
                 }
-                for e in session.scalars(query)
+                for e, crm, source in session.execute(query)
+                if agent and notification_allowed(session, e, agent, "in_app")
             ]
         }
 
@@ -1126,10 +1134,40 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         subscriptions = session.scalars(select(PushSubscription).where(
             PushSubscription.profile == principal.profile,
-        ).order_by(PushSubscription.created_at.desc()).limit(20)).all()
+        ).order_by(PushSubscription.active.desc(), PushSubscription.created_at.desc()).limit(20)).all()
+        agent = session.get(Agent, principal.profile)
+        outcomes: dict[str, dict[str, Any]] = {}
+        for sub_id, state, count, changed_at in session.execute(
+            select(PushDelivery.subscription_id, PushDelivery.status, func.count(), func.max(PushDelivery.retry_at))
+            .where(PushDelivery.subscription_id.in_([s.id for s in subscriptions]))
+            .group_by(PushDelivery.subscription_id, PushDelivery.status)
+        ):
+            outcomes.setdefault(sub_id, {})[state] = {"count": count, "last_at": changed_at}
         return {**push_config(settings), "allowed_businesses": list(principal.businesses),
+                "server_time": now(),
                 "operator": principal.profile, "operator_label": label,
-                "subscriptions": [{"id": s.id, "active": s.active} for s in subscriptions]}
+                "preferences": {b: {c: bool(agent and preference(agent, b, c)) for c in ("in_app", "web_push")}
+                                for b in principal.businesses},
+                "subscriptions": [{"id": s.id, "active": s.active,
+                                   "device_label": s.subscription.get("_device_label", "Dispositivo sin nombre"),
+                                   "last_seen_at": s.subscription.get("_last_seen_at"),
+                                   "outcomes": outcomes.get(s.id, {})} for s in subscriptions]}
+
+    @app.post("/v1/push/receipt")
+    def push_receipt(body: PushReceipt, session: DB) -> dict[str, bool]:
+        if not push_config(settings)["configured"] or not receipt_valid(
+            settings, body.event_id, body.subscription_id, body.expires, body.token
+        ):
+            raise HTTPException(401, "invalid_push_receipt")
+        delivery = session.get(PushDelivery, (body.event_id, body.subscription_id), with_for_update=True)
+        sub = session.get(PushSubscription, body.subscription_id)
+        if not delivery or not sub or not sub.active:
+            raise HTTPException(404, "push_delivery_not_available")
+        # Receipt token authorizes only this outbox pair, never read/control/send.
+        rank = {"pending": 0, "sent": 1, "superseded": 2, "presented": 3, "opened": 4}
+        if rank.get(body.stage, -1) > rank.get(delivery.status, -1):
+            delivery.status, delivery.retry_at = body.stage, now()
+        return {"ok": True}
 
     @app.post("/v1/push/subscriptions", status_code=201)
     def subscribe(body: PushInput, principal: Auth, session: DB) -> dict[str, str]:
@@ -1153,7 +1191,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         elif not row.active:
             row.created_at = now()
         row.profile = principal.profile
-        row.subscription, row.active = {**body.model_dump(), "_login_profile": principal.login_profile or principal.profile}, True
+        previous_subscription = row.subscription or {}
+        receipt_since = previous_subscription.get("_receipt_since") if previous_subscription.get("_receipt_version") == 1 else None
+        row.subscription, row.active = {"endpoint": body.endpoint, "keys": body.keys.model_dump(),
+                                        "_device_label": body.device_label, "_last_seen_at": now().isoformat(),
+                                        "_receipt_version": body.receipt_version, "_receipt_since": receipt_since or now().isoformat(),
+                                        "_login_profile": principal.login_profile or principal.profile}, True
         session.flush()
         audit(session, principal, "", "", "push.subscribe", {"id": row.id})
         return {"id": row.id, "operator": principal.profile}
@@ -1236,3 +1279,4 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from crm_service.runtime_service import install
     install(app)
     return app
+
