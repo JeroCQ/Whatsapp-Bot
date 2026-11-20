@@ -1,5 +1,12 @@
 # Repository architecture rules for Codex
 
+CRM API connection recovery: keep the existing bounded pool (at most four, no
+overflow), recycle aged API connections and bound TCP/SQL/lock/idle-transaction
+waits. Database factory API options are explicit; do not apply API SQL deadlines
+to sync workers or migrations, enlarge global Supabase pools, replay commands,
+or disable authorization to hide pool exhaustion. Report it as a controlled 503,
+not a traceback storm. See docs/CHATTY_CRM_CONNECTION_RECOVERY_20261120.md.
+
 November 20: the four-business central migration is committed and active. The
 old inactive Briosos publication is not the live system; do not activate it or
 repeat the pilot cutover. Central bot management reuses private registered bot

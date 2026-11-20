@@ -10,7 +10,7 @@ from typing import Annotated, Any
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import and_, func, or_, select, text, tuple_, update
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError, TimeoutError as PoolTimeoutError
 from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
@@ -80,13 +80,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
-    engine, sessions = database(settings)
+    engine, sessions = database(settings, api=True)
     app = FastAPI(title="Independent WhatsApp CRM", version="0.1.0", docs_url=None, redoc_url=None)
     app.state.settings, app.state.sessions, app.state.engine = settings, sessions, engine
     app.state.bot_transport = None
     app.add_middleware(BodyLimitMiddleware, management_limits={
         name: business.management_upload_bytes for name, business in settings.businesses.items()
     })
+
+    @app.exception_handler(PoolTimeoutError)
+    async def database_pool_busy(_request: Request, _error: PoolTimeoutError):
+        # One sanitized line, rather than hundreds of traceback lines per poll.
+        # Never retry commands or weaken authorization when capacity is busy.
+        logging.getLogger(__name__).warning("crm_database_pool_exhausted")
+        return JSONResponse(
+            {"detail": "La conexión del CRM está ocupada. Vuelve a consultar; no repitas un envío pendiente.",
+             "code": "crm_database_pool_exhausted"},
+            status_code=503, headers={"Retry-After": "3"},
+        )
 
     def db() -> Iterator[Session]:
         with sessions.begin() as session:
