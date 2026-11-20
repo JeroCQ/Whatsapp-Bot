@@ -35,6 +35,9 @@ No existing password is reset. No managed central Storage owner is changed.
 
 Global/historical CRM audit scopes are copied verbatim, not treated as unknown
 operational tenants. They never grant a user access to another business.
+The complete authorized commercial CRM snapshot also retains dormant historical
+business keys verbatim. This does not register/activate those businesses or
+extend JWT/account access. Individual bot snapshots keep strict business checks.
 
 The bounded operation sequence is `prepare` for each dataset, `freeze`,
 `verify-barrier`, `final-copy` for each dataset, `install`, `activate`, restart

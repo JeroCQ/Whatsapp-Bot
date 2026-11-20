@@ -147,9 +147,11 @@ def stream_rows(db, relation, fields, key, sink=None):
 def assert_business_scope(source, dataset, table, fields):
     if "business_id" not in fields:
         return
-    if dataset in CRM_DATASETS and table == "audit_events":
-        # Global and historical audit scopes are not operational tenants.
-        # Preserve them verbatim; never discard or normalize original audit.
+    if dataset == "commercial-crm" or (dataset == "pilot-crm" and table == "audit_events"):
+        # The authorized commercial CRM snapshot is the complete existing DB,
+        # including dormant historical tenant keys and global audit scopes.
+        # Preserve original business keys; never turn them into active registry
+        # entries or broaden JWT/operator scope. Per-bot copies remain strict.
         return
     permitted = [dataset] if dataset in BOT_DATASETS else (
         ["tanaka", "velvet", "memos", "briosos"] if dataset == "commercial-crm" else ["briosos"])
