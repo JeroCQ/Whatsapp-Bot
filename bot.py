@@ -8,7 +8,7 @@ import unicodedata
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
-from typing import List
+from typing import List, Literal
 from zoneinfo import ZoneInfo
 from pydantic import BaseModel, Field
 from google import genai
@@ -115,6 +115,16 @@ class BotResponse(BaseModel):
     send_files_before_response: bool = False
     follow_up_message: str | None = None
     follow_up_delay_minutes: int = 120
+
+
+class QualifiedPurchaseResponse(BotResponse):
+    purchase_type: Literal["mayorista", "detal"] | None = Field(
+        default=None, description="Tipo de compra respaldado por el cliente. Null si sigue sin aclararse."
+    )
+
+
+_PURCHASE_TYPE_QUESTION = "¿Tu compra es al por mayor o al detal?"
+_PURCHASE_TYPES = ("mayorista", "detal")
 
 
 @dataclass
@@ -347,6 +357,13 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
     try:
         started_at = time.perf_counter()
         policy = load_business_policy(config.BUSINESS_ID)
+        qualification_pending = (
+            policy.qualify_purchase_type and remembered_data.get("tipo_cliente") not in _PURCHASE_TYPES
+        )
+        opening_without_context = qualification_pending and not remembered_data and all(
+            item.get("role") == "system" or (item.get("role") == "user" and item.get("content") == text)
+            for item in history
+        )
         keyword_reason = human_handoff_reason(text, policy.human_handoff_keywords)
         if handoffs_enabled and keyword_reason:
             # Explicit opt-in per business: pause through the existing authority,
@@ -358,7 +375,9 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
                 "Tu solicitud requiere atención de un asesor.", [],
                 follow_up_message="", handoff_requested=True, handoff_reason=keyword_reason,
             )
-        if not is_image and catalog_may_suppress_handoff(text):
+        if opening_without_context and not is_image and is_simple_greeting(text):
+            return BotTurn(f"¡Hola! 😊 {_PURCHASE_TYPE_QUESTION}", [])
+        if not is_image and (not qualification_pending or opening_without_context) and catalog_may_suppress_handoff(text):
             # A direct request for a configured catalog is deterministic. It
             # must not wait for inference or disappear because a different
             # cycle once sent this file. Combined/human/B2B requests retain the
@@ -368,7 +387,8 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
                 operational_event("CATALOG_REQUEST_RESOLVED", phone=phone, stage="DIRECT_RESPONSE",
                                   reason="explicit_catalog_request", result="files_selected")
                 return BotTurn(
-                    "¿Qué producto te interesa o qué te gustaría pedir?", requested_files,
+                    _PURCHASE_TYPE_QUESTION if qualification_pending else "¿Qué producto te interesa o qué te gustaría pedir?",
+                    requested_files,
                     send_files_before_response=True,
                 )
         failure_stage = "provider"
@@ -381,7 +401,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
                     http_options=http_options,
                     system_instruction=system_instruction_with_files,
                     response_mime_type="application/json",
-                    response_schema=BotResponse,
+                    response_schema=QualifiedPurchaseResponse if policy.qualify_purchase_type else BotResponse,
                     temperature=0.1, # Bajamos un poco más la temperatura para máxima adherencia a las reglas
                 ),
             ),
@@ -395,12 +415,26 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
         response_text = ai_data.get("response", "")
         trigger_handoff = ai_data.get("trigger_handoff", False)
         reason = ai_data.get("handoff_reason", "Transferencia por IA")
+        purchase_type = ai_data.get("purchase_type") if policy.qualify_purchase_type else None
+        if purchase_type in _PURCHASE_TYPES:
+            qualification_pending = False
+            if remembered_data.get("tipo_cliente") != purchase_type:
+                remembered_data["tipo_cliente"] = purchase_type
+                # The existing CRM routing reads this memory when the handoff begins.
+                update_conversation_memory(phone, remembered_data, remembered_order)
 
         # High-value commercial intents cannot depend on probabilistic JSON.  The
         # model still writes the conversational answer, while this classifier
         # guarantees the backend action for every configured brand.
         deterministic_b2b_reason, deterministic_b2b_files = (
-            b2b_actions(text, FILE_CATALOG, standard_wholesale_self_service=policy.standard_wholesale_self_service) if not is_image else (None, [])
+            b2b_actions(
+                text,
+                FILE_CATALOG,
+                standard_wholesale_self_service=(
+                    policy.standard_wholesale_self_service
+                    or (policy.qualify_purchase_type and purchase_type != "mayorista")
+                ),
+            ) if not is_image else (None, [])
         )
         if deterministic_b2b_reason and handoffs_enabled:
             trigger_handoff = True
@@ -419,7 +453,8 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
                 response_text = (
                     "No cuento con información confirmada sobre esa presentación, "
                     "su disponibilidad ni su precio. Puedo ayudarte con las opciones "
-                    "que sí están registradas. ¿Qué producto buscas?"
+                    "que sí están registradas. "
+                    + (_PURCHASE_TYPE_QUESTION if qualification_pending else "¿Qué producto buscas?")
                 )
 
         if not handoffs_enabled:
@@ -435,7 +470,10 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
             reason = ""
             # The discarded action and its customer-facing text must agree.
             # A stale image/context must not leave a promise of human review.
-            response_text = "¡Hola! 😊 Cuéntame qué necesitas y te ayudo por aquí."
+            response_text = (
+                f"¡Hola! 😊 {_PURCHASE_TYPE_QUESTION}" if qualification_pending
+                else "¡Hola! 😊 Cuéntame qué necesitas y te ayudo por aquí."
+            )
             ai_data["follow_up_message"] = ""
 
         requested_files = list(dict.fromkeys(
@@ -460,7 +498,10 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
             print("[IA HANDOFF SUPPRESSED] Solicitud de catálogo disponible se resuelve automáticamente")
             trigger_handoff = False
             reason = ""
-            response_text = "¿Qué producto te interesa o qué te gustaría pedir?"
+            response_text = (
+                _PURCHASE_TYPE_QUESTION if qualification_pending
+                else "¿Qué producto te interesa o qué te gustaría pedir?"
+            )
         if not resend_requested:
             requested_files = [file_id for file_id in requested_files
                                if file_id in deterministic_files or not has_successful_file_delivery(phone, file_id)]

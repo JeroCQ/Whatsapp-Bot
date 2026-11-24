@@ -38,6 +38,7 @@ class BusinessPolicy:
     min_spacing_seconds: int
     standard_wholesale_self_service: bool = False
     human_handoff_keywords: tuple[str, ...] = ()
+    qualify_purchase_type: bool = False
 
 
 @dataclass(frozen=True)
@@ -111,8 +112,11 @@ def load_business_policy(business_id: str, environ: Mapping | None = None) -> Bu
     keywords = document.get("human_handoff_keywords", [])
     if not isinstance(keywords, list) or any(not isinstance(word, str) or not word.strip() for word in keywords):
         raise ValueError("human_handoff_keywords must be a list of nonempty strings")
+    qualify_purchase_type = document.get("qualify_purchase_type", False)
+    if type(qualify_purchase_type) is not bool:
+        raise ValueError("qualify_purchase_type must be boolean")
     return BusinessPolicy(selected_timezone, contact, operating, spacing, self_service,
-                          tuple(word.strip() for word in keywords))
+                          tuple(word.strip() for word in keywords), qualify_purchase_type)
 
 
 def _local(value: datetime, policy: BusinessPolicy) -> datetime:
