@@ -12,5 +12,6 @@
     "end": "16:30"
   },
   "follow_up_min_spacing_seconds": 900,
-  "qualify_purchase_type": true
+  "qualify_purchase_type": true,
+  "wholesale_minimum_cop": 300000
 }

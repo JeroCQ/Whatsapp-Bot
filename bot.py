@@ -121,6 +121,9 @@ class QualifiedPurchaseResponse(BotResponse):
     purchase_type: Literal["mayorista", "detal"] | None = Field(
         default=None, description="Tipo de compra respaldado por el cliente. Null si sigue sin aclararse."
     )
+    purchase_subtotal_cop: int | None = Field(
+        default=None, description="Subtotal conocido del pedido actual en COP, sin domicilio."
+    )
 
 
 _PURCHASE_TYPE_QUESTION = "¿Tu compra es al por mayor o al detal?"
@@ -357,6 +360,17 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
     try:
         started_at = time.perf_counter()
         policy = load_business_policy(config.BUSINESS_ID)
+        wholesale_minimum = policy.wholesale_minimum_cop if policy.qualify_purchase_type else None
+        minimum_label = f"${wholesale_minimum:,}".replace(",", ".") if wholesale_minimum else None
+        purchase_type_question = (
+            f"¿Tu compra es al por mayor (desde {minimum_label} en productos) o al detal?"
+            if minimum_label else _PURCHASE_TYPE_QUESTION
+        )
+        if (wholesale_minimum and remembered_data.get("tipo_cliente") == "mayorista"
+                and remembered_data.get("minimo_mayorista_confirmado_cop") != wholesale_minimum):
+            # A type stored under the old rule is insufficient for a new wholesale handoff.
+            remembered_data.pop("tipo_cliente")
+            update_conversation_memory(phone, remembered_data, remembered_order)
         qualification_pending = (
             policy.qualify_purchase_type and remembered_data.get("tipo_cliente") not in _PURCHASE_TYPES
         )
@@ -376,7 +390,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
                 follow_up_message="", handoff_requested=True, handoff_reason=keyword_reason,
             )
         if opening_without_context and not is_image and is_simple_greeting(text):
-            return BotTurn(f"¡Hola! 😊 {_PURCHASE_TYPE_QUESTION}", [])
+            return BotTurn(f"¡Hola! 😊 {purchase_type_question}", [])
         if not is_image and (not qualification_pending or opening_without_context) and catalog_may_suppress_handoff(text):
             # A direct request for a configured catalog is deterministic. It
             # must not wait for inference or disappear because a different
@@ -387,7 +401,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
                 operational_event("CATALOG_REQUEST_RESOLVED", phone=phone, stage="DIRECT_RESPONSE",
                                   reason="explicit_catalog_request", result="files_selected")
                 return BotTurn(
-                    _PURCHASE_TYPE_QUESTION if qualification_pending else "¿Qué producto te interesa o qué te gustaría pedir?",
+                    purchase_type_question if qualification_pending else "¿Qué producto te interesa o qué te gustaría pedir?",
                     requested_files,
                     send_files_before_response=True,
                 )
@@ -416,16 +430,27 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
         trigger_handoff = ai_data.get("trigger_handoff", False)
         reason = ai_data.get("handoff_reason", "Transferencia por IA")
         purchase_type = ai_data.get("purchase_type") if policy.qualify_purchase_type else None
+        subtotal = ai_data.get("purchase_subtotal_cop")
+        meets_minimum = None
+        if wholesale_minimum and type(subtotal) is int and subtotal >= 0:
+            meets_minimum = subtotal >= wholesale_minimum
+            purchase_type = "mayorista" if meets_minimum else "detal"
         if purchase_type in _PURCHASE_TYPES:
             qualification_pending = False
-            if remembered_data.get("tipo_cliente") != purchase_type:
+            confirmed_minimum = wholesale_minimum if purchase_type == "mayorista" else None
+            if (remembered_data.get("tipo_cliente") != purchase_type
+                    or remembered_data.get("minimo_mayorista_confirmado_cop") != confirmed_minimum):
                 remembered_data["tipo_cliente"] = purchase_type
+                if confirmed_minimum:
+                    remembered_data["minimo_mayorista_confirmado_cop"] = confirmed_minimum
+                else:
+                    remembered_data.pop("minimo_mayorista_confirmado_cop", None)
                 # The existing CRM routing reads this memory when the handoff begins.
                 update_conversation_memory(phone, remembered_data, remembered_order)
+        if wholesale_minimum and purchase_type != "mayorista" and str(reason).partition(":")[0].strip() == "B2B_HIGH_VALUE":
+            reason = str(reason).partition(":")[2].strip() or "Revisión comercial"
 
-        # High-value commercial intents cannot depend on probabilistic JSON.  The
-        # model still writes the conversational answer, while this classifier
-        # guarantees the backend action for every configured brand.
+        # A brand with a minimum qualifies the order before applying keyword routing.
         deterministic_b2b_reason, deterministic_b2b_files = (
             b2b_actions(
                 text,
@@ -434,7 +459,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
                     policy.standard_wholesale_self_service
                     or (policy.qualify_purchase_type and purchase_type != "mayorista")
                 ),
-            ) if not is_image else (None, [])
+            ) if not is_image and (not wholesale_minimum or purchase_type == "mayorista") else (None, [])
         )
         if deterministic_b2b_reason and handoffs_enabled:
             trigger_handoff = True
@@ -443,6 +468,9 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
                 "Gracias por contarnos sobre tu proyecto 😊 "
                 "Nuestro equipo comercial revisará contigo los detalles."
             )
+        elif meets_minimum and handoffs_enabled:
+            trigger_handoff = True
+            reason = f"B2B_HIGH_VALUE: subtotal de productos desde {minimum_label} COP"
         presentation_reason = unregistered_presentation_reason(text, SYSTEM_INSTRUCTION) if not is_image else None
         if presentation_reason:
             if handoffs_enabled:
@@ -454,7 +482,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
                     "No cuento con información confirmada sobre esa presentación, "
                     "su disponibilidad ni su precio. Puedo ayudarte con las opciones "
                     "que sí están registradas. "
-                    + (_PURCHASE_TYPE_QUESTION if qualification_pending else "¿Qué producto buscas?")
+                    + (purchase_type_question if qualification_pending else "¿Qué producto buscas?")
                 )
 
         if not handoffs_enabled:
@@ -471,7 +499,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
             # The discarded action and its customer-facing text must agree.
             # A stale image/context must not leave a promise of human review.
             response_text = (
-                f"¡Hola! 😊 {_PURCHASE_TYPE_QUESTION}" if qualification_pending
+                f"¡Hola! 😊 {purchase_type_question}" if qualification_pending
                 else "¡Hola! 😊 Cuéntame qué necesitas y te ayudo por aquí."
             )
             ai_data["follow_up_message"] = ""
@@ -499,7 +527,7 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
             trigger_handoff = False
             reason = ""
             response_text = (
-                _PURCHASE_TYPE_QUESTION if qualification_pending
+                purchase_type_question if qualification_pending
                 else "¿Qué producto te interesa o qué te gustaría pedir?"
             )
         if not resend_requested:

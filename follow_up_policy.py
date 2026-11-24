@@ -39,6 +39,7 @@ class BusinessPolicy:
     standard_wholesale_self_service: bool = False
     human_handoff_keywords: tuple[str, ...] = ()
     qualify_purchase_type: bool = False
+    wholesale_minimum_cop: int | None = None
 
 
 @dataclass(frozen=True)
@@ -115,8 +116,11 @@ def load_business_policy(business_id: str, environ: Mapping | None = None) -> Bu
     qualify_purchase_type = document.get("qualify_purchase_type", False)
     if type(qualify_purchase_type) is not bool:
         raise ValueError("qualify_purchase_type must be boolean")
+    wholesale_minimum = document.get("wholesale_minimum_cop")
+    if wholesale_minimum is not None and (type(wholesale_minimum) is not int or wholesale_minimum < 1):
+        raise ValueError("wholesale_minimum_cop must be a positive integer")
     return BusinessPolicy(selected_timezone, contact, operating, spacing, self_service,
-                          tuple(word.strip() for word in keywords), qualify_purchase_type)
+                          tuple(word.strip() for word in keywords), qualify_purchase_type, wholesale_minimum)
 
 
 def _local(value: datetime, policy: BusinessPolicy) -> datetime:
