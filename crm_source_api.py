@@ -110,16 +110,7 @@ class SupabaseSourceReader:
 def create_source_router(settings, reader_factory):
     router = APIRouter()
 
-    @router.get("/internal/crm/v1/businesses/{business_id}/source/{table}")
-    def export_page(
-        business_id: str,
-        table: str,
-        request: Request,
-        response: Response,
-        after: str | None = Query(None, max_length=200),
-        limit: int = Query(500, ge=1, le=1000),
-        phone_number: str | None = Query(None, min_length=1, max_length=200),
-    ):
+    def authorize(business_id, request):
         if not getattr(settings, "CRM_SOURCE_READ_ENABLED", False):
             raise HTTPException(404, "Source export is disabled")
         if request.headers.get("origin") or request.headers.get("sec-fetch-site"):
@@ -131,6 +122,40 @@ def create_source_router(settings, reader_factory):
             raise HTTPException(401, "Source authentication required")
         if business_id != settings.BUSINESS_ID:
             raise HTTPException(403, "Business scope mismatch")
+
+    @router.get("/internal/crm/v1/businesses/{business_id}/source/return-analysis")
+    def return_analysis(business_id: str, request: Request, phone: str = Query(max_length=200),
+                        cutoff: str = Query(max_length=64)):
+        authorize(business_id, request)
+        if not getattr(settings, "CRM_CUSTOMER_INSIGHTS_ENABLED", False):
+            raise HTTPException(404, "Customer analysis unavailable")
+        from customer_insights import analyze_return, cutoff_iso
+        from webhook_utils import valid_whatsapp_sender
+        if not valid_whatsapp_sender(phone):
+            raise HTTPException(422, "Invalid WhatsApp contact")
+        try:
+            through = cutoff_iso(cutoff)
+        except (ValueError, OverflowError):
+            raise HTTPException(422, "Invalid analysis cutoff") from None
+        from bot import generate_return_analysis
+        from database import supabase
+        try:
+            return {"business_id": business_id, "phone_number": phone,
+                    "result": analyze_return(supabase, phone, through, generate_return_analysis)}
+        except Exception:
+            raise HTTPException(503, "Customer analysis unavailable") from None
+
+    @router.get("/internal/crm/v1/businesses/{business_id}/source/{table}")
+    def export_page(
+        business_id: str,
+        table: str,
+        request: Request,
+        response: Response,
+        after: str | None = Query(None, max_length=200),
+        limit: int = Query(500, ge=1, le=1000),
+        phone_number: str | None = Query(None, min_length=1, max_length=200),
+    ):
+        authorize(business_id, request)
         if table not in SOURCE_FIELDS:
             raise HTTPException(404, "Source table not available")
         if table == "message_logs" and after is not None:
