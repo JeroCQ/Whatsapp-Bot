@@ -5,7 +5,7 @@ import logging
 from collections.abc import Iterator
 from datetime import timedelta
 from tempfile import SpooledTemporaryFile
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -55,7 +55,7 @@ from crm_service.models import (
     now,
 )
 from crm_service.notifications import endpoint_allowed, endpoint_hash, preference, push_config, notice_content, notification_allowed, receipt_valid
-from crm_service.routing import authorize_case, queue_clause
+from crm_service.routing import attention_queue_expression, authorize_case, queue_clause
 from crm_service.schemas import (
     Bucket,
     ControlInput,
@@ -626,10 +626,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/v1/inbox")
     def inbox(
+        request: Request,
         principal: Auth,
         session: DB,
         bucket: Bucket = "awaiting_human",
         business_id: Annotated[list[str] | None, Query()] = None,
+        attention_queue: Literal["retail", "wholesale"] | None = None,
         search: str = Query(default="", max_length=300),
         priority: int | None = Query(default=None, ge=0, le=4),
         assigned_to: str | None = None,
@@ -638,6 +640,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         cursor: str | None = None,
         limit: int = Query(default=50, ge=1, le=200),
     ) -> dict[str, Any]:
+        if attention_queue is not None:
+            if not principal.is_admin:
+                raise HTTPException(403, "Only admins can filter by attention queue")
+            if business_id != ["memos"] or len(request.query_params.getlist("attention_queue")) != 1:
+                raise HTTPException(400, "Attention queue requires business_id=memos")
         requested = sorted(set(business_id or principal.businesses))
         for business in requested:
             principal.authorize(business)
@@ -654,6 +661,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     assigned_to,
                     tag,
                     stage,
+                    *([attention_queue] if attention_queue is not None else []),
                 ],
                 sort_keys=True,
             ).encode()
@@ -669,6 +677,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             .where(CRMConversation.business_id.in_(requested), queue_clause(principal))
         )
+        if attention_queue is not None:
+            query = query.where(attention_queue_expression() == attention_queue)
         if bucket != "all":
             query = query.where(
                 CRMConversation.bucket.in_(["awaiting_human", "human_active"])

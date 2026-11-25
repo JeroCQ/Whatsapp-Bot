@@ -645,6 +645,26 @@
             }
           },
           {
+            "name": "attention_queue",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "retail",
+                    "wholesale"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Attention Queue"
+            }
+          },
+          {
             "name": "search",
             "in": "query",
             "required": false,

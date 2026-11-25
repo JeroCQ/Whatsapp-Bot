@@ -201,6 +201,37 @@ def headers(settings, profile, queue=None, role="operator", businesses=None, ali
         attention_queue=queue, operator_role=role, actor_aliases=aliases or [], queue_actors={"retail": RETAIL, "wholesale": WHOLESALE}, login_profile=profile, retired_profiles=retired or [])}
 
 
+def test_admin_inbox_filters_memos_queue_before_pagination(queue_client, sessions):
+    client, settings, worker, rows, _ = queue_client
+    for identity in (2, 3):
+        for table, values in data(message_id=identity).items():
+            rows["memos"][table].extend({**value, "phone_number": f"57300{identity}"} for value in values)
+    assert worker.run("memos") == {"memos": "ok"}
+    with sessions.begin() as session:
+        legacy = session.get(CRMConversation, ("memos", "573001"))
+        legacy.classification = {key: value for key, value in legacy.classification.items() if key != "attention_queue"}
+        wholesale = session.get(CRMConversation, ("memos", "573003"))
+        wholesale.classification = {**wholesale.classification, "attention_queue": "wholesale"}
+
+    admin = headers(settings, "operator", role="admin", businesses=["memos", "tanaka"])
+    filters = {"business_id": "memos", "limit": 1, "attention_queue": "retail"}
+    response = client.get("/v1/inbox", params=filters, headers=admin)
+    assert response.status_code == 200
+    first = response.json()
+    assert first["items"][0]["phone_number"] == "573001"
+    assert first["next_cursor"]
+    next_page = client.get("/v1/inbox", params={**filters, "cursor": first["next_cursor"]}, headers=admin)
+    assert [item["phone_number"] for item in next_page.json()["items"]] == ["573002"]
+    assert not next_page.json()["next_cursor"]
+
+    wholesale_filters = {**filters, "attention_queue": "wholesale"}
+    page = client.get("/v1/inbox", params=wholesale_filters, headers=admin)
+    assert [item["phone_number"] for item in page.json()["items"]] == ["573003"]
+    assert client.get("/v1/inbox", params={**wholesale_filters, "cursor": first["next_cursor"]}, headers=admin).status_code == 400
+    assert client.get("/v1/inbox", params={**filters, "business_id": "tanaka"}, headers=admin).status_code == 400
+    assert client.get("/v1/inbox", params=filters, headers=headers(settings, RETAIL, "retail")).status_code == 403
+
+
 def test_shared_scope_real_message_order_same_contact_and_legacy_owner(queue_client, sessions, notifications_settings):
     client, settings, _, _, calls = queue_client
     with sessions.begin() as session:

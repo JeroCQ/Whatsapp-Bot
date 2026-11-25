@@ -64,13 +64,16 @@ def authorize_case(principal: Any, crm: CRMConversation) -> None:
         raise HTTPException(403, "Conversation belongs to another attention queue")
 
 
+def attention_queue_expression() -> Any:
+    return func.coalesce(CRMConversation.classification["attention_queue"].as_string(), "retail")
+
+
 def queue_clause(principal: Any) -> Any:
     if principal.is_admin:
         from sqlalchemy import true
         return true()
-    return or_(CRMConversation.business_id != "memos", func.coalesce(
-        CRMConversation.classification["attention_queue"].as_string(), "retail"
-    ) == (principal.attention_queue or "retail"))
+    return or_(CRMConversation.business_id != "memos",
+               attention_queue_expression() == (principal.attention_queue or "retail"))
 
 
 def attention_lock(business: str, phone: str) -> int:
