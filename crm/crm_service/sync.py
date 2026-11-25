@@ -380,6 +380,10 @@ class Synchronizer:
         row.message_metadata, row.event_key = metadata, key
         session.flush()
         project_message(session, row)
+        if row.message_metadata.get("source") in {"promotion_permission", "human"}:
+            from crm_service.promotion_permissions import QUESTION, project_permission_message
+            if row.message_metadata.get("source") == "promotion_permission" or row.content == QUESTION:
+                project_permission_message(session, row)
 
     def messages(self, session: Session, business: Business, adapter: Reader, budget: ReadBudget) -> None:
         cursor = self.cursor(session, business.id, "message_logs")

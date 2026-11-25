@@ -117,6 +117,10 @@ def _apply_receipt(session: Session, receipt: DeliveryReceipt) -> None:
     if changed:
         _revision(session, target)
     session.flush()
+    if changed and target.role == "asesor":
+        from crm_service.promotion_permissions import QUESTION, project_permission_message
+        if target.content == QUESTION:
+            project_permission_message(session, target)
 
 
 def project_message(session: Session, row: SourceMessage) -> None:

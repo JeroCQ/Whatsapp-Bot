@@ -12,6 +12,7 @@ from crm_service.models import (
     Agent,
     AuditEvent,
     BotCommand,
+    CustomerAnalysis,
     CRMConversation,
     NotificationEvent,
     PushDelivery,
@@ -24,8 +25,9 @@ from crm_service.sync import lock_id
 
 
 class CommandCoordinator:
-    def __init__(self, sessions: sessionmaker[Session], gateway: BotGateway):
+    def __init__(self, sessions: sessionmaker[Session], gateway: BotGateway, *, analyze_return: bool = False):
         self.sessions, self.gateway = sessions, gateway
+        self.analyze_return = analyze_return
 
     def _row(self, session: Session, command_id: str) -> BotCommand | None:
         return session.scalar(
@@ -130,6 +132,9 @@ class CommandCoordinator:
                 if control.get("phase") != "ai" or control.get("is_paused") is not False:
                     raise BotGatewayError("ai_return_not_confirmed", 502)
                 self._release_projection(session, row, "return", control["version"])
+                if self.analyze_return:
+                    session.add(CustomerAnalysis(business_id=row.business_id, command_id=row.command_id,
+                                                 phone_number=row.phone_number, released_at=now()))
             row.status, row.response, row.http_status = str(result["status"]), result, http_status
             row.updated_at = now()
             self._audit(session, row, "bot.command_result", row.status)

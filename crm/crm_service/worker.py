@@ -7,6 +7,7 @@ import time
 from concurrent.futures import Future, ThreadPoolExecutor
 
 from crm_service.db import database
+from crm_service.customer_analysis import consume_analysis
 from crm_service.notifications import dispatch
 from crm_service.settings import Settings
 from crm_service.sync import Synchronizer
@@ -36,6 +37,9 @@ def main() -> None:
     # prevents overlapping push batches in that process.
     push_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="crm-push")
     push_run: Future[int] | None = None
+    analysis_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="crm-analysis") if settings.customer_insights_businesses else None
+    analysis_run: Future[None] | None = None
+    next_analysis = 0.0
     sync_pool = ThreadPoolExecutor(max_workers=max(1, min(4, len(settings.businesses))))
     sync_runs: dict[str, Future[dict[str, str]]] = {}
     next_sync: dict[str, float] = {}
@@ -55,7 +59,7 @@ def main() -> None:
                     pause_state = worker_pause_state()
                     next_gate_check = time.monotonic() + 3
                 if pause_state and pause_state.get("frozen"):
-                    pending = [*sync_runs.values(), queued_run, push_run]
+                    pending = [*sync_runs.values(), queued_run, push_run, analysis_run]
                     if all(job is None or job.done() for job in pending):
                         epoch = pause_state.get("epoch", "")
                         if epoch and epoch != acknowledged:
@@ -100,12 +104,23 @@ def main() -> None:
                         except Exception as error:
                             logging.error("push_dispatch_failed code=%s", type(error).__name__)
                     push_run = push_pool.submit(dispatch, settings, sessions)
+                if (analysis_pool is not None and time.monotonic() >= next_analysis
+                        and (analysis_run is None or analysis_run.done())):
+                    if analysis_run is not None:
+                        try:
+                            analysis_run.result()
+                        except Exception as error:
+                            logging.error("customer_analysis_failed code=%s", type(error).__name__)
+                    analysis_run = analysis_pool.submit(consume_analysis, settings, sessions, args.business)
+                    next_analysis = time.monotonic() + max(5, settings.sync_interval)
             except Exception as error:
                 logging.error("worker_iteration_failed code=%s", type(error).__name__)
             stop.wait(min(1, settings.sync_interval))
     finally:
         sync_pool.shutdown(wait=True)
         push_pool.shutdown(wait=True)
+        if analysis_pool is not None:
+            analysis_pool.shutdown(wait=True)
         engine.dispose()
 
 

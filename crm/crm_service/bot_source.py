@@ -1,6 +1,7 @@
 """Supported real-source mode: authenticated read-only bot export, no Supabase key."""
 
 import json
+from datetime import datetime
 from typing import Any
 from urllib.parse import quote
 
@@ -17,6 +18,7 @@ class ReadOnlyBotClient(httpx.Client):
         self.allowed_paths = {
             f"/internal/crm/v1/businesses/{quote(business_id, safe='')}/source/{table}" for table in FIELDS
         }
+        self.allowed_paths.add(f"/internal/crm/v1/businesses/{quote(business_id, safe='')}/source/return-analysis")
         super().__init__(base_url=origin, **kwargs)
 
     def send(self, request: httpx.Request, **kwargs: Any) -> httpx.Response:
@@ -65,6 +67,24 @@ class BotSourceAdapter:
 
     def conversation(self, table: str, phone: str) -> list[dict[str, Any]]:
         return self.page(table, after=None, limit=1, phone_number=phone)
+
+    def return_analysis(self, phone: str, cutoff: datetime) -> dict[str, Any]:
+        path = f"/internal/crm/v1/businesses/{quote(self.business.id, safe='')}/source/return-analysis"
+        try:
+            response = self.client.get(path, params={"phone": phone, "cutoff": cutoff.isoformat()},
+                                       timeout=httpx.Timeout(150, connect=5))
+        except httpx.HTTPError:
+            raise SourceFailure("customer_analysis_network_error") from None
+        if response.status_code != 200:
+            raise SourceFailure(f"customer_analysis_http_{response.status_code}")
+        try:
+            data = response.json()
+        except ValueError:
+            raise SourceFailure("invalid_customer_analysis_response") from None
+        if (not isinstance(data, dict) or data.get("business_id") != self.business.id or
+                data.get("phone_number") != phone or not isinstance(data.get("result"), dict)):
+            raise SourceFailure("invalid_customer_analysis_scope")
+        return data["result"]
 
     def page(
         self, table: str, *, after: str | int | None, limit: int, phone_number: str | None = None

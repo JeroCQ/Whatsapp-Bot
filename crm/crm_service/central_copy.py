@@ -30,11 +30,12 @@ CRM_CONFIG_TABLES = {
     "crm_usage_turns", "crm_model_usage_attempts", "crm_support_minutes",
 }
 CRM_PILOT_TABLES = {"crm_pilot_publications", "crm_pilot_switch"}
+CRM_INSIGHT_TABLES = {"customer_return_analyses", "promotion_permissions", "promotion_permission_events"}
 BOT_REFS = {"memos": "hhzivtplonffzolfdaho", "velvet": "fhuskvtwrmuotpenmrhu"}
 CRM_SCHEMA = "chatty_crm"
 STAGING = "chatty_migration_stage"
 RUNS = sql.Identifier("public", "chatty_migration_runs")
-CRM_REVISIONS = {"0004_delivery_receipts", "0005_central_config_usage", "0006_scoped_pilot"}
+CRM_REVISIONS = {"0004_delivery_receipts", "0005_central_config_usage", "0006_scoped_pilot", "0007_customer_insights"}
 
 
 def ident(*parts):
@@ -101,7 +102,9 @@ def reviewed_tables(source, dataset):
         SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename <> 'alembic_version'
     """)}
     expected = set(CRM_TABLES)
-    if revision[0][0] != "0006_scoped_pilot":
+    if revision[0][0] != "0007_customer_insights":
+        expected -= CRM_INSIGHT_TABLES
+    if revision[0][0] in {"0004_delivery_receipts", "0005_central_config_usage"}:
         expected -= CRM_PILOT_TABLES
     if revision[0][0] == "0004_delivery_receipts":
         expected -= CRM_CONFIG_TABLES

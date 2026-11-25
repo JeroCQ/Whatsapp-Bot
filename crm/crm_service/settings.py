@@ -48,6 +48,7 @@ class Business:
     bot_api_enabled: bool = False
     # Existing dashboard limit from the central snapshot, plus multipart framing.
     management_upload_bytes: int = 101 * 1024**2
+    channel_id: str = ""
 
     def deep_link(self, conversation_id: str | int | None) -> str | None:
         if not self.chatwoot_url or not self.chatwoot_account or not conversation_id:
@@ -65,6 +66,8 @@ class Settings:
     businesses: dict[str, Business]
     notifications_enabled: bool = False
     usage_collection_enabled: bool = False
+    customer_insights_businesses: tuple[str, ...] = ()
+    promotion_consent_businesses: tuple[str, ...] = ()
     vapid_private_key: str = field(default="", repr=False)
     vapid_subject: str = ""
     push_hosts: tuple[str, ...] = (
@@ -206,6 +209,7 @@ class Settings:
                 operations,
                 source_enabled,
                 max(0, catalog_limit_mb) * 1024**2 + 1024**2,
+                channel_id=str(runtime.get(name, {}).get("channel_id") or ""),
             )
         bot_origins = [
             b.bot_api_url
@@ -239,6 +243,14 @@ class Settings:
             businesses=businesses,
             notifications_enabled=flag("NOTIFICATIONS_ENABLED"),
             usage_collection_enabled=flag("CRM_USAGE_COLLECTION_ENABLED"),
+            customer_insights_businesses=tuple(
+                name.strip() for name in os.environ.get("CRM_CUSTOMER_INSIGHTS_BUSINESSES", "").split(",")
+                if name.strip() in businesses
+            ),
+            promotion_consent_businesses=tuple(
+                name.strip() for name in os.environ.get("CRM_PROMOTION_CONSENT_BUSINESSES", "").split(",")
+                if name.strip() in businesses and businesses[name.strip()].channel_id.isdigit()
+            ),
             vapid_private_key=os.environ.get("VAPID_PRIVATE_KEY", "").strip(),
             vapid_subject=os.environ.get("VAPID_SUBJECT", "").strip(),
             sync_interval=int(os.environ.get("SYNC_INTERVAL_SECONDS", "5")),

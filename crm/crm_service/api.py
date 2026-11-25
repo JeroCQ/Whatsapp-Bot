@@ -272,7 +272,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             with engine.connect() as conn:
                 version = conn.scalar(text("SELECT version_num FROM alembic_version"))
-                if version not in {"0004_delivery_receipts", "0005_central_config_usage", "0006_scoped_pilot"}:
+                if version not in {"0004_delivery_receipts", "0005_central_config_usage", "0006_scoped_pilot", "0007_customer_insights"}:
+                    raise HTTPException(503, "CRM migrations required")
+                if (settings.promotion_consent_businesses or settings.customer_insights_businesses) and version != "0007_customer_insights":
                     raise HTTPException(503, "CRM migrations required")
         except SQLAlchemyError:
             raise HTTPException(503, "CRM database unavailable or migrations required") from None
@@ -371,7 +373,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             replay = bool(known and known.profile == principal.profile and known.phone_number == phone_number and known.operation == operation)
         gateway = bot_gateway(principal, business_id, None if replay else phone_number)
         try:
-            result, status = CommandCoordinator(sessions, gateway).execute(
+            result, status = CommandCoordinator(sessions, gateway,
+                analyze_return=business_id in settings.customer_insights_businesses).execute(
                 principal, phone_number, operation, payload
             )
             return JSONResponse(content=result, status_code=status)
@@ -591,7 +594,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             if not command_id or len(command_id) > 100 or any(c in "/\\" for c in command_id):
                 raise HTTPException(422, "Invalid command identity")
-            result, status = CommandCoordinator(sessions, gateway).status(principal, phone_number, command_id)
+            result, status = CommandCoordinator(sessions, gateway,
+                analyze_return=business_id in settings.customer_insights_businesses).status(principal, phone_number, command_id)
             return JSONResponse(content=result, status_code=status)
         except BotGatewayError as error:
             raise HTTPException(error.status_code, error.code) from None
@@ -815,8 +819,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if len(rows) > limit
             else None
         )
+        extras = {}
+        if business_id in settings.promotion_consent_businesses:
+            from crm_service.models import PromotionPermission
+            from crm_service.promotion_permissions import QUESTION
+            sender_id = settings.businesses[business_id].channel_id
+            permission = session.get(PromotionPermission, (business_id, sender_id, phone_number))
+            extras["promotion_permission"] = {
+                "status": permission.status if permission else "unknown", "question": QUESTION,
+            }
+        if business_id in settings.customer_insights_businesses:
+            from crm_service.customer_analysis import latest_analysis
+            extras["customer_analysis"] = latest_analysis(session, business_id, phone_number)
         return {
             **display(session, principal, source, crm),
+            **extras,
             "source_state": source.state,
             "customer": source.customer,
             "handoff_delivery": source.handoff,
