@@ -21,7 +21,7 @@ class BusinessStorage:
         if self.prefix and name not in {
             "customers", "conversation_states", "message_logs", "processed_webhook_events",
             "dashboard_admins", "catalog_assets", "handoff_deliveries", "crm_control_commands",
-            "crm_send_attempts", "crm_media_assets",
+            "crm_send_attempts", "crm_media_assets", "orders",
         }:
             raise ValueError("Unknown central business table")
         return self.client.table(self.prefix + name)
@@ -241,6 +241,40 @@ def save_message_log(phone_number: str, role: str, content: str, *, metadata=Non
             supabase.table("message_logs").insert(row).execute()
     except Exception as e:
         print(f"Error guardando log de mensaje: {e}")
+
+
+def promotion_question_exists(phone_number, provider_id):
+    from promotion_permission import QUESTION
+
+    rows = supabase.table("message_logs").select("id").eq("phone_number", phone_number).eq(
+        "role", "asesor").eq("content", QUESTION).eq("metadata->>provider_message_id", provider_id).limit(1).execute()
+    return bool(rows.data)
+
+
+def promotion_question_available(phone_number):
+    from promotion_permission import QUESTION
+
+    asked = supabase.table("crm_send_attempts").select("attempt_id").eq("business_id", config.BUSINESS_ID).eq(
+        "phone_number", phone_number).eq("request->payload->>text", QUESTION).in_(
+        "status", ["sending", "unknown", "accepted", "delivered", "read"]).limit(1).execute()
+    answered = supabase.table("message_logs").select("id").eq("phone_number", phone_number).eq(
+        "metadata->>source", "promotion_permission").limit(1).execute()
+    return not asked.data and not answered.data
+
+
+def store_promotion_answer(phone_number, inbound_id, received_at, answer, question_id, evidence):
+    from promotion_permission import VERSION
+
+    # Unlike the best-effort conversational log, a failed consent write must
+    # fail the webhook so Meta can redeliver the same signed event.
+    supabase.table("message_logs").upsert({
+        "phone_number": phone_number, "role": "system", "content": evidence[:160],
+        "event_key": f"promotion:{config.WA_PHONE_NUMBER_ID}:{inbound_id}",
+        "metadata": {"business_id": config.BUSINESS_ID, "channel_id": str(config.WA_PHONE_NUMBER_ID),
+                     "source": "promotion_permission", "source_event_id": inbound_id,
+                     "received_at": received_at.isoformat(), "permission_status": answer,
+                     "permission_question_id": question_id, "permission_version": VERSION},
+    }, on_conflict="event_key", ignore_duplicates=True).execute()
 
 
 def unanswered_inbound_message_ids(phone_number, current_ids=()):

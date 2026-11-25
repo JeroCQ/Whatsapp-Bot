@@ -79,6 +79,8 @@ class Settings:
     # Omitted means the exact legacy Chatwoot/bot-only decision. CRM is opt-in.
     HUMAN_SUPPORT_PROVIDER = os.getenv("HUMAN_SUPPORT_PROVIDER", "").strip().lower()
     CRM_CONTROL_ENABLED = parse_boolean_env("CRM_CONTROL_ENABLED", default=False)
+    CRM_PROMOTION_CONSENT_ENABLED = parse_boolean_env("CRM_PROMOTION_CONSENT_ENABLED", default=False)
+    CRM_CUSTOMER_INSIGHTS_ENABLED = parse_boolean_env("CRM_CUSTOMER_INSIGHTS_ENABLED", default=False)
     CRM_BOT_CONTROL_SECRET = os.getenv("CRM_BOT_CONTROL_SECRET", "")
     CRM_SOURCE_READ_ENABLED = parse_boolean_env("CRM_SOURCE_READ_ENABLED", default=False)
     CRM_SOURCE_READ_SECRET = os.getenv("CRM_SOURCE_READ_SECRET", "")

@@ -288,6 +288,10 @@ def create_router(
         authorize(request, business_id)
         if not valid_whatsapp_sender(phone):
             raise HTTPException(422, "Invalid WhatsApp recipient")
+        from promotion_permission import QUESTION
+        permission_question = body.text == QUESTION and not body.attachment_id
+        if permission_question and not getattr(config, "CRM_PROMOTION_CONSENT_ENABLED", False):
+            raise HTTPException(409, "promotion_consent_not_enabled")
         store = store_factory()
         attachment = None
         service = None
@@ -340,6 +344,10 @@ def create_router(
                 for identity in (member["profile"], *member.get("aliases", []))}:
             raise HTTPException(403, "pilot_operator_not_assigned")
         with phone_lock(phone), processing_scope(context):
+            if permission_question:
+                from database import promotion_question_available
+                if not promotion_question_available(phone):
+                    raise HTTPException(409, "promotion_permission_already_requested_or_recorded")
             snapshot = call(store, "get_control", phone)
             value = begin(snapshot.get("inbound_message_ids") or [])
             if value.get("status") != "reserved":

@@ -252,6 +252,11 @@ def send_whatsapp_message(to_number: str, text: str):
         "type": "text",
         "text": {"preview_url": False, "body": text},
     }
+    if getattr(config, "CRM_PROMOTION_CONSENT_ENABLED", False) and current_trace().get("source") == "human":
+        from promotion_permission import QUESTION, buttons
+        if text == QUESTION and current_trace().get("crm_reserved_attempt"):
+            payload.pop("text")
+            payload.update(type="interactive", interactive=buttons())
     try:
         with automatic_send_gate(config, get_control_store, to_number, payload):
             if uses_crm(config):
@@ -2151,6 +2156,20 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                         if uses_crm(config):
                             get_or_create_customer_state(sender_phone, sender_name or "Cliente")
                             control_kwargs["crm_control_version"] = get_control_store().get_control(sender_phone)["version"]
+                            if received_at and isinstance(event_id, str) and 0 < len(event_id) <= 300:
+                                from database import promotion_question_available, promotion_question_exists, store_promotion_answer
+                                from promotion_permission import choice_from_message
+                                choice = choice_from_message(message)
+                                if choice and (message_type == "interactive" or choice[1]
+                                               or getattr(config, "CRM_PROMOTION_CONSENT_ENABLED", False)
+                                               or (choice[0] == "revoked" and not promotion_question_available(sender_phone))):
+                                    answer, question_id = choice
+                                    if message_type == "interactive" or not question_id or promotion_question_exists(sender_phone, question_id):
+                                        excerpt = (message.get("text") or {}).get("body") if message_type == "text" else (
+                                            "Sí, quiero" if answer == "granted" else "No, gracias")
+                                        store_promotion_answer(sender_phone, event_id, received_at, answer, question_id, excerpt)
+                                        accepted += 1
+                                        continue
                         if message_type == "text":
                             body = message.get("text", {}).get("body")
                             _dispatch_before_ack(
