@@ -1371,14 +1371,15 @@ def _send_crm_handoff_notice(phone: str, text: str) -> bool:
     return True
 
 
-def process_whatsapp_message(sender_phone: str, sender_name: str, message_body: str, is_image: bool = False, media_id: str = None, is_audio: bool = False, audio_media_id: str = None, media_type: str = None, mime_type: str = None, filename: str = None, event_id: str = None, customer_message_received_at=None, crm_control_version=None, business_context=None):
+def process_whatsapp_message(sender_phone: str, sender_name: str, message_body: str, is_image: bool = False, media_id: str = None, is_audio: bool = False, audio_media_id: str = None, media_type: str = None, mime_type: str = None, filename: str = None, event_id: str = None, customer_message_received_at=None, crm_control_version=None, business_context=None, reply_to_message_id=None):
     """Procesador que enruta entre el Bot y Chatwoot basado en el estado."""
     started_at = time.perf_counter()
     received = parse_timestamp(customer_message_received_at)
     expiry = (received + timedelta(hours=24)).isoformat() if received else ""
     with message_trace(source="bot_response", source_event_id=event_id or "",
           inbound_message_ids=[event_id] if event_id else [], received_at=received.isoformat() if received else "",
-          meta_window_expires_at=expiry, job_id=_current_job_id(), provider_message_id=""):
+          meta_window_expires_at=expiry, job_id=_current_job_id(), provider_message_id="",
+          reply_to_message_id=reply_to_message_id):
         try:
             with phone_lock(sender_phone), processing_scope(business_context):
                 try:
@@ -2041,6 +2042,7 @@ def process_claimed_whatsapp_event(
     phone_number_id: str = None,
     customer_message_received_at=None,
     crm_control_version=None,
+    reply_to_message_id=None,
 ):
     """Claim a Meta event off the request path, then perform the expensive work."""
     sender_phone = args[0] if args else None
@@ -2064,6 +2066,8 @@ def process_claimed_whatsapp_event(
     received_kwargs = {"customer_message_received_at": customer_message_received_at} if customer_message_received_at is not None else {}
     if uses_crm(config):
         received_kwargs["crm_control_version"] = crm_control_version if crm_control_version is not None else -1
+        if reply_to_message_id:
+            received_kwargs["reply_to_message_id"] = reply_to_message_id
     process_whatsapp_message(*args, event_id=event_id, business_context=business_context, **received_kwargs)
 
 
@@ -2118,6 +2122,16 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                             if receipt.get("status") not in {"sent", "delivered", "read", "failed"}:
                                 continue
                             status = "accepted" if receipt["status"] == "sent" else receipt["status"]
+                            from black_week import VERSION as BLACK_WEEK_VERSION, campaign_summary, message_id
+                            if (status != "failed" and receipt.get("biz_opaque_callback_data") == f"{BLACK_WEEK_VERSION}:{config.BUSINESS_ID}"
+                                    and campaign_summary(config.BUSINESS_ID, config.WA_PHONE_NUMBER_ID)):
+                                recipient = receipt.get("recipient_id") or receipt.get("recipient_user_id")
+                                seen_at = parse_timestamp(receipt.get("timestamp"))
+                                if valid_whatsapp_sender(recipient) and message_id(receipt.get("id")) and seen_at:
+                                    from database import store_campaign_exposure
+                                    get_or_create_customer_state(recipient)
+                                    store_campaign_exposure(recipient, receipt["id"], seen_at, "tagged_status",
+                                                            sent_at=seen_at if status == "accepted" else None)
                             try:
                                 get_control_store().ack_provider_receipt(
                                     str(receipt.get("id") or ""), status,
@@ -2157,12 +2171,13 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                         if uses_crm(config):
                             get_or_create_customer_state(sender_phone, sender_name or "Cliente")
                             if received_at and isinstance(event_id, str) and 0 < len(event_id) <= 300:
-                                from black_week import ORDER_MESSAGE, VERSION as BLACK_WEEK_VERSION, template_reply
-                                from database import promotion_question_available, promotion_question_exists, store_promotion_answer
+                                from black_week import ORDER_MESSAGE, VERSION as BLACK_WEEK_VERSION, message_reference, template_reply
+                                from database import promotion_question_available, promotion_question_exists, store_campaign_exposure, store_promotion_answer
                                 from promotion_permission import choice_from_message
                                 template_choice = template_reply(message, config.BUSINESS_ID, config.WA_PHONE_NUMBER_ID)
                                 if template_choice:
                                     action, original_message_id, label = template_choice
+                                    store_campaign_exposure(sender_phone, original_message_id, received_at, "template_button")
                                     if action == "order":
                                         order_reply = ORDER_MESSAGE
                                     else:
@@ -2170,6 +2185,9 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                                                                original_message_id, label, version=BLACK_WEEK_VERSION)
                                         accepted += 1
                                         continue
+                                reply_to = message_reference(message)
+                                if reply_to:
+                                    control_kwargs["reply_to_message_id"] = reply_to
                                 choice = choice_from_message(message)
                                 if choice and (message_type == "interactive" or choice[1]
                                                or getattr(config, "CRM_PROMOTION_CONSENT_ENABLED", False)

@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import hashlib
 import uuid
 
 from supabase import create_client
@@ -275,6 +276,26 @@ def store_promotion_answer(phone_number, inbound_id, received_at, answer, questi
                      "received_at": received_at.isoformat(), "permission_status": answer,
                      "permission_question_id": question_id, "permission_version": version or VERSION},
     }, on_conflict="event_key", ignore_duplicates=True).execute()
+
+
+def store_campaign_exposure(phone_number, provider_id, observed_at, evidence, *, sent_at=None):
+    from black_week import CAMPAIGN_SOURCE, VERSION, campaign_summary, message_id
+
+    channel_id = str(config.WA_PHONE_NUMBER_ID)
+    summary = campaign_summary(config.BUSINESS_ID, channel_id)
+    if summary is None or (not message_id(provider_id) and not (provider_id is None and evidence == "reported_send" and sent_at)):
+        raise ValueError("Invalid Black Week sender or message identity")
+    identity = provider_id or "report:" + hashlib.sha256(f"{phone_number}:{sent_at.isoformat()}".encode()).hexdigest()
+    row = {
+        "phone_number": phone_number, "role": "system", "content": summary,
+        "event_key": f"campaign:{VERSION}:{channel_id}:{identity}",
+        "metadata": {"source": CAMPAIGN_SOURCE, "campaign_version": VERSION, "campaign_evidence": evidence,
+                     "business_id": config.BUSINESS_ID, "channel_id": channel_id,
+                     "provider_message_id": provider_id, "observed_at": observed_at.isoformat()},
+    }
+    if sent_at is not None:
+        row["created_at"] = sent_at.isoformat()
+    supabase.table("message_logs").upsert(row, on_conflict="event_key", ignore_duplicates=True).execute()
 
 
 def unanswered_inbound_message_ids(phone_number, current_ids=()):

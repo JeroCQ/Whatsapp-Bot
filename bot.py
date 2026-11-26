@@ -37,7 +37,7 @@ from webhook_utils import is_simple_greeting
 from commercial_intents import b2b_actions, catalog_may_suppress_handoff, human_handoff_reason, unregistered_presentation_reason
 from follow_up_policy import load_business_policy
 from human_support import human_handoffs_enabled
-from observability import operational_event
+from observability import current_trace, operational_event
 from database import (
     ensure_bot_only_state,
     get_or_create_customer_state,
@@ -329,7 +329,8 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
     colombia_now = datetime.now(ZoneInfo("America/Bogota"))
     colombia_time = colombia_now.strftime("%A %Y-%m-%d, %H:%M")
     from black_week import order_context
-    promotion = order_context(config.BUSINESS_ID, getattr(config, "WA_PHONE_NUMBER_ID", ""), text, history, colombia_now)
+    promotion = order_context(config.BUSINESS_ID, getattr(config, "WA_PHONE_NUMBER_ID", ""), text, history, colombia_now,
+                              reply_to=current_trace().get("reply_to_message_id"))
     if promotion:
         system_instruction_with_files += "\n\n" + promotion
     escalation_guidance = (
