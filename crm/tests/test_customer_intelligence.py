@@ -114,3 +114,34 @@ def test_worker_persists_the_report_once_for_the_original_business(settings, ses
         assert report["status"] == "done" and report["summary"] == "Consulta resuelta"
         assert report["confirmed_order_count"] is None
         assert latest_analysis(session, "memos", PHONE) is None
+
+
+def test_black_week_velvet_opt_out_preserves_tanaka_permission(settings, sessions):
+    from crm_service.promotion_permissions import BLACK_WEEK_CHOICES, BLACK_WEEK_SENDERS, BLACK_WEEK_VERSION
+
+    sync = Synchronizer(settings, sessions)
+
+    def fact(source_id, business, status, minutes, *, sender=None):
+        instant = AT + timedelta(minutes=minutes)
+        return message(source_id, "system", BLACK_WEEK_CHOICES[status], {
+            "source": "promotion_permission", "channel_id": sender or BLACK_WEEK_SENDERS[business],
+            "source_event_id": f"wamid.blackweek.{source_id}", "permission_question_id": "wamid.external.campaign",
+            "permission_status": status, "permission_version": BLACK_WEEK_VERSION, "received_at": instant.isoformat(),
+        }, instant)
+
+    with sessions.begin() as session:
+        sync.upsert_message(session, "tanaka", fact(1, "tanaka", "granted", 1))
+        sync.upsert_message(session, "velvet", fact(2, "velvet", "granted", 1))
+        stop = fact(3, "velvet", "revoked", 4)
+        sync.upsert_message(session, "velvet", stop)
+        sync.upsert_message(session, "velvet", stop)
+        sync.upsert_message(session, "velvet", fact(4, "velvet", "granted", 3))
+        sync.upsert_message(session, "tanaka", fact(5, "tanaka", "revoked", 5, sender=BLACK_WEEK_SENDERS["velvet"]))
+
+    with sessions.begin() as session:
+        assert session.get(PromotionPermission, ("velvet", BLACK_WEEK_SENDERS["velvet"], PHONE)).status == "revoked"
+        assert session.get(PromotionPermission, ("tanaka", BLACK_WEEK_SENDERS["tanaka"], PHONE)).status == "granted"
+        assert session.scalar(select(func.count()).select_from(PromotionPermissionEvent)) == 4
+        event = session.get(PromotionPermissionEvent, ("velvet", BLACK_WEEK_SENDERS["velvet"], "wamid.blackweek.3"))
+        assert event.validated and event.question_id == "wamid.external.campaign"
+        assert event.evidence == BLACK_WEEK_CHOICES["revoked"]

@@ -48,3 +48,29 @@ control de la conversación.
    comprueba los dos botones y la baja, y confirma una devolución a IA.
    Los negocios fuera de las listas pueden seguir operando con su circuito
    habitual.
+
+## Respuestas a Black Week
+
+Tanaka y Mochis by Velvet pueden lanzar las plantillas desde su plataforma de
+envío habitual a quienes ya autorizaron promociones. Chatty recibe los botones
+por el webhook existente. Los reconoce por el número remitente registrado y el
+texto exacto del botón en un evento firmado de tipo `button`. Guarda también
+los identificadores de la respuesta y del mensaje original. Meta no incluye el
+ID de plantilla en este evento, por lo que el registro identifica el mensaje
+original y la versión de la pregunta de Black Week.
+
+- **Quiero hacer mi pedido** entra a la cola habitual, con el control del asesor
+  y el catálogo del negocio. La oferta se aplica del 27 de noviembre al 5 de
+  diciembre de 2026 hasta las 6:00 p. m. de Colombia.
+- **Quiero promociones exclusivas** registra autorización para promociones
+  futuras del remitente.
+- **Prefiero perder las promociones** registra la baja del remitente. La
+  plataforma externa de envío debe aplicar esa exclusión a sus pendientes.
+
+Para estos botones, sigue el orden de aplicación anterior con la versión de CRM
+que incluye la proyección de Black Week. Una vez aplicada la revisión 0007
+existente, actualiza los servicios web y consumidores de Tanaka y Velvet con
+el cambio del bot. Comprueba un
+callback real por remitente con un número interno autorizado antes de lanzar.
+El webhook de la campaña y el motor de pedidos conservan la firma, el destino,
+el control humano y la deduplicación existentes.

@@ -13,6 +13,9 @@ QUESTION = (
     "Puedes darte de baja cuando quieras escribiendo BAJA PROMOCIONES."
 )
 VERSION = "promotions-v1"
+BLACK_WEEK_VERSION = "black-week-2026-v1"
+BLACK_WEEK_SENDERS = {"tanaka": "1279018015292550", "velvet": "1330184450175963"}
+BLACK_WEEK_CHOICES = {"granted": "Quiero promociones exclusivas", "revoked": "Prefiero perder las promociones"}
 
 
 def apply_event(session, event, question):
@@ -46,6 +49,11 @@ def find_question(session, business, phone, provider_id):
 
 
 def resolve_event(session, event):
+    if event.version == BLACK_WEEK_VERSION:
+        # The signed reply references the original external send. Because it
+        # originated outside Chatty, there is no local outbound command to find.
+        apply_event(session, event, None)
+        return
     question = None
     if event.question_id:
         question = find_question(session, event.business_id, event.phone_number, event.question_id)
@@ -60,20 +68,25 @@ def project_permission_message(session, message):
         choice = meta.get("permission_status")
         sender_id, inbound_id = meta.get("channel_id"), meta.get("source_event_id")
         question_id = meta.get("permission_question_id")
+        version = meta.get("permission_version")
         event_at = timestamp(meta.get("received_at"))
-        if (meta.get("permission_version") != VERSION or not isinstance(choice, str)
+        if (version not in (VERSION, BLACK_WEEK_VERSION) or not isinstance(choice, str)
                 or choice not in {"granted", "denied", "revoked"}
                 or not isinstance(sender_id, str) or not sender_id.isdigit() or len(sender_id) > 63
                 or not isinstance(inbound_id, str) or not 0 < len(inbound_id) <= 300 or event_at == EPOCH
                 or (question_id is not None and (not isinstance(question_id, str) or not 0 < len(question_id) <= 300))
                 or (choice == "denied" and question_id is None)):
             return
+        if version == BLACK_WEEK_VERSION and (
+                sender_id != BLACK_WEEK_SENDERS.get(message.business_id) or question_id is None
+                or question_id == inbound_id or message.content != BLACK_WEEK_CHOICES.get(choice)):
+            return
         event = session.get(PromotionPermissionEvent, (message.business_id, sender_id, inbound_id))
         if event is None:
             event = PromotionPermissionEvent(
                 business_id=message.business_id, sender_id=sender_id, inbound_id=inbound_id,
                 phone_number=message.phone_number, status=choice, question_id=question_id,
-                version=VERSION, event_at=event_at, recorded_at=message.created_at,
+                version=version, event_at=event_at, recorded_at=message.created_at,
                 evidence=message.content[:160], validated=False,
             )
             session.add(event)
