@@ -76,10 +76,15 @@ El webhook de la campaña y el motor de pedidos conservan la firma, el destino,
 el control humano y la deduplicación existentes.
 
 En el entorno central compartido con una API que requiere la revisión 0006,
-instala únicamente las dos tablas de permisos mediante la DDL que genera
-`create_permission_tables()` en la revisión 0007. Conserva `alembic_version`
-y activa solo el worker del piloto. El upgrade completo posterior reconoce
+usa `python -m crm_service.central_migrate --promotion-permissions` en el
+pre-deploy del API del piloto. Usa el rol propietario configurado para instalar
+únicamente las dos tablas de permisos. Conserva `alembic_version` y activa
+solo el worker del piloto cuando esté listo. El upgrade completo posterior reconoce
 las tablas existentes y agrega el análisis cuando ambos servicios son compatibles.
+Si el bot ya recibió respuestas antes de habilitar la proyección, usa en el
+worker central `python -m crm_service.replay_black_week_permissions tanaka` y
+el mismo comando con `velvet` una vez creadas las tablas. Reaplica solo las
+respuestas firmadas que ya llegaron a la fuente del CRM, sin repetir envíos.
 
 Los botones verificados guardan un resumen de la plantilla externa en el
 historial, con el WAMID del mensaje original. También se pueden registrar los

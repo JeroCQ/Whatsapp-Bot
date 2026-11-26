@@ -5,6 +5,9 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import NullPool
 
@@ -21,7 +24,7 @@ def connection_for_migration():
     return connection
 
 
-def migrate(*, customer_insights=False):
+def migrate(*, customer_insights=False, promotion_permissions=False):
     engine = create_engine("postgresql+psycopg://", hide_parameters=True,
                            creator=connection_for_migration, poolclass=NullPool)
     try:
@@ -47,6 +50,12 @@ def migrate(*, customer_insights=False):
             config.attributes.update({"central_connection": connection, "central_schema": CRM_SCHEMA})
             target = INSIGHTS_REVISION if customer_insights or installed == INSIGHTS_REVISION else BASE_REVISION
             command.upgrade(config, target)
+            if promotion_permissions and target == BASE_REVISION:
+                # The commercial API still accepts 0006. The pilot writer can
+                # create only the additive evidence tables with its usual owner.
+                revision = ScriptDirectory.from_config(config).get_revision(INSIGHTS_REVISION)
+                with Operations.context(MigrationContext.configure(connection)):
+                    revision.module.create_permission_tables()
             actual = connection.execute(text("SELECT version_num FROM chatty_crm.alembic_version")).scalar_one()
             if actual != target:
                 raise CopyError("Alembic no confirmó la revisión esperada.")
@@ -57,9 +66,10 @@ def migrate(*, customer_insights=False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--customer-insights", action="store_true")
+    parser.add_argument("--promotion-permissions", action="store_true")
     args = parser.parse_args()
     try:
-        migrate(customer_insights=args.customer_insights)
+        migrate(customer_insights=args.customer_insights, promotion_permissions=args.promotion_permissions)
     except CopyError as error:
         raise SystemExit(str(error)) from None
     except Exception as error:
