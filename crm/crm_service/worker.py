@@ -9,6 +9,8 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from crm_service.db import database
 from crm_service.customer_analysis import consume_analysis
 from crm_service.notifications import dispatch
+from crm_service.promotion_permissions import BLACK_WEEK_SENDERS
+from crm_service.replay_black_week_permissions import replay
 from crm_service.settings import Settings
 from crm_service.sync import Synchronizer
 from crm_service.sync_jobs import consume_one
@@ -32,6 +34,20 @@ def main() -> None:
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     signal.signal(signal.SIGINT, lambda *_: stop.set())
     worker = Synchronizer(settings, sessions)
+    pending_permission_replays = set(BLACK_WEEK_SENDERS) & set(settings.businesses) if settings.database_schema == "chatty_crm" else set()
+
+    def sync_business(business_id):
+        if business_id in pending_permission_replays:
+            try:
+                reviewed = replay(sessions, business_id, skip_busy=True)
+                if reviewed is not None:
+                    pending_permission_replays.discard(business_id)
+                    logging.info("Reviewed %d Black Week permission events for %s", reviewed, business_id)
+            except Exception as error:
+                logging.error("black_week_permission_replay_failed code=%s", type(error).__name__)
+                pending_permission_replays.discard(business_id)
+        return worker.run(business_id)
+
     # Push providers can stall independently from source reads. One local
     # background dispatcher keeps the existing sync process responsive and
     # prevents overlapping push batches in that process.
@@ -95,7 +111,7 @@ def main() -> None:
                     if business_id == queued_business:
                         next_sync[business_id] = time.monotonic() + settings.sync_interval
                     elif time.monotonic() >= next_sync.get(business_id, 0):
-                        sync_runs[business_id] = sync_pool.submit(worker.run, business_id)
+                        sync_runs[business_id] = sync_pool.submit(sync_business, business_id)
                         next_sync[business_id] = time.monotonic() + settings.sync_interval
                 if push_run is None or push_run.done():
                     if push_run is not None:

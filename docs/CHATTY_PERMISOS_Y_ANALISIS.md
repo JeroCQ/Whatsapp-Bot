@@ -81,10 +81,10 @@ pre-deploy del API del piloto. Usa el rol propietario configurado para instalar
 únicamente las dos tablas de permisos. Conserva `alembic_version` y activa
 solo el worker del piloto cuando esté listo. El upgrade completo posterior reconoce
 las tablas existentes y agrega el análisis cuando ambos servicios son compatibles.
-Si el bot ya recibió respuestas antes de habilitar la proyección, usa en el
-worker central `python -m crm_service.replay_black_week_permissions tanaka` y
-el mismo comando con `velvet` una vez creadas las tablas. Reaplica solo las
-respuestas firmadas que ya llegaron a la fuente del CRM, sin repetir envíos.
+El worker central recupera las respuestas firmadas que llegaron antes de la
+activación. Si el negocio está sincronizando, espera al siguiente ciclo de
+sincronización. La recuperación también se puede ejecutar con
+`python -m crm_service.replay_black_week_permissions tanaka` o con `velvet`.
 
 Los botones verificados guardan un resumen de la plantilla externa en el
 historial, con el WAMID del mensaje original. También se pueden registrar los

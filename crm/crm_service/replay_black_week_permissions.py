@@ -13,12 +13,16 @@ from crm_service.sync import lock_id
 PAGE_SIZE = 100
 
 
-def replay(sessions, business):
+def replay(sessions, business, *, skip_busy=False):
     last_id, processed = 0, 0
     while True:
         with sessions.begin() as session:
-            session.execute(text("SET LOCAL lock_timeout = '2s'"))
-            session.execute(text("SELECT pg_advisory_xact_lock(:id)"), {"id": lock_id(business)})
+            if skip_busy:
+                if not session.scalar(text("SELECT pg_try_advisory_xact_lock(:id)"), {"id": lock_id(business)}):
+                    return None
+            else:
+                session.execute(text("SET LOCAL lock_timeout = '2s'"))
+                session.execute(text("SELECT pg_advisory_xact_lock(:id)"), {"id": lock_id(business)})
             rows = list(session.scalars(select(SourceMessage).where(
                 SourceMessage.business_id == business,
                 SourceMessage.source_id > last_id,
