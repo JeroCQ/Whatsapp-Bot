@@ -9,7 +9,7 @@ branch_labels = None
 depends_on = None
 
 
-def upgrade():
+def create_permission_tables():
     op.create_table(
         "promotion_permissions",
         sa.Column("business_id", sa.String(63), primary_key=True),
@@ -19,9 +19,10 @@ def upgrade():
         sa.Column("event_at", sa.DateTime(timezone=True)),
         sa.Column("event_id", sa.String(300)),
         sa.CheckConstraint("status IN ('unknown','granted','denied','revoked')", name="ck_promotion_permission_status"),
+        if_not_exists=True,
     )
     op.create_index("ix_promotion_permission_audience", "promotion_permissions",
-                    ["business_id", "sender_id", "status", "phone_number"])
+                    ["business_id", "sender_id", "status", "phone_number"], if_not_exists=True)
     op.create_table(
         "promotion_permission_events",
         sa.Column("business_id", sa.String(63), primary_key=True),
@@ -36,11 +37,19 @@ def upgrade():
         sa.Column("evidence", sa.String(160), nullable=False),
         sa.Column("validated", sa.Boolean(), nullable=False),
         sa.CheckConstraint("status IN ('granted','denied','revoked')", name="ck_promotion_permission_event_status"),
+        if_not_exists=True,
     )
     op.create_index("ix_promotion_permission_questions", "promotion_permission_events",
-                    ["business_id", "phone_number", "question_id"], postgresql_where=sa.text("NOT validated"))
+                    ["business_id", "phone_number", "question_id"], postgresql_where=sa.text("NOT validated"),
+                    if_not_exists=True)
     op.create_index("ix_promotion_permission_contact_history", "promotion_permission_events",
-                    ["business_id", "sender_id", "phone_number", "event_at"])
+                    ["business_id", "sender_id", "phone_number", "event_at"], if_not_exists=True)
+
+
+def upgrade():
+    # These two tables can be installed additively on central 0006 while the
+    # commercial API still requires that revision. The full upgrade reuses them.
+    create_permission_tables()
     op.create_table(
         "customer_return_analyses",
         sa.Column("business_id", sa.String(63), primary_key=True),

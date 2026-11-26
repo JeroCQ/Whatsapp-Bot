@@ -74,3 +74,19 @@ el cambio del bot. Comprueba un
 callback real por remitente con un número interno autorizado antes de lanzar.
 El webhook de la campaña y el motor de pedidos conservan la firma, el destino,
 el control humano y la deduplicación existentes.
+
+En el entorno central compartido con una API que requiere la revisión 0006,
+instala únicamente las dos tablas de permisos mediante la DDL que genera
+`create_permission_tables()` en la revisión 0007. Conserva `alembic_version`
+y activa solo el worker del piloto. El upgrade completo posterior reconoce
+las tablas existentes y agrega el análisis cuando ambos servicios son compatibles.
+
+Los botones verificados guardan un resumen de la plantilla externa en el
+historial, con el WAMID del mensaje original. También se pueden registrar los
+envíos comprobados desde un CSV con columnas `recipient,sent_at,wamid` mediante
+`python import_black_week.py reporte.csv` en el bot del negocio correspondiente.
+La columna `wamid` es opcional. Comprueba primero el formato y añade `--apply`
+para registrar el reporte. Si la herramienta de envío permite fijar el valor
+`biz_opaque_callback_data`, el estado firmado de Meta se puede identificar con
+`black-week-2026-v1:tanaka` o `black-week-2026-v1:velvet`. Un reporte agregado
+de WhatsApp Manager por sí solo no demuestra un envío a un contacto.
