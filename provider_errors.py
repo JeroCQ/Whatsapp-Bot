@@ -16,6 +16,11 @@ class ProviderError(RuntimeError):
         super().__init__(f"{provider} {operation} failed (status={status}, code={code}, subcode={subcode}, message={self.safe_message})")
 
 
+def numeric_provider_code(value: object) -> str | None:
+    code = str(value)
+    return code if re.fullmatch(r"[0-9]{1,10}", code) else None
+
+
 def sanitize_text(value: object, secrets=()) -> str:
     text = str(value or "")[:500]
     for secret in secrets:

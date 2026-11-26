@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from human_control_store import ControlError
 from human_support import uses_crm
 from observability import current_trace, message_trace
-from provider_errors import ProviderError
+from provider_errors import ProviderError, numeric_provider_code
 from webhook_utils import valid_whatsapp_sender
 
 logger = logging.getLogger(__name__)
@@ -394,6 +394,12 @@ def create_router(
                     detail = "" if provider_id else (
                         "provider_rejected" if status == "failed" else "provider_outcome_unknown"
                     )
+                    if not provider_id:
+                        logger.warning(
+                            "crm_human_provider_result business=%s command=%s operation=%s status=%s http_status=%s code=%s subcode=%s",
+                            business_id, body.command_id[:12], error.operation, status, error.status,
+                            numeric_provider_code(error.code) or "-", numeric_provider_code(error.subcode) or "-",
+                        )
                 except Exception as error:
                     from crm_media_policy import MediaError
                     provider_id = str(current_trace().get("provider_message_id") or "")
