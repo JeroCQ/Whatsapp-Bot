@@ -2153,12 +2153,23 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                         if received_at:
                             record_customer_activity(sender_phone, received_at, event_id or "")
                         control_kwargs = {}
+                        order_reply = None
                         if uses_crm(config):
                             get_or_create_customer_state(sender_phone, sender_name or "Cliente")
-                            control_kwargs["crm_control_version"] = get_control_store().get_control(sender_phone)["version"]
                             if received_at and isinstance(event_id, str) and 0 < len(event_id) <= 300:
+                                from black_week import ORDER_MESSAGE, VERSION as BLACK_WEEK_VERSION, template_reply
                                 from database import promotion_question_available, promotion_question_exists, store_promotion_answer
                                 from promotion_permission import choice_from_message
+                                template_choice = template_reply(message, config.BUSINESS_ID, config.WA_PHONE_NUMBER_ID)
+                                if template_choice:
+                                    action, original_message_id, label = template_choice
+                                    if action == "order":
+                                        order_reply = ORDER_MESSAGE
+                                    else:
+                                        store_promotion_answer(sender_phone, event_id, received_at, action,
+                                                               original_message_id, label, version=BLACK_WEEK_VERSION)
+                                        accepted += 1
+                                        continue
                                 choice = choice_from_message(message)
                                 if choice and (message_type == "interactive" or choice[1]
                                                or getattr(config, "CRM_PROMOTION_CONSENT_ENABLED", False)
@@ -2170,8 +2181,9 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                                         store_promotion_answer(sender_phone, event_id, received_at, answer, question_id, excerpt)
                                         accepted += 1
                                         continue
-                        if message_type == "text":
-                            body = message.get("text", {}).get("body")
+                            control_kwargs["crm_control_version"] = get_control_store().get_control(sender_phone)["version"]
+                        if message_type == "text" or order_reply is not None:
+                            body = order_reply if order_reply is not None else message.get("text", {}).get("body")
                             _dispatch_before_ack(
                                 background_tasks,
                                 process_claimed_whatsapp_event,

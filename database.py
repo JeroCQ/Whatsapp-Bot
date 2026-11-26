@@ -262,7 +262,7 @@ def promotion_question_available(phone_number):
     return not asked.data and not answered.data
 
 
-def store_promotion_answer(phone_number, inbound_id, received_at, answer, question_id, evidence):
+def store_promotion_answer(phone_number, inbound_id, received_at, answer, question_id, evidence, *, version=None):
     from promotion_permission import VERSION
 
     # Unlike the best-effort conversational log, a failed consent write must
@@ -273,7 +273,7 @@ def store_promotion_answer(phone_number, inbound_id, received_at, answer, questi
         "metadata": {"business_id": config.BUSINESS_ID, "channel_id": str(config.WA_PHONE_NUMBER_ID),
                      "source": "promotion_permission", "source_event_id": inbound_id,
                      "received_at": received_at.isoformat(), "permission_status": answer,
-                     "permission_question_id": question_id, "permission_version": VERSION},
+                     "permission_question_id": question_id, "permission_version": version or VERSION},
     }, on_conflict="event_key", ignore_duplicates=True).execute()
 
 

@@ -328,6 +328,10 @@ def process_message_logic(phone: str, text: str, is_image: bool = False, log_inb
     current_message_json = serialize_current_message(text)
     colombia_now = datetime.now(ZoneInfo("America/Bogota"))
     colombia_time = colombia_now.strftime("%A %Y-%m-%d, %H:%M")
+    from black_week import order_context
+    promotion = order_context(config.BUSINESS_ID, getattr(config, "WA_PHONE_NUMBER_ID", ""), text, history, colombia_now)
+    if promotion:
+        system_instruction_with_files += "\n\n" + promotion
     escalation_guidance = (
         """- Una presentación que no aparece en la fuente aprobada significa información
       pendiente de validar, no producto inexistente o agotado. Nunca inventes su
