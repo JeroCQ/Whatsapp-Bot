@@ -16,6 +16,7 @@ from crm_service.central_copy import CRM_REVISIONS, CRM_SCHEMA
 
 BASE_REVISION = "0006_scoped_pilot"
 INSIGHTS_REVISION = "0007_customer_insights"
+COMMERCIAL_REVISION = "0008_commercial_events"
 
 
 def connection_for_migration():
@@ -24,7 +25,7 @@ def connection_for_migration():
     return connection
 
 
-def migrate(*, customer_insights=False, promotion_permissions=False):
+def migrate(*, customer_insights=False, promotion_permissions=False, commercial_metrics=False):
     engine = create_engine("postgresql+psycopg://", hide_parameters=True,
                            creator=connection_for_migration, poolclass=NullPool)
     try:
@@ -49,6 +50,8 @@ def migrate(*, customer_insights=False, promotion_permissions=False):
             config.set_main_option("script_location", str(Path(__file__).resolve().parents[1] / "alembic"))
             config.attributes.update({"central_connection": connection, "central_schema": CRM_SCHEMA})
             target = INSIGHTS_REVISION if customer_insights or installed == INSIGHTS_REVISION else BASE_REVISION
+            if commercial_metrics or installed == COMMERCIAL_REVISION:
+                target = COMMERCIAL_REVISION
             command.upgrade(config, target)
             if promotion_permissions and target == BASE_REVISION:
                 # The commercial API still accepts 0006. The pilot writer can
@@ -67,9 +70,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--customer-insights", action="store_true")
     parser.add_argument("--promotion-permissions", action="store_true")
+    parser.add_argument("--commercial-metrics", action="store_true")
     args = parser.parse_args()
     try:
-        migrate(customer_insights=args.customer_insights, promotion_permissions=args.promotion_permissions)
+        migrate(customer_insights=args.customer_insights, promotion_permissions=args.promotion_permissions,
+                commercial_metrics=args.commercial_metrics)
     except CopyError as error:
         raise SystemExit(str(error)) from None
     except Exception as error:

@@ -18,18 +18,19 @@ class ReadOnlyBotClient(httpx.Client):
         self.allowed_paths = {
             f"/internal/crm/v1/businesses/{quote(business_id, safe='')}/source/{table}" for table in FIELDS
         }
-        self.allowed_paths.add(f"/internal/crm/v1/businesses/{quote(business_id, safe='')}/source/return-analysis")
+        self.analysis_path = f"/internal/crm/v1/businesses/{quote(business_id, safe='')}/source/return-analysis"
         super().__init__(base_url=origin, **kwargs)
 
     def send(self, request: httpx.Request, **kwargs: Any) -> httpx.Response:
-        if request.method not in {"GET", "HEAD"}:
+        analysis = request.method == "POST" and request.url.path == self.analysis_path
+        if request.method not in {"GET", "HEAD"} and not analysis:
             raise SourceFailure("source_method_forbidden")
         target = request.url
         if (target.scheme, target.host, target.port) != (
             self.origin.scheme,
             self.origin.host,
             self.origin.port,
-        ) or target.path not in self.allowed_paths:
+        ) or target.path not in self.allowed_paths and not analysis:
             raise SourceFailure("source_destination_forbidden")
         return super().send(request, **kwargs)
 
@@ -68,10 +69,10 @@ class BotSourceAdapter:
     def conversation(self, table: str, phone: str) -> list[dict[str, Any]]:
         return self.page(table, after=None, limit=1, phone_number=phone)
 
-    def return_analysis(self, phone: str, cutoff: datetime) -> dict[str, Any]:
+    def return_analysis(self, phone: str, cutoff: datetime, after_id: int = 0) -> dict[str, Any]:
         path = f"/internal/crm/v1/businesses/{quote(self.business.id, safe='')}/source/return-analysis"
         try:
-            response = self.client.get(path, params={"phone": phone, "cutoff": cutoff.isoformat()},
+            response = self.client.post(path, params={"phone": phone, "cutoff": cutoff.isoformat(), "after_id": after_id},
                                        timeout=httpx.Timeout(150, connect=5))
         except httpx.HTTPError:
             raise SourceFailure("customer_analysis_network_error") from None

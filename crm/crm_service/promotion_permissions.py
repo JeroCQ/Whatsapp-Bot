@@ -34,6 +34,11 @@ def apply_event(session, event, question):
             return
         if event.event_at == current.event_at and event.status == "granted":
             return
+        if (event.version == BLACK_WEEK_VERSION and event.status == "granted"
+                and current.status in {"denied", "revoked"}):
+            # There is no trusted local send time for the external campaign
+            # question. A fresh question (or explicit new request) can restore it.
+            return
         if (question and event.status == "granted" and current.status in {"denied", "revoked"}
                 and timestamp(question.created_at) <= current.event_at):
             return  # A button on the old question cannot undo a later refusal.

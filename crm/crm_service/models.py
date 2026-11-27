@@ -432,3 +432,22 @@ class CustomerAnalysis(Base):
         Index("ix_customer_analysis_queue", "status", "retry_at", "released_at"),
         Index("ix_customer_analysis_history", "business_id", "phone_number", "released_at"),
     )
+
+
+class CommercialEvent(Base):
+    __tablename__ = "crm_commercial_events"
+    business_id: Mapped[str] = mapped_column(String(63), primary_key=True)
+    source_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(20), primary_key=True)
+    phone_number: Mapped[str] = mapped_column(String(200))
+    order_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    queue: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    amount_cop: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    product_subtotal_cop: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    items: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    __table_args__ = (
+        Index("ix_commercial_event_period", "business_id", "occurred_at", "source_id"),
+        Index("ix_commercial_event_contact", "business_id", "phone_number", "source_id"),
+        Index("ix_commercial_event_order", "business_id", "order_id", "source_id"),
+    )

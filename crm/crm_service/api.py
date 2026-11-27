@@ -272,9 +272,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             with engine.connect() as conn:
                 version = conn.scalar(text("SELECT version_num FROM alembic_version"))
-                if version not in {"0004_delivery_receipts", "0005_central_config_usage", "0006_scoped_pilot", "0007_customer_insights"}:
+                if version not in {"0004_delivery_receipts", "0005_central_config_usage", "0006_scoped_pilot", "0007_customer_insights", "0008_commercial_events"}:
                     raise HTTPException(503, "CRM migrations required")
-                if (settings.promotion_consent_businesses or settings.customer_insights_businesses) and version != "0007_customer_insights":
+                if settings.customer_insights_businesses and version != "0008_commercial_events":
+                    raise HTTPException(503, "CRM migrations required")
+                if settings.promotion_consent_businesses and version not in {"0007_customer_insights", "0008_commercial_events"}:
                     raise HTTPException(503, "CRM migrations required")
         except SQLAlchemyError:
             raise HTTPException(503, "CRM database unavailable or migrations required") from None
@@ -825,12 +827,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             from crm_service.promotion_permissions import QUESTION
             sender_id = settings.businesses[business_id].channel_id
             permission = session.get(PromotionPermission, (business_id, sender_id, phone_number))
+            unanswered = False
+            if not permission:
+                unanswered = session.scalar(select(SourceMessage.source_id).where(
+                    SourceMessage.business_id == business_id, SourceMessage.phone_number == phone_number,
+                    SourceMessage.role == "asesor", SourceMessage.content == QUESTION,
+                    SourceMessage.delivery_status.in_(("accepted", "delivered", "read")),
+                    SourceMessage.message_metadata["channel_id"].as_string() == sender_id,
+                ).limit(1)) is not None
             extras["promotion_permission"] = {
                 "status": permission.status if permission else "unknown", "question": QUESTION,
+                "event_at": permission.event_at if permission else None, "unanswered": unanswered,
             }
         if business_id in settings.customer_insights_businesses:
             from crm_service.customer_analysis import latest_analysis
+            from crm_service.commercial import customer_metrics, usage_metrics
             extras["customer_analysis"] = latest_analysis(session, business_id, phone_number)
+            extras["commercial_history"] = customer_metrics(session, business_id, phone_number)
+            present = now()
+            extras["commercial_history"]["recent_usage"] = usage_metrics(session, business_id, present - timedelta(days=30), present, phone_number)
         return {
             **display(session, principal, source, crm),
             **extras,

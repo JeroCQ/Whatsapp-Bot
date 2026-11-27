@@ -4,7 +4,9 @@ import hashlib
 import io
 import json
 from collections.abc import Callable, Iterator
+from datetime import date, datetime, time, timedelta
 from typing import Annotated, Any, Literal
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -146,6 +148,39 @@ def create_admin_router(settings: Settings, actor_dependency: Callable[..., Acto
                        session: Annotated[Session, Depends(db_dependency)]) -> dict[str, str]:
         usage_enabled(principal, body.business_id)
         return usage_store.record_attempt(session, body)
+
+    @router.get("/commercial-metrics")
+    def commercial_metrics(
+        session: Annotated[Session, Depends(db_dependency)], business_id: BusinessId,
+        date_from: date | None = None, date_to: date | None = None,
+        attention_queue: Literal["retail", "wholesale"] | None = None,
+        permission: Literal["yes", "no", "unknown"] | None = None,
+    ) -> dict[str, Any]:
+        from crm_service.commercial import CURSOR, handoff_metrics, report_sales, usage_metrics
+        from crm_service.models import SyncCursor
+
+        if business_id not in settings.customer_insights_businesses or not session.scalar(
+            text("SELECT to_regclass('crm_commercial_events') IS NOT NULL")
+        ):
+            raise HTTPException(503, "commercial_metrics_unavailable")
+        if attention_queue and business_id != "memos":
+            raise HTTPException(422, "Attention queues apply only to Memo’s")
+        zone = ZoneInfo("America/Bogota")
+        through = date_to or now().astimezone(zone).date()
+        since = date_from or through - timedelta(days=29)
+        if through < since or (through - since).days > 90 or through == date.max:
+            raise HTTPException(422, "Choose a date range of at most 91 days")
+        start = datetime.combine(since, time.min, tzinfo=zone)
+        end = datetime.combine(through + timedelta(days=1), time.min, tzinfo=zone)
+        sender = settings.businesses[business_id].channel_id
+        try:
+            values = report_sales(session, business_id, start, end, attention_queue, sender, permission)
+        except OverflowError:
+            raise HTTPException(422, "Choose a shorter date range") from None
+        cursor = session.get(SyncCursor, (business_id, CURSOR))
+        return {**values, "date_from": since, "date_to": through, "activated_at": cursor.value.get("activated_at") if cursor else None,
+                "usage": usage_metrics(session, business_id, start, end),
+                "handoffs": handoff_metrics(session, business_id, start, end)}
 
     @router.get("/usage")
     def usage(session: Annotated[Session, Depends(db_dependency)], business_id: BusinessId | None = None,

@@ -7,6 +7,7 @@ import time
 from concurrent.futures import Future, ThreadPoolExecutor
 
 from crm_service.db import database
+from crm_service.commercial import consume_commercial
 from crm_service.customer_analysis import consume_analysis
 from crm_service.notifications import dispatch
 from crm_service.promotion_permissions import BLACK_WEEK_SENDERS
@@ -47,6 +48,10 @@ def main() -> None:
                 logging.error("black_week_permission_replay_failed code=%s", type(error).__name__)
                 pending_permission_replays.discard(business_id)
         return worker.run(business_id)
+
+    def analyze():
+        consume_commercial(settings, sessions, args.business)
+        consume_analysis(settings, sessions, args.business)
 
     # Push providers can stall independently from source reads. One local
     # background dispatcher keeps the existing sync process responsive and
@@ -127,7 +132,7 @@ def main() -> None:
                             analysis_run.result()
                         except Exception as error:
                             logging.error("customer_analysis_failed code=%s", type(error).__name__)
-                    analysis_run = analysis_pool.submit(consume_analysis, settings, sessions, args.business)
+                    analysis_run = analysis_pool.submit(analyze)
                     next_analysis = time.monotonic() + max(5, settings.sync_interval)
             except Exception as error:
                 logging.error("worker_iteration_failed code=%s", type(error).__name__)

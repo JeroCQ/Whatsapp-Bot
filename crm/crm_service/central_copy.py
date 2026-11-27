@@ -35,7 +35,7 @@ BOT_REFS = {"memos": "hhzivtplonffzolfdaho", "velvet": "fhuskvtwrmuotpenmrhu"}
 CRM_SCHEMA = "chatty_crm"
 STAGING = "chatty_migration_stage"
 RUNS = sql.Identifier("public", "chatty_migration_runs")
-CRM_REVISIONS = {"0004_delivery_receipts", "0005_central_config_usage", "0006_scoped_pilot", "0007_customer_insights"}
+CRM_REVISIONS = {"0004_delivery_receipts", "0005_central_config_usage", "0006_scoped_pilot", "0007_customer_insights", "0008_commercial_events"}
 
 
 def ident(*parts):
@@ -102,8 +102,10 @@ def reviewed_tables(source, dataset):
         SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename <> 'alembic_version'
     """)}
     expected = set(CRM_TABLES)
-    if revision[0][0] != "0007_customer_insights":
+    if revision[0][0] not in {"0007_customer_insights", "0008_commercial_events"}:
         expected -= CRM_INSIGHT_TABLES
+    if revision[0][0] != "0008_commercial_events":
+        expected.discard("crm_commercial_events")
     if revision[0][0] in {"0004_delivery_receipts", "0005_central_config_usage"}:
         expected -= CRM_PILOT_TABLES
     if revision[0][0] == "0004_delivery_receipts":

@@ -35,12 +35,23 @@ def consume_analysis(settings, sessions, business_id=None):
         row.status, row.retry_at = "processing", moment + LEASE
         row.attempts += 1
         key, phone, cutoff, attempt = (row.business_id, row.command_id), row.phone_number, row.released_at, row.attempts
+        previous = session.scalar(select(CustomerAnalysis).where(
+            CustomerAnalysis.business_id == key[0], CustomerAnalysis.phone_number == phone,
+            CustomerAnalysis.status == "done", CustomerAnalysis.released_at < cutoff,
+        ).order_by(CustomerAnalysis.released_at.desc()).limit(1))
+        prior = dict(previous.result or {}) if previous else {}
 
     gateway = None
     status, report = "done", {}
     try:
         gateway = BotSourceAdapter(settings.businesses[key[0]], test_mode=settings.bot_test_mode)
-        report = gateway.return_analysis(phone, cutoff)
+        report = gateway.return_analysis(phone, cutoff, int(prior.get("checkpoint", 0)))
+        if "summary" not in report:
+            report = {**prior, **report}
+        else:
+            report["labels"] = sorted(set(prior.get("labels", [])) | set(report.get("labels", [])))
+            if any(label in report["labels"] for label in ("cliente_con_pedido", "cliente_recurrente")):
+                report["labels"] = [label for label in report["labels"] if label != "cliente_nuevo_sin_comprar"]
     except SourceFailure as error:
         code = str(error)
         retriable = code == "customer_analysis_network_error" or code.startswith("customer_analysis_http_5")
@@ -63,5 +74,8 @@ def latest_analysis(session, business, phone):
     ).order_by(CustomerAnalysis.released_at.desc()).limit(1))
     if row is None:
         return None
-    return {"status": row.status, "released_at": row.released_at.isoformat(),
-            **(row.result if row.status == "done" else {})}
+    verified = row if row.status == "done" else session.scalar(select(CustomerAnalysis).where(
+        CustomerAnalysis.business_id == business, CustomerAnalysis.phone_number == phone,
+        CustomerAnalysis.status == "done",
+    ).order_by(CustomerAnalysis.released_at.desc()).limit(1))
+    return {**(verified.result if verified else {}), "status": row.status, "released_at": row.released_at.isoformat()}
