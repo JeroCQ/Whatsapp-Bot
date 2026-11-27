@@ -1,4 +1,4 @@
-"""Authenticated, GET-only exports owned by each bot; no caller-selected SQL."""
+"""Authenticated bot exports and bounded return analysis; no caller-selected SQL."""
 
 import hmac
 import json
@@ -123,9 +123,9 @@ def create_source_router(settings, reader_factory):
         if business_id != settings.BUSINESS_ID:
             raise HTTPException(403, "Business scope mismatch")
 
-    @router.get("/internal/crm/v1/businesses/{business_id}/source/return-analysis")
+    @router.post("/internal/crm/v1/businesses/{business_id}/source/return-analysis")
     def return_analysis(business_id: str, request: Request, phone: str = Query(max_length=200),
-                        cutoff: str = Query(max_length=64)):
+                        cutoff: str = Query(max_length=64), after_id: int = Query(default=0, ge=0)):
         authorize(business_id, request)
         if not getattr(settings, "CRM_CUSTOMER_INSIGHTS_ENABLED", False):
             raise HTTPException(404, "Customer analysis unavailable")
@@ -141,7 +141,7 @@ def create_source_router(settings, reader_factory):
         from database import supabase
         try:
             return {"business_id": business_id, "phone_number": phone,
-                    "result": analyze_return(supabase, phone, through, generate_return_analysis)}
+                    "result": analyze_return(supabase, phone, through, generate_return_analysis, after_id)}
         except Exception:
             raise HTTPException(503, "Customer analysis unavailable") from None
 
