@@ -76,6 +76,19 @@ def _call_gemini(operation: str, generate):
     )
 
 
+def generate_return_analysis(instructions: str, payload: str) -> str:
+    from customer_insights import ConversationFacts
+
+    answer = _call_gemini("return_analysis", lambda http_options: client.models.generate_content(
+        model="gemini-flash-latest", contents=payload,
+        config=types.GenerateContentConfig(
+            http_options=http_options, system_instruction=instructions, response_mime_type="application/json",
+            response_schema=ConversationFacts, temperature=0.1,
+        ),
+    ))
+    return answer.text
+
+
 def _record_gemini_failure(error: Exception, operation: str, started_at: float, phone: str = "", *, provider_failure: bool = True) -> str:
     """Keep terminal errors actionable without logging provider bodies or prompts."""
     if not provider_failure or isinstance(error, (NameError, AttributeError, TypeError)):
