@@ -9,6 +9,11 @@ SUBSCRIBE_BUTTON = "Quiero promociones exclusivas"
 UNSUBSCRIBE_BUTTON = "Prefiero perder las promociones"
 ORDER_MESSAGE = f"{ORDER_BUTTON} de Black Week."
 ACTIONS = {ORDER_BUTTON: "order", SUBSCRIBE_BUTTON: "granted", UNSUBSCRIBE_BUTTON: "revoked"}
+TANAKA_ACTIONS = {
+    **ACTIONS,
+    "Seguir recibiendo promos": "granted",
+    "Prefiero perder promos": "revoked",
+}
 
 COLOMBIA = ZoneInfo("America/Bogota")
 START = datetime(2026, 11, 27, tzinfo=COLOMBIA)
@@ -59,9 +64,10 @@ def template_reply(message, business, sender_id):
     if not original or not isinstance(button, dict) or not message_id(message.get("id")):
         return None
     label = button.get("text")
-    if not isinstance(label, str) or label not in ACTIONS:
+    actions = TANAKA_ACTIONS if business == "tanaka" else ACTIONS
+    if not isinstance(label, str) or label not in actions:
         return None
-    return ACTIONS[label], original, label
+    return actions[label], original, label
 
 
 def order_context(business, sender_id, text, history, now, *, reply_to=None):
