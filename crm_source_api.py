@@ -3,6 +3,7 @@
 import hmac
 import json
 import re
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 
@@ -138,10 +139,14 @@ def create_source_router(settings, reader_factory):
         except (ValueError, OverflowError):
             raise HTTPException(422, "Invalid analysis cutoff") from None
         from bot import generate_return_analysis
+        from chatty_context import processing_scope, resolve_context
         from database import supabase
         try:
-            return {"business_id": business_id, "phone_number": phone,
-                    "result": analyze_return(supabase, phone, through, generate_return_analysis, after_id)}
+            context = resolve_context(settings, business_id, str(settings.WA_PHONE_NUMBER_ID), phone,
+                                      f"return-analysis:{uuid4()}", supabase.legacy)
+            with processing_scope(context):
+                result = analyze_return(supabase, phone, through, generate_return_analysis, after_id)
+            return {"business_id": business_id, "phone_number": phone, "result": result}
         except Exception:
             raise HTTPException(503, "Customer analysis unavailable") from None
 
