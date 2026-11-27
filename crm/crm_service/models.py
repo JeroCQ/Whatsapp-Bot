@@ -380,3 +380,38 @@ class SupportMinutes(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     request_hash: Mapped[str] = mapped_column(String(64))
     __table_args__ = (CheckConstraint("minutes > 0", name="ck_support_minutes_positive"),)
+
+
+class PromotionPermission(Base):
+    __tablename__ = "promotion_permissions"
+    business_id: Mapped[str] = mapped_column(String(63), primary_key=True)
+    sender_id: Mapped[str] = mapped_column(String(63), primary_key=True)
+    phone_number: Mapped[str] = mapped_column(String(200), primary_key=True)
+    status: Mapped[str] = mapped_column(String(16))
+    event_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    event_id: Mapped[str | None] = mapped_column(String(300))
+    __table_args__ = (
+        CheckConstraint("status IN ('unknown','granted','denied','revoked')", name="ck_promotion_permission_status"),
+        Index("ix_promotion_permission_audience", "business_id", "sender_id", "status", "phone_number"),
+    )
+
+
+class PromotionPermissionEvent(Base):
+    __tablename__ = "promotion_permission_events"
+    business_id: Mapped[str] = mapped_column(String(63), primary_key=True)
+    sender_id: Mapped[str] = mapped_column(String(63), primary_key=True)
+    inbound_id: Mapped[str] = mapped_column(String(300), primary_key=True)
+    phone_number: Mapped[str] = mapped_column(String(200))
+    status: Mapped[str] = mapped_column(String(16))
+    question_id: Mapped[str | None] = mapped_column(String(300))
+    version: Mapped[str] = mapped_column(String(32))
+    event_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    evidence: Mapped[str] = mapped_column(String(160))
+    validated: Mapped[bool] = mapped_column(Boolean)
+    __table_args__ = (
+        CheckConstraint("status IN ('granted','denied','revoked')", name="ck_promotion_permission_event_status"),
+        Index("ix_promotion_permission_questions", "business_id", "phone_number", "question_id",
+              postgresql_where=text("NOT validated")),
+        Index("ix_promotion_permission_contact_history", "business_id", "sender_id", "phone_number", "event_at"),
+    )

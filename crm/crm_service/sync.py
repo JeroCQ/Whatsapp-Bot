@@ -23,6 +23,7 @@ from crm_service.models import (
     SyncStatus,
     now,
 )
+from crm_service.promotion_permissions import BLACK_WEEK_SENDERS, QUESTION, project_permission_message
 from crm_service.routing import QUEUE_ROUTING_VERSION, project_queue
 from crm_service.settings import Business, Settings
 from crm_service.source import SourceFailure
@@ -379,6 +380,10 @@ class Synchronizer:
         row.message_metadata, row.event_key = metadata, key
         session.flush()
         project_message(session, row)
+        if (self.settings.database_schema == "chatty_crm" and business in BLACK_WEEK_SENDERS
+                and (metadata.get("source") == "promotion_permission"
+                     or row.is_delivery_event or (row.role == "asesor" and row.content == QUESTION))):
+            project_permission_message(session, row)
 
     def messages(self, session: Session, business: Business, adapter: Reader, budget: ReadBudget) -> None:
         cursor = self.cursor(session, business.id, "message_logs")
