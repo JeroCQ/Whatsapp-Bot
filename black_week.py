@@ -8,7 +8,13 @@ ORDER_BUTTON = "Quiero hacer mi pedido"
 SUBSCRIBE_BUTTON = "Quiero promociones exclusivas"
 UNSUBSCRIBE_BUTTON = "Prefiero perder las promociones"
 ORDER_MESSAGE = f"{ORDER_BUTTON} de Black Week."
-ACTIONS = {ORDER_BUTTON: "order", SUBSCRIBE_BUTTON: "granted", UNSUBSCRIBE_BUTTON: "revoked"}
+ACTIONS = {
+    ORDER_BUTTON: "order",
+    SUBSCRIBE_BUTTON: "granted",
+    UNSUBSCRIBE_BUTTON: "revoked",
+    "Seguir recibiendo promos": "granted",
+    "Prefiero perder promos": "revoked",
+}
 
 COLOMBIA = ZoneInfo("America/Bogota")
 START = datetime(2026, 11, 27, tzinfo=COLOMBIA)
