@@ -15,7 +15,10 @@ QUESTION = (
 VERSION = "promotions-v1"
 BLACK_WEEK_VERSION = "black-week-2026-v1"
 BLACK_WEEK_SENDERS = {"tanaka": "1279018015292550", "velvet": "1330184450175963"}
-BLACK_WEEK_CHOICES = {"granted": "Quiero promociones exclusivas", "revoked": "Prefiero perder las promociones"}
+BLACK_WEEK_CHOICES = {
+    "granted": ("Quiero promociones exclusivas", "Seguir recibiendo promos"),
+    "revoked": ("Prefiero perder las promociones", "Prefiero perder promos"),
+}
 
 
 def apply_event(session, event, question):
@@ -79,7 +82,7 @@ def project_permission_message(session, message):
             return
         if version == BLACK_WEEK_VERSION and (
                 sender_id != BLACK_WEEK_SENDERS.get(message.business_id) or question_id is None
-                or question_id == inbound_id or message.content != BLACK_WEEK_CHOICES.get(choice)):
+                or question_id == inbound_id or message.content not in BLACK_WEEK_CHOICES.get(choice, ())):
             return
         event = session.get(PromotionPermissionEvent, (message.business_id, sender_id, inbound_id))
         if event is None:

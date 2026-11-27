@@ -62,9 +62,9 @@ original y la versión de la pregunta de Black Week.
 - **Quiero hacer mi pedido** entra a la cola habitual, con el control del asesor
   y el catálogo del negocio. La oferta se aplica del 27 de noviembre al 5 de
   diciembre de 2026 hasta las 6:00 p. m. de Colombia.
-- **Quiero promociones exclusivas** registra autorización para promociones
-  futuras del remitente.
-- **Prefiero perder las promociones** registra la baja del remitente. La
+- **Seguir recibiendo promos** y **Quiero promociones exclusivas** registran
+  autorización para promociones futuras del remitente.
+- **Prefiero perder promos** y **Prefiero perder las promociones** registran la baja del remitente. La
   plataforma externa de envío debe aplicar esa exclusión a sus pendientes.
 
 Para estos botones, sigue el orden de aplicación anterior con la versión de CRM
@@ -81,10 +81,16 @@ pre-deploy del API del piloto. Usa el rol propietario configurado para instalar
 únicamente las dos tablas de permisos. Conserva `alembic_version` y activa
 solo el worker del piloto cuando esté listo. El upgrade completo posterior reconoce
 las tablas existentes y agrega el análisis cuando ambos servicios son compatibles.
-El worker central recupera las respuestas firmadas que llegaron antes de la
-activación. Si el negocio está sincronizando, espera al siguiente ciclo de
-sincronización. La recuperación también se puede ejecutar con
+El worker con rol `pilot-worker` es el que sincroniza la base central cuando
+está activo en el registro de servicios. Confirma ese rol antes de desplegar la
+proyección. Recupera las respuestas firmadas que llegaron antes de la
+activación, incluidos los textos abreviados. Si el negocio está sincronizando,
+espera al siguiente ciclo. La recuperación también se puede ejecutar con
 `python -m crm_service.replay_black_week_permissions tanaka` o con `velvet`.
+Verifica los eventos validados en `chatty_crm.promotion_permission_events` y
+el último estado por negocio, remitente y contacto en
+`chatty_crm.promotion_permissions`. El estado se calcula en orden de eventos y
+la baja prevalece frente a un alta con la misma hora.
 
 Los botones verificados guardan un resumen de la plantilla externa en el
 historial, con el WAMID del mensaje original. También se pueden registrar los
