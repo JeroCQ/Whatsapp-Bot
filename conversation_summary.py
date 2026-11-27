@@ -6,13 +6,14 @@ import re
 
 
 _FIELD_PATTERNS = {
-    "Nombre": re.compile(r"(?:nombre(?:\s+y\s+apellido)?\s*[:=-]\s*)([^\n,;]{3,80})", re.I),
-    "Documento": re.compile(r"(?:(?:c[eé]dula|cc|documento)\s*[:#=-]?\s*)(\d[\d. -]{4,20})", re.I),
-    "Ciudad": re.compile(r"(?:ciudad\s*[:=-]\s*)([^\n,;]{2,60})", re.I),
+    "Nombre": re.compile(r"\b(?:nombre(?:\s+y\s+apellidos?)?\s*(?:es |[:=-]\s*)|me llamo\s+)([^\n,;]{3,80})", re.I),
+    "Documento": re.compile(r"\b(?:c[eé]dula|cc|documento)\s*(?:es\s+)?[:#=-]?\s*(\d[\d. -]{4,20})", re.I),
+    "Ciudad": re.compile(r"\bciudad\s*(?:es |[:=-]\s*)([^\n,;]{2,60})", re.I),
     "Teléfono": re.compile(r"(?:(?:tel[eé]fono|celular|tel\.?|del\.?)\s*[:#=-]?\s*)(\+?\d[\d -]{6,18})", re.I),
     "Email": re.compile(r"([\w.+-]+@[\w.-]+\.[A-Za-z]{2,})"),
-    "Dirección": re.compile(r"(?:direcci[oó]n\s*[:=-]\s*)([^\n;]{4,120})", re.I),
-    "Barrio": re.compile(r"(?:barrio|b/)\s*[:=-]?\s*([^\n,;]{2,70})", re.I),
+    "Dirección": re.compile(r"\bdirecci[oó]n\s*(?:es |[:=-]\s*)([^\n,;]{4,120})", re.I),
+    "Barrio": re.compile(r"\b(?:barrio|b/)\s*(?:es\s+)?[:=-]?\s*([^\n,;]{2,70})", re.I),
+    "Indicaciones": re.compile(r"\b(?:indicaciones(?: de entrega)?|referencia de entrega)\s*[:=-]\s*([^\n;]{3,120})", re.I),
     "Pago": re.compile(r"(?:pago|m[eé]todo de pago)\s*[:=-]?\s*(efectivo|transferencia|nequi|bancolombia)", re.I),
 }
 
@@ -23,30 +24,51 @@ def _clean(value: str, limit: int = 120) -> str:
 
 def supplied_customer_data(messages: list[dict]) -> dict[str, str]:
     """Return the latest explicitly labelled values supplied by the customer."""
-    found: dict[str, str] = {}
+    return {field: fact["value"] for field, fact in supplied_customer_facts(messages).items()}
+
+
+def supplied_customer_facts(messages: list[dict]) -> dict[str, dict]:
+    found = {}
     for message in messages:
         if message.get("role") != "user":
             continue
         content = str(message.get("content") or "")
+        if re.search(r"\b(?:para esta vez|solo para (?:este pedido|esta entrega)|recibe (?:mi |un |una )|destinatario[: ])", content, re.I):
+            continue
         for label, pattern in _FIELD_PATTERNS.items():
             match = pattern.search(content)
-            if match:
-                found[label] = _clean(match.group(1))
-        # Customers frequently answer a form without repeating its labels.
-        # Preserve unambiguous Colombian address and document/phone pairs too.
-        if "Dirección" not in found:
-            address = re.search(
-                r"\b((?:calle|carrera|cra\.?|kra\.?|avenida|av\.?)\s+[^\n;]{4,100})",
-                content,
-                re.I,
-            )
-            if address:
-                found["Dirección"] = _clean(address.group(1))
-        numbers = re.findall(r"(?<!\d)(\d{7,12})(?!\d)", content)
-        if len(numbers) >= 2:
-            found.setdefault("Documento", numbers[0])
-            found.setdefault("Teléfono", numbers[1])
+            if not match:
+                continue
+            value = _clean(match.group(1))
+            if label == "Nombre" and not re.fullmatch(r"[^\W\d_]+(?:[ '-][^\W\d_]+){0,5}", value):
+                continue
+            if label in {"Documento", "Teléfono"} and not 5 <= len(re.sub(r"\D", "", value)) <= 15:
+                continue
+            if value:
+                found[label] = {"value": value, "message_id": message.get("id"), "at": message.get("created_at")}
     return found
+
+
+def merge_customer_facts(data: dict, facts: dict) -> dict:
+    merged = dict(data)
+    evidence = dict(merged.get("_checkout_evidence") or {})
+    for field, fact in facts.items():
+        old = evidence.get(field) or {}
+        if (fact.get("message_id") or 0) >= (old.get("message_id") or 0):
+            merged[field] = fact["value"]
+            evidence[field] = {key: fact[key] for key in ("message_id", "at")}
+    if evidence:
+        merged["_checkout_evidence"] = evidence
+    return merged
+
+
+def redact_checkout_text(value: str) -> str:
+    cleaned = value
+    for field, pattern in _FIELD_PATTERNS.items():
+        if field != "Pago":
+            cleaned = pattern.sub(f"[{field} protegido]", cleaned)
+    cleaned = re.sub(r"https?://\S+|@bold\d+|\b\d[\d. -]{6,}\d\b", "[dato protegido]", cleaned, flags=re.I)
+    return cleaned
 
 
 def compact_order_summary(messages: list[dict]) -> str:
@@ -101,7 +123,7 @@ def build_handoff_summary(
                 break
     data = dict(preserved_data or {})
     data.update(supplied_customer_data(messages))
-    data_text = "; ".join(f"{label}: {value}" for label, value in data.items())
+    data_text = "; ".join(label for label in data if label in _FIELD_PATTERNS)
     operational_error = next(
         (
             _clean(str(message.get("content") or ""), 500)
