@@ -6,6 +6,9 @@ from collections.abc import Callable
 from typing import Any
 
 
+META_THREAD_CONTROL_ERROR = "meta_thread_control_131070"
+
+
 class ControlError(RuntimeError):
     def __init__(self, code: str, status_code: int = 409):
         self.code, self.status_code = code, status_code
@@ -14,10 +17,12 @@ class ControlError(RuntimeError):
 
 class ControlStore:
     def __init__(
-        self, rpc_executor: Callable[[str, dict[str, Any]], Any], business_id: str
+        self, rpc_executor: Callable[[str, dict[str, Any]], Any], business_id: str,
+        *, read_send_detail: Callable[[str, str], str | None] | None = None,
     ):
         self.rpc_executor = rpc_executor
         self.business_id = business_id
+        self.read_send_detail = read_send_detail
 
     def _call(
         self,
@@ -54,7 +59,17 @@ class ControlStore:
         return self._call(phone, "read")
 
     def get_command(self, phone: str, command_id: str) -> dict[str, Any]:
-        return self._call(phone, "command", command_id)
+        result = self._call(phone, "command", command_id)
+        if result.get("status") != "failed" or self.read_send_detail is None:
+            return result
+        try:
+            detail = self.read_send_detail(phone, command_id)
+        except Exception:
+            # An unavailable diagnostic must not make a settled send uncertain.
+            return result
+        if detail == META_THREAD_CONTROL_ERROR:
+            return {**result, "error": detail}
+        return result
 
     def apply_control(
         self,
@@ -132,8 +147,19 @@ class ControlStore:
 
 
 def build_runtime_store(supabase: Any, business_id: str) -> ControlStore:
+    def read_send_detail(phone: str, command_id: str) -> str | None:
+        rows = (
+            supabase.table("crm_send_attempts").select("detail")
+            .eq("business_id", business_id).eq("phone_number", phone)
+            .eq("attempt_id", command_id).eq("kind", "human").eq("status", "failed")
+            .limit(1).execute().data
+        )
+        return rows[0].get("detail") if rows else None
+
     return ControlStore(
-        lambda name, params: supabase.rpc(name, params).execute().data, business_id
+        lambda name, params: supabase.rpc(name, params).execute().data,
+        business_id,
+        read_send_detail=read_send_detail,
     )
 
 

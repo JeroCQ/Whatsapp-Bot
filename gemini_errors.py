@@ -16,6 +16,8 @@ def gemini_failure_category(exc: Exception) -> str:
     if is_depleted_prepaid_credits(exc):
         return "prepaid_credits_depleted"
     status = gemini_error_status_code(exc)
+    if status == 402:
+        return "provider_billing"
     if status in {500, 502, 503}:
         return "provider_unavailable"
     if status == 429:
@@ -36,6 +38,7 @@ def gemini_failure_category(exc: Exception) -> str:
 def gemini_handoff_reason(category: str, status: int | None = None) -> str:
     """Build the advisor note exclusively from fixed, non-sensitive labels."""
     detail = {
+        "provider_billing": "Google rechazó la solicitud por facturación. Revisa el saldo y el método de pago",
         "provider_unavailable": "servicio de Google temporalmente no disponible",
         "rate_or_quota_limit": "Google limitó las solicitudes o la cuota disponible",
         "provider_authentication": "Google rechazó la autenticación o los permisos",

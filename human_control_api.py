@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from human_control_store import ControlError
+from human_control_store import META_THREAD_CONTROL_ERROR, ControlError
 from human_support import uses_crm
 from observability import current_trace, message_trace
 from provider_errors import ProviderError, numeric_provider_code
@@ -394,11 +394,14 @@ def create_router(
                     detail = "" if provider_id else (
                         "provider_rejected" if status == "failed" else "provider_outcome_unknown"
                     )
+                    code = numeric_provider_code(error.code)
+                    if status == "failed" and error.provider == "meta" and code == "131070":
+                        detail = META_THREAD_CONTROL_ERROR
                     if not provider_id:
                         logger.warning(
                             "crm_human_provider_result business=%s command=%s operation=%s status=%s http_status=%s code=%s subcode=%s",
                             business_id, body.command_id[:12], error.operation, status, error.status,
-                            numeric_provider_code(error.code) or "-", numeric_provider_code(error.subcode) or "-",
+                            code or "-", numeric_provider_code(error.subcode) or "-",
                         )
                 except Exception as error:
                     from crm_media_policy import MediaError
@@ -418,6 +421,8 @@ def create_router(
                     detail,
                     phone=phone,
                 )
+                if result.get("status") == "failed" and detail == META_THREAD_CONTROL_ERROR:
+                    result = {**result, "error": detail}
             return mutation_response(result)
 
     return router
