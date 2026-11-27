@@ -28,7 +28,8 @@ OFFERS = {
         "No aplica en combos."
     ),
     ("velvet", "1330184450175963"): (
-        "Mochis by Velvet: caja tradicional de 6 por COP 24.000 y de 12 por COP 37.500. "
+        "Mochis by Velvet: caja tradicional surtida de 6 por COP 24.000 y de 12 por COP 37.500. "
+        "Confirma el surtido fijo: 1 de cada uno de los seis sabores en la x6 y 2 de cada sabor en la x12. "
         "Si aún no eligió, pregunta si quiere caja de 6 o de 12. "
         "Punto físico: Carrera 10 #47-31, barrio El Troncal, Cali."
     ),
